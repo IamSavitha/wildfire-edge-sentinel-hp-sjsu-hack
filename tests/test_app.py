@@ -1,3 +1,5 @@
+import threading
+
 import numpy as np
 from fastapi.testclient import TestClient
 
@@ -49,3 +51,27 @@ def test_frame_event_and_feedback(tmp_path):
 
 def test_index_serves_dashboard(tmp_path):
     assert "Wildfire Edge Sentinel" in TestClient(create_app(runtime(tmp_path))).get("/").text
+
+
+def test_state_served_while_vlm_classifies(tmp_path):
+    started, release = threading.Event(), threading.Event()
+
+    class SlowVLM:
+        def classify(self, jpeg):
+            started.set()
+            release.wait(5)
+            return CTX, 300
+
+    rt = runtime(tmp_path)
+    rt.pipeline.vlm = SlowVLM()
+    client = TestClient(create_app(rt))
+    worker = threading.Thread(target=rt.pipeline.process,
+                              args=("t1", np.zeros((100, 100, 3), np.uint8), 0))
+    worker.start()
+    assert started.wait(5)
+    state = client.get("/api/state").json()
+    assert len(state["active"]) == 1 and state["active"][0]["severity"] is None
+    release.set()
+    worker.join(5)
+    state = client.get("/api/state").json()
+    assert state["active"] == [] and state["events"][0]["severity"] == "ALERT"

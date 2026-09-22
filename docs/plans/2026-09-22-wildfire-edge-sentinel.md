@@ -2257,6 +2257,28 @@ def test_one_vlm_call_per_event_not_per_frame():
 def test_monitor_finalizes_after_max_rechecks():
     _, _, esc = run(ctx(), steady() + [(32, [SMALL]), (62, [SMALL])])
     assert [s for s, _ in esc.handled] == [Severity.MONITOR]
+
+
+def test_single_missed_detection_on_recheck_does_not_fake_growth():
+    _, _, esc = run(ctx(), steady() + [(32, []), (62, [SMALL])])
+    assert [s for s, _ in esc.handled] == [Severity.MONITOR]
+
+
+def test_persistent_fire_alerts_once_until_smoke_clears():
+    feed = {"dets": [SMALL]}
+    esc = RecordingEscalator()
+    p = Pipeline({"t1": TOWER}, lambda f: feed["dets"], FakeVLM(ctx(near_structures=True)), esc,
+                 Settings(min_frames=3, cooldown_s=60))
+    for t in range(300):
+        p.process("t1", FRAME, now=t)
+    assert [s for s, _ in esc.handled] == [Severity.ALERT]
+    feed["dets"] = []
+    for t in range(300, 361):
+        p.process("t1", FRAME, now=t)
+    feed["dets"] = [SMALL]
+    for t in range(361, 364):
+        p.process("t1", FRAME, now=t)
+    assert [s for s, _ in esc.handled] == [Severity.ALERT, Severity.ALERT]
 ```
 
 **Step 2: Run to verify it fails**
@@ -2270,7 +2292,9 @@ Expected: FAIL, `ModuleNotFoundError`
 """Stage orchestration: detect → gate → context VLM → trend → severity → escalate."""
 import base64
 import time
+import threading
 import uuid
+from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
@@ -2284,6 +2308,8 @@ from sentinel.schema import ContextResult, Detection, Severity
 from sentinel.severity import assess, fallback_severity
 from sentinel.trend import classify_trend
 from sentinel.zones import in_any_zone
+
+AREA_WINDOW = 6  # frames (~3 s at 2 fps): one missed detection must not read as a trend
 
 
 @dataclass
@@ -2327,24 +2353,37 @@ class Pipeline:
         self.latest: dict[str, Detection | None] = {}
         self.last_frame: dict[str, tuple[np.ndarray, Detection | None]] = {}
         self.burn_towers: set[str] = set()
+        self.recent_area: dict[str, deque] = {}
+        self.latched: dict[str, float] = {}  # tower -> last time smoke was seen after an ALERT
+        self.lock = threading.Lock()  # guards state read by the dashboard; released during the VLM call
 
     def process(self, tower_id: str, frame: np.ndarray, now: float) -> None:
-        self.metrics.inc("frames")
         t0 = time.perf_counter()
         dets = self.detector(frame)
-        self.metrics.time("detect_ms", (time.perf_counter() - t0) * 1000)
-        strong = [d for d in dets if d.conf >= self.s.min_conf]
-        best = max(strong, key=lambda d: d.conf, default=None)
-        self.latest[tower_id] = best
-        self.last_frame[tower_id] = (frame, best)
+        detect_ms = (time.perf_counter() - t0) * 1000
+        with self.lock:
+            self.metrics.inc("frames")
+            self.metrics.time("detect_ms", detect_ms)
+            strong = [d for d in dets if d.conf >= self.s.min_conf]
+            best = max(strong, key=lambda d: d.conf, default=None)
+            self.latest[tower_id] = best
+            self.last_frame[tower_id] = (frame, best)
+            self.recent_area.setdefault(tower_id, deque(maxlen=AREA_WINDOW)).append(
+                best.area if best else 0.0)
 
-        ev = self.active.get(tower_id)
-        if ev is None:
-            candidate = self.gate.update(tower_id, dets, now)
-            if candidate is not None:
-                self._open(tower_id, frame, candidate, now)
-        elif now >= ev.next_check_at:
-            self._recheck(ev, now)
+            ev = self.active.get(tower_id)
+            if ev is None:
+                if tower_id in self.latched:  # same fire already alerted: wait for it to clear
+                    if best is not None:
+                        self.latched[tower_id] = now
+                    elif now - self.latched[tower_id] >= self.s.cooldown_s:
+                        del self.latched[tower_id]
+                    return
+                candidate = self.gate.update(tower_id, dets, now)
+                if candidate is not None:
+                    self._open(tower_id, frame, candidate, now)
+            elif now >= ev.next_check_at:
+                self._recheck(ev, now)
 
     def _open(self, tower_id: str, frame: np.ndarray, det: Detection, now: float) -> None:
         self.metrics.inc("candidates")
@@ -2356,11 +2395,17 @@ class Pipeline:
             crop = crop_box(frame, det.box, self.s.crop_pad, self.s.crop_max_side)
         thumb = base64.b64encode(to_jpeg(crop_box(frame, det.box, 0.5, 256), 70)).decode()
         ev = Event(id=uuid.uuid4().hex[:12], tower_id=tower_id, opened_at=now,
-                   confidence=det.conf, last_area=det.area, thumbnail_b64=thumb,
+                   confidence=det.conf, last_area=max(self.recent_area[tower_id]), thumbnail_b64=thumb,
                    in_zone=in_any_zone(det.box, tower.benign_zones))
 
+        self.active[tower_id] = ev  # visible on the dashboard as "classifying…"
         t0 = time.perf_counter()
-        ev.ctx, tokens = self.vlm.classify(to_jpeg(crop))
+        self.lock.release()
+        try:
+            ctx, tokens = self.vlm.classify(to_jpeg(crop))
+        finally:
+            self.lock.acquire()
+        ev.ctx = ctx
         self.metrics.time("vlm_ms", (time.perf_counter() - t0) * 1000)
         self.metrics.inc("vlm_calls")
         self.metrics.inc("vlm_tokens", tokens)
@@ -2369,17 +2414,17 @@ class Pipeline:
 
         severity = self._assess(ev, trend=None)
         if severity in (Severity.ALERT, Severity.IGNORE):
+            del self.active[tower_id]
             self._finalize(ev, severity, now)
             return
         ev.severity = severity  # provisional until the trend re-check
         ev.next_check_at = now + self.s.recheck_s
-        self.active[tower_id] = ev
 
     def _recheck(self, ev: Event, now: float) -> None:
-        current = self.latest.get(ev.tower_id)
-        area = current.area if current else 0.0
+        area = max(self.recent_area[ev.tower_id])
         ev.trend = classify_trend(ev.last_area, area)
-        ev.last_area = area
+        if area > 0:
+            ev.last_area = area
         ev.rechecks += 1
         severity = self._assess(ev, ev.trend)
         if severity == Severity.MONITOR and ev.rechecks < self.s.max_rechecks:
@@ -2401,13 +2446,15 @@ class Pipeline:
         self.metrics.inc(f"severity_{severity.name}")
         self.metrics.time("decision_s", now - ev.opened_at)
         self.history.append(ev)
+        if severity == Severity.ALERT:
+            self.latched[ev.tower_id] = now
         self.escalator.handle(ev.report, severity, now)
 ```
 
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_pipeline.py -v`
-Expected: 7 passed
+Expected: 9 passed
 
 **Step 5: Commit**
 ```bash
@@ -2425,6 +2472,8 @@ git add sentinel/pipeline.py tests/test_pipeline.py && git commit -m "feat: casc
 **Step 1: Write the failing test**
 
 ```python
+import threading
+
 import numpy as np
 from fastapi.testclient import TestClient
 
@@ -2476,6 +2525,30 @@ def test_frame_event_and_feedback(tmp_path):
 
 def test_index_serves_dashboard(tmp_path):
     assert "Wildfire Edge Sentinel" in TestClient(create_app(runtime(tmp_path))).get("/").text
+
+
+def test_state_served_while_vlm_classifies(tmp_path):
+    started, release = threading.Event(), threading.Event()
+
+    class SlowVLM:
+        def classify(self, jpeg):
+            started.set()
+            release.wait(5)
+            return CTX, 300
+
+    rt = runtime(tmp_path)
+    rt.pipeline.vlm = SlowVLM()
+    client = TestClient(create_app(rt))
+    worker = threading.Thread(target=rt.pipeline.process,
+                              args=("t1", np.zeros((100, 100, 3), np.uint8), 0))
+    worker.start()
+    assert started.wait(5)
+    state = client.get("/api/state").json()
+    assert len(state["active"]) == 1 and state["active"][0]["severity"] is None
+    release.set()
+    worker.join(5)
+    state = client.get("/api/state").json()
+    assert state["active"] == [] and state["events"][0]["severity"] == "ALERT"
 ```
 
 **Step 2: Run to verify it fails**
@@ -2489,7 +2562,7 @@ Expected: FAIL, `ModuleNotFoundError`
 """Demo dashboard API: live feeds, events, outbox, link toggle, ranger feedback."""
 import json
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -2511,7 +2584,10 @@ class Runtime:
     escalator: Escalator
     link: Link
     feedback_path: Path = Path("data/feedback.jsonl")
-    lock: threading.Lock = field(default_factory=threading.Lock)
+    lock: threading.Lock | None = None
+
+    def __post_init__(self):
+        self.lock = self.lock or self.pipeline.lock
 
 
 class LinkState(BaseModel):
@@ -2662,7 +2738,7 @@ def create_app(rt: Runtime) -> FastAPI:
 **Step 5: Run to verify it passes**
 
 Run: `pytest tests/test_app.py -v`
-Expected: 3 passed
+Expected: 4 passed
 
 **Step 6: Commit**
 ```bash
@@ -2681,6 +2757,7 @@ git commit -m "feat: demo dashboard"
 
 ```python
 """Wires real components and runs the replay loop + dashboard. `python -m sentinel.main`"""
+import logging
 import threading
 import time
 
@@ -2706,16 +2783,17 @@ def run_loop(rt: Runtime, settings: Settings, stop: threading.Event) -> None:
     last_flush = 0.0
     while not stop.is_set():
         tick = time.time()
-        for tid, stream in streams.items():
-            frame = next(stream)
-            with rt.lock:
-                rt.pipeline.process(tid, frame, tick)
-        if tick - last_flush >= FLUSH_EVERY_S:
-            with rt.lock:
+        try:
+            for tid, stream in streams.items():
+                frame = next(stream)
+                rt.pipeline.process(tid, frame, tick)  # takes pipeline.lock itself; released during the VLM call
+            if tick - last_flush >= FLUSH_EVERY_S:
                 if rt.link.online:
                     rt.pipeline.burn_towers = fetch_burn_schedule()
-                rt.escalator.flush(tick)
-            last_flush = tick
+                rt.escalator.flush(tick)  # network I/O: never under the lock
+                last_flush = tick
+        except Exception:
+            logging.getLogger(__name__).exception("tower loop error")
         time.sleep(max(0.0, period - (time.time() - tick)))
 
 

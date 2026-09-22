@@ -1,7 +1,7 @@
 """Demo dashboard API: live feeds, events, outbox, link toggle, ranger feedback."""
 import json
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -23,7 +23,10 @@ class Runtime:
     escalator: Escalator
     link: Link
     feedback_path: Path = Path("data/feedback.jsonl")
-    lock: threading.Lock = field(default_factory=threading.Lock)
+    lock: threading.Lock | None = None
+
+    def __post_init__(self):
+        self.lock = self.lock or self.pipeline.lock
 
 
 class LinkState(BaseModel):

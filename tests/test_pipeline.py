@@ -85,3 +85,25 @@ def test_one_vlm_call_per_event_not_per_frame():
 def test_monitor_finalizes_after_max_rechecks():
     _, _, esc = run(ctx(), steady() + [(32, [SMALL]), (62, [SMALL])])
     assert [s for s, _ in esc.handled] == [Severity.MONITOR]
+
+
+def test_single_missed_detection_on_recheck_does_not_fake_growth():
+    _, _, esc = run(ctx(), steady() + [(32, []), (62, [SMALL])])
+    assert [s for s, _ in esc.handled] == [Severity.MONITOR]
+
+
+def test_persistent_fire_alerts_once_until_smoke_clears():
+    feed = {"dets": [SMALL]}
+    esc = RecordingEscalator()
+    p = Pipeline({"t1": TOWER}, lambda f: feed["dets"], FakeVLM(ctx(near_structures=True)), esc,
+                 Settings(min_frames=3, cooldown_s=60))
+    for t in range(300):
+        p.process("t1", FRAME, now=t)
+    assert [s for s, _ in esc.handled] == [Severity.ALERT]
+    feed["dets"] = []
+    for t in range(300, 361):
+        p.process("t1", FRAME, now=t)
+    feed["dets"] = [SMALL]
+    for t in range(361, 364):
+        p.process("t1", FRAME, now=t)
+    assert [s for s, _ in esc.handled] == [Severity.ALERT, Severity.ALERT]
