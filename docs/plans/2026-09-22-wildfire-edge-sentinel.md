@@ -1854,7 +1854,7 @@ def parse_open_meteo(data: dict) -> dict:
 def fetch_forecast(lat: float, lon: float, hours: int = 6, timeout_s: float = 3.0) -> dict:
     params = {"latitude": lat, "longitude": lon,
               "hourly": "temperature_2m,wind_speed_10m,wind_direction_10m",
-              "wind_speed_unit": "mph", "forecast_hours": hours}
+              "wind_speed_unit": "mph", "forecast_hours": hours, "timezone": "auto"}
     r = httpx.get(OPEN_METEO_URL, params=params, timeout=timeout_s)
     r.raise_for_status()
     return parse_open_meteo(r.json())
@@ -2040,6 +2040,7 @@ import itertools
 
 import cv2
 import numpy as np
+import pytest
 
 from sentinel.replayer import frames
 
@@ -2055,6 +2056,16 @@ def test_image_dir_no_loop(tmp_path):
     for i in range(3):
         cv2.imwrite(str(tmp_path / f"{i:03d}.jpg"), np.zeros((10, 10, 3), np.uint8))
     assert len(list(frames(str(tmp_path), fps=2, loop=False))) == 3
+
+
+def test_empty_dir_raises(tmp_path):
+    with pytest.raises(ValueError):
+        next(frames(str(tmp_path), fps=2))
+
+
+def test_missing_video_raises(tmp_path):
+    with pytest.raises(ValueError):
+        next(frames(str(tmp_path / "nope.mp4"), fps=2))
 ```
 
 **Step 2: Run to verify it fails**
@@ -2079,6 +2090,8 @@ def frames(source: str, fps: float, loop: bool = True) -> Iterator[np.ndarray]:
     path = Path(source)
     if path.is_dir():
         files = sorted(p for p in path.iterdir() if p.suffix.lower() in IMAGE_EXTS)
+        if not files:
+            raise ValueError(f"no images in {source}")
         while True:
             for f in files:
                 img = cv2.imread(str(f))
@@ -2087,11 +2100,15 @@ def frames(source: str, fps: float, loop: bool = True) -> Iterator[np.ndarray]:
             if not loop:
                 return
     cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        raise ValueError(f"cannot open video {source}")
     step = max(1, round((cap.get(cv2.CAP_PROP_FPS) or 30) / fps))
     i = 0
     while True:
         ok, img = cap.read()
         if not ok:
+            if i == 0:
+                raise ValueError(f"no readable frames in {source}")
             if not loop:
                 return
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -2126,7 +2143,7 @@ class YoloDetector:
 **Step 5: Run tests, then a Nano smoke test**
 
 Run: `pytest tests/test_replayer.py -v`
-Expected: 2 passed
+Expected: 4 passed
 
 On the Nano:
 ```bash

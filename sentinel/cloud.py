@@ -16,7 +16,7 @@ def parse_open_meteo(data: dict) -> dict:
 def fetch_forecast(lat: float, lon: float, hours: int = 6, timeout_s: float = 3.0) -> dict:
     params = {"latitude": lat, "longitude": lon,
               "hourly": "temperature_2m,wind_speed_10m,wind_direction_10m",
-              "wind_speed_unit": "mph", "forecast_hours": hours}
+              "wind_speed_unit": "mph", "forecast_hours": hours, "timezone": "auto"}
     r = httpx.get(OPEN_METEO_URL, params=params, timeout=timeout_s)
     r.raise_for_status()
     return parse_open_meteo(r.json())
