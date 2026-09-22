@@ -14,7 +14,7 @@ def crop_box(frame: np.ndarray, box: tuple[float, float, float, float],
     crop = frame[y1:y2, x1:x2]
     scale = max_side / max(crop.shape[:2])
     if scale < 1:
-        size = (int(crop.shape[1] * scale), int(crop.shape[0] * scale))
+        size = (max(1, int(crop.shape[1] * scale)), max(1, int(crop.shape[0] * scale)))
         crop = cv2.resize(crop, size, interpolation=cv2.INTER_AREA)
     return crop
 

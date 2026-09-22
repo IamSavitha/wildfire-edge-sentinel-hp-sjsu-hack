@@ -864,6 +864,10 @@ def test_box_on_bottom_edge_is_never_empty():
     crop = crop_box(FRAME, (0, 480, 10, 480), pad=0.0)
     assert crop.size > 0
     assert to_jpeg(crop)[:2] == b"\xff\xd8"
+
+
+def test_thin_tall_crop_survives_downscale():
+    assert crop_box(FRAME, (100, 0, 100.5, 480), pad=0.5, max_side=256).size > 0
 ```
 
 **Step 2: Run to verify it fails**
@@ -890,7 +894,7 @@ def crop_box(frame: np.ndarray, box: tuple[float, float, float, float],
     crop = frame[y1:y2, x1:x2]
     scale = max_side / max(crop.shape[:2])
     if scale < 1:
-        size = (int(crop.shape[1] * scale), int(crop.shape[0] * scale))
+        size = (max(1, int(crop.shape[1] * scale)), max(1, int(crop.shape[0] * scale)))
         crop = cv2.resize(crop, size, interpolation=cv2.INTER_AREA)
     return crop
 
@@ -905,7 +909,7 @@ def to_jpeg(img: np.ndarray, quality: int = 80) -> bytes:
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_imaging.py -v`
-Expected: 6 passed
+Expected: 7 passed
 
 **Step 5: Commit**
 ```bash

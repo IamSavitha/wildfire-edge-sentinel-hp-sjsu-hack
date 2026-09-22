@@ -31,3 +31,7 @@ def test_box_on_bottom_edge_is_never_empty():
     crop = crop_box(FRAME, (0, 480, 10, 480), pad=0.0)
     assert crop.size > 0
     assert to_jpeg(crop)[:2] == b"\xff\xd8"
+
+
+def test_thin_tall_crop_survives_downscale():
+    assert crop_box(FRAME, (100, 0, 100.5, 480), pad=0.5, max_side=256).size > 0
