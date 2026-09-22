@@ -1,5 +1,6 @@
 """OpenAI-compatible client for the local vLLM context classifier."""
 import base64
+import logging
 
 from openai import OpenAI
 from pydantic import ValidationError
@@ -46,7 +47,8 @@ class ContextVLM:
                     response_format={"type": "json_schema",
                                      "json_schema": {"name": "context", "schema": CONTEXT_JSON_SCHEMA}},
                 )
-            except Exception:
+            except Exception as exc:
+                logging.getLogger(__name__).warning("VLM request failed: %s", exc)
                 return None, tokens
             tokens += resp.usage.prompt_tokens + resp.usage.completion_tokens
             try:

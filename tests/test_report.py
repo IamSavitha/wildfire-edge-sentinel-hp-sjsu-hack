@@ -43,3 +43,15 @@ def test_report_without_context():
 
 def test_compass():
     assert compass(0) == "N" and compass(270) == "W" and compass(359) == "N" and compass(135) == "SE"
+
+
+def test_render_text_with_empty_forecast():
+    r = report()
+    r["forecast"] = {"temp_c": []}
+    assert "Forecast:" not in render_text(r)
+
+
+def test_render_text_with_partial_forecast():
+    r = report()
+    r["forecast"] = {"temp_c": [34]}
+    assert "Forecast:" not in render_text(r)

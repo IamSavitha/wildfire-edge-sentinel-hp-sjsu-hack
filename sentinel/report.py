@@ -41,10 +41,12 @@ def render_text(r: dict) -> str:
         f"Confidence {r['confidence']:.2f}. Trend: {r['trend'] or 'unknown'}. Local temp {r['temp_c']:.0f}°C.",
         r["description"],
     ]
-    fc = r.get("forecast")
-    if fc:
-        parts.append(f"Forecast: up to {max(fc['temp_c']):.0f}°C, wind {fc['wind_mph'][0]:.0f} mph "
-                     f"from {compass(fc['wind_dir_deg'][0])}.")
+    fc = r.get("forecast") or {}
+    temps = [t for t in fc.get("temp_c") or [] if t is not None]
+    winds, dirs = fc.get("wind_mph") or [], fc.get("wind_dir_deg") or []
+    if temps and winds and dirs and winds[0] is not None and dirs[0] is not None:
+        parts.append(f"Forecast: up to {max(temps):.0f}°C, wind {winds[0]:.0f} mph "
+                     f"from {compass(dirs[0])}.")
     elif r.get("forecast_status") == "pending":
         parts.append("Forecast pending (no connectivity at detection time).")
     return " ".join(parts)

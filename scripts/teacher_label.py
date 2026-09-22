@@ -63,6 +63,7 @@ def main() -> None:
             held = int(hashlib.md5(p.name.encode()).hexdigest(), 16) % 100 < 15
             (fho if held else ftr).write(json.dumps({"image": str(p), "label": ctx.model_dump()}) + "\n")
             if i % 100 == 0:
+                ftr.flush(); fho.flush()
                 print(f"{i}/{len(crops)}", flush=True)
 
 

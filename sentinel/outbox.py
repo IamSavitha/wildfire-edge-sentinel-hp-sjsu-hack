@@ -2,12 +2,15 @@
 import json
 import sqlite3
 import threading
+from pathlib import Path
 
 MAX_BACKOFF_S = 300
 
 
 class Outbox:
     def __init__(self, path: str):
+        if path != ":memory:":
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.lock = threading.Lock()
         with self.lock:
@@ -41,7 +44,7 @@ class Outbox:
         with self.lock:
             self.db.execute(
                 "UPDATE outbox SET attempts = attempts + 1,"
-                " next_attempt_at = ? + min(?, 1 << (attempts + 1)) WHERE event_id = ?",
+                " next_attempt_at = ? + min(?, 1 << min(attempts + 1, 30)) WHERE event_id = ?",
                 (now, MAX_BACKOFF_S, event_id))
             self.db.commit()
 

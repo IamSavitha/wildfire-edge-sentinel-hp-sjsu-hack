@@ -1009,6 +1009,7 @@ Expected: FAIL, `ModuleNotFoundError`
 ```python
 """OpenAI-compatible client for the local vLLM context classifier."""
 import base64
+import logging
 
 from openai import OpenAI
 from pydantic import ValidationError
@@ -1055,7 +1056,8 @@ class ContextVLM:
                     response_format={"type": "json_schema",
                                      "json_schema": {"name": "context", "schema": CONTEXT_JSON_SCHEMA}},
                 )
-            except Exception:
+            except Exception as exc:
+                logging.getLogger(__name__).warning("VLM request failed: %s", exc)
                 return None, tokens
             tokens += resp.usage.prompt_tokens + resp.usage.completion_tokens
             try:
@@ -1214,6 +1216,7 @@ def main() -> None:
             held = int(hashlib.md5(p.name.encode()).hexdigest(), 16) % 100 < 15
             (fho if held else ftr).write(json.dumps({"image": str(p), "label": ctx.model_dump()}) + "\n")
             if i % 100 == 0:
+                ftr.flush(); fho.flush()
                 print(f"{i}/{len(crops)}", flush=True)
 
 
@@ -1408,6 +1411,18 @@ def test_report_without_context():
 
 def test_compass():
     assert compass(0) == "N" and compass(270) == "W" and compass(359) == "N" and compass(135) == "SE"
+
+
+def test_render_text_with_empty_forecast():
+    r = report()
+    r["forecast"] = {"temp_c": []}
+    assert "Forecast:" not in render_text(r)
+
+
+def test_render_text_with_partial_forecast():
+    r = report()
+    r["forecast"] = {"temp_c": [34]}
+    assert "Forecast:" not in render_text(r)
 ```
 
 **Step 2: Run to verify it fails**
@@ -1461,10 +1476,12 @@ def render_text(r: dict) -> str:
         f"Confidence {r['confidence']:.2f}. Trend: {r['trend'] or 'unknown'}. Local temp {r['temp_c']:.0f}°C.",
         r["description"],
     ]
-    fc = r.get("forecast")
-    if fc:
-        parts.append(f"Forecast: up to {max(fc['temp_c']):.0f}°C, wind {fc['wind_mph'][0]:.0f} mph "
-                     f"from {compass(fc['wind_dir_deg'][0])}.")
+    fc = r.get("forecast") or {}
+    temps = [t for t in fc.get("temp_c") or [] if t is not None]
+    winds, dirs = fc.get("wind_mph") or [], fc.get("wind_dir_deg") or []
+    if temps and winds and dirs and winds[0] is not None and dirs[0] is not None:
+        parts.append(f"Forecast: up to {max(temps):.0f}°C, wind {winds[0]:.0f} mph "
+                     f"from {compass(dirs[0])}.")
     elif r.get("forecast_status") == "pending":
         parts.append("Forecast pending (no connectivity at detection time).")
     return " ".join(parts)
@@ -1473,7 +1490,7 @@ def render_text(r: dict) -> str:
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_report.py -v`
-Expected: 6 passed
+Expected: 8 passed
 
 **Step 5: Commit**
 ```bash
@@ -1526,6 +1543,21 @@ def test_survives_restart(tmp_path):
     path = str(tmp_path / "o.db")
     Outbox(path).enqueue("e1", {"x": 1}, now=0)
     assert Outbox(path).pending_count() == 1
+
+
+def test_backoff_is_capped_after_many_failures():
+    ob = Outbox(":memory:")
+    ob.enqueue("e1", {}, now=0)
+    ob.db.execute("UPDATE outbox SET attempts = 70")
+    ob.mark_failed("e1", now=1000)
+    assert ob.due(now=1000) == []
+    assert ob.due(now=1300) != []
+
+
+def test_creates_parent_directory(tmp_path):
+    path = str(tmp_path / "sub" / "o.db")
+    Outbox(path).enqueue("e1", {}, now=0)
+    assert Outbox(path).pending_count() == 1
 ```
 
 **Step 2: Run to verify it fails**
@@ -1540,12 +1572,15 @@ Expected: FAIL, `ModuleNotFoundError`
 import json
 import sqlite3
 import threading
+from pathlib import Path
 
 MAX_BACKOFF_S = 300
 
 
 class Outbox:
     def __init__(self, path: str):
+        if path != ":memory:":
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.lock = threading.Lock()
         with self.lock:
@@ -1579,7 +1614,7 @@ class Outbox:
         with self.lock:
             self.db.execute(
                 "UPDATE outbox SET attempts = attempts + 1,"
-                " next_attempt_at = ? + min(?, 1 << (attempts + 1)) WHERE event_id = ?",
+                " next_attempt_at = ? + min(?, 1 << min(attempts + 1, 30)) WHERE event_id = ?",
                 (now, MAX_BACKOFF_S, event_id))
             self.db.commit()
 
@@ -1595,7 +1630,7 @@ class Outbox:
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_outbox.py -v`
-Expected: 5 passed
+Expected: 7 passed
 
 **Step 5: Run the full suite and commit**
 ```bash
