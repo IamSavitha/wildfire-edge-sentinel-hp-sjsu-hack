@@ -8,8 +8,9 @@ def crop_box(frame: np.ndarray, box: tuple[float, float, float, float],
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = box
     bw, bh = x2 - x1, y2 - y1
-    x1, y1 = max(0, int(x1 - pad * bw)), max(0, int(y1 - pad * bh))
+    x1, y1 = min(w - 1, max(0, int(x1 - pad * bw))), min(h - 1, max(0, int(y1 - pad * bh)))
     x2, y2 = min(w, int(x2 + pad * bw)), min(h, int(y2 + pad * bh))
+    x2, y2 = max(x2, min(w, x1 + 1)), max(y2, min(h, y1 + 1))
     crop = frame[y1:y2, x1:x2]
     scale = max_side / max(crop.shape[:2])
     if scale < 1:

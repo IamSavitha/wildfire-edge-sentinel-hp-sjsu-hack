@@ -852,6 +852,18 @@ def test_crop_clips_to_frame():
 
 def test_to_jpeg_returns_jpeg_bytes():
     assert to_jpeg(FRAME)[:2] == b"\xff\xd8"
+
+
+def test_box_on_right_edge_is_never_empty():
+    crop = crop_box(FRAME, (640, 0, 640, 10), pad=0.0)
+    assert crop.size > 0
+    assert to_jpeg(crop)[:2] == b"\xff\xd8"
+
+
+def test_box_on_bottom_edge_is_never_empty():
+    crop = crop_box(FRAME, (0, 480, 10, 480), pad=0.0)
+    assert crop.size > 0
+    assert to_jpeg(crop)[:2] == b"\xff\xd8"
 ```
 
 **Step 2: Run to verify it fails**
@@ -872,8 +884,9 @@ def crop_box(frame: np.ndarray, box: tuple[float, float, float, float],
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = box
     bw, bh = x2 - x1, y2 - y1
-    x1, y1 = max(0, int(x1 - pad * bw)), max(0, int(y1 - pad * bh))
+    x1, y1 = min(w - 1, max(0, int(x1 - pad * bw))), min(h - 1, max(0, int(y1 - pad * bh)))
     x2, y2 = min(w, int(x2 + pad * bw)), min(h, int(y2 + pad * bh))
+    x2, y2 = max(x2, min(w, x1 + 1)), max(y2, min(h, y1 + 1))
     crop = frame[y1:y2, x1:x2]
     scale = max_side / max(crop.shape[:2])
     if scale < 1:
@@ -892,7 +905,7 @@ def to_jpeg(img: np.ndarray, quality: int = 80) -> bytes:
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_imaging.py -v`
-Expected: 4 passed
+Expected: 6 passed
 
 **Step 5: Commit**
 ```bash

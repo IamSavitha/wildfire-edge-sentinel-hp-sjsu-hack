@@ -19,3 +19,15 @@ def test_crop_clips_to_frame():
 
 def test_to_jpeg_returns_jpeg_bytes():
     assert to_jpeg(FRAME)[:2] == b"\xff\xd8"
+
+
+def test_box_on_right_edge_is_never_empty():
+    crop = crop_box(FRAME, (640, 0, 640, 10), pad=0.0)
+    assert crop.size > 0
+    assert to_jpeg(crop)[:2] == b"\xff\xd8"
+
+
+def test_box_on_bottom_edge_is_never_empty():
+    crop = crop_box(FRAME, (0, 480, 10, 480), pad=0.0)
+    assert crop.size > 0
+    assert to_jpeg(crop)[:2] == b"\xff\xd8"
