@@ -54,6 +54,13 @@ requires-python = ">=3.10"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["sentinel"]
 ```
 
 `requirements-dev.txt` (laptop, no GPU):
@@ -124,7 +131,7 @@ results/*.tmp
 ```bash
 cd wildfire-edge-sentinel
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.txt && pip install -e .
 pytest
 ```
 Expected: `no tests ran` (exit code 5). That's fine.
@@ -187,7 +194,7 @@ python3 -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 If this prints `False` or `ModuleNotFoundError`, install CUDA PyTorch for GB10 (aarch64) exactly as the **NVIDIA DGX Spark playbook** says (hack guide resource list), *then*:
 ```bash
 python3 -m venv .venv --system-site-packages && source .venv/bin/activate
-pip install -r requirements.txt -r requirements-train.txt
+pip install -r requirements.txt -r requirements-train.txt && pip install -e .
 python -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))"
 ```
 Expected: the device name prints.
@@ -3131,6 +3138,7 @@ python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null || {
 python3 -m venv .venv --system-site-packages
 source .venv/bin/activate
 pip install -U pip && pip install -r requirements.txt -r requirements-train.txt
+pip install -e .
 command -v zrt >/dev/null || sudo snap install --classic zrt
 zrt pull Qwen/Qwen2.5-VL-7B-Instruct
 echo "Next: ./scripts/download_data.sh, then see README 'Reproduce'."
