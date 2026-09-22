@@ -10,3 +10,4 @@ results/*.tmp
 *.jpeg
 .DS_Store
 docs/Reference/
+*.egg-info/
