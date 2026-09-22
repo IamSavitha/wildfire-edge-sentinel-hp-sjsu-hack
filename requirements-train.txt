@@ -1,0 +1,7 @@
+transformers
+peft
+trl
+accelerate
+datasets
+pillow
+scikit-learn

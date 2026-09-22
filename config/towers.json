@@ -1,0 +1,6 @@
+[
+  {"id": "t1", "name": "Mt. Umunhum Lookout", "lat": 37.1606, "lon": -121.8983,
+   "source": "data/demo/t1", "temp_c": 31.0, "benign_zones": []},
+  {"id": "t2", "name": "Loma Prieta Ridge", "lat": 37.1114, "lon": -121.8430,
+   "source": "data/demo/t2", "temp_c": 29.5, "benign_zones": []}
+]

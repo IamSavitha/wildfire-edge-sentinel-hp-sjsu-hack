@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+data/
+runs/
+models/*.pt
+adapters/
+results/*.tmp
+*.db
+*.pdf
+*.jpeg
+.DS_Store
+docs/Reference/
