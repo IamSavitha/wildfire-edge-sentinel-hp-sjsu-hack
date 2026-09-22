@@ -11,7 +11,9 @@ def assess(ctx: ContextResult, trend: str | None,
     growing = trend == "growing"
     if ctx.source_type == "fog_dust_cloud":
         return Severity.IGNORE
-    if burn_scheduled and not ctx.near_structures:
+    if (burn_scheduled and not ctx.near_structures
+            and ctx.source_type not in {"structure", "vehicle"}
+            and ctx.size_estimate != "large" and ctx.smoke_color != "black"):
         return Severity.LOG
     if ctx.source_type in DANGEROUS:
         if growing or ctx.near_structures or ctx.size_estimate == "large" or ctx.smoke_color == "black":
@@ -22,7 +24,9 @@ def assess(ctx: ContextResult, trend: str | None,
             return Severity.ALERT
         if ctx.source_type == "industrial_stack" and in_benign_zone:
             return Severity.IGNORE
-        if ctx.source_type in ATTENDABLE and ctx.attended == "no":
+        if ctx.size_estimate == "large" or ctx.smoke_color == "black":
+            return Severity.MONITOR
+        if ctx.source_type in ATTENDABLE and ctx.attended != "yes":
             return Severity.MONITOR
         return Severity.LOG
     return Severity.ALERT if growing else Severity.MONITOR

@@ -68,3 +68,22 @@ def test_fallback_without_context_never_ignores():
     assert fallback_severity(None) == Severity.MONITOR
     assert fallback_severity("static") == Severity.MONITOR
     assert fallback_severity("growing") == Severity.ALERT
+
+
+def test_scheduled_burn_never_hides_structure_fire():
+    c = ctx(source_type="structure", size_estimate="large", smoke_color="black")
+    assert assess(c, trend="growing", burn_scheduled=True) == Severity.ALERT
+
+
+def test_scheduled_burn_never_hides_large_black_wildland():
+    c = ctx(size_estimate="large", smoke_color="black")
+    assert assess(c, trend="growing", burn_scheduled=True) == Severity.ALERT
+
+
+def test_large_black_benign_source_is_at_least_monitor():
+    c = ctx(source_type="controlled_burn", size_estimate="large", smoke_color="black")
+    assert assess(c, trend="static") == Severity.MONITOR
+
+
+def test_unclear_attendance_counts_as_unattended():
+    assert assess(ctx(source_type="campfire", attended="unclear"), trend="static") == Severity.MONITOR

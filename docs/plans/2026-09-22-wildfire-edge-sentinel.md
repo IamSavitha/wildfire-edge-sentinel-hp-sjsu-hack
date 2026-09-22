@@ -563,6 +563,25 @@ def test_fallback_without_context_never_ignores():
     assert fallback_severity(None) == Severity.MONITOR
     assert fallback_severity("static") == Severity.MONITOR
     assert fallback_severity("growing") == Severity.ALERT
+
+
+def test_scheduled_burn_never_hides_structure_fire():
+    c = ctx(source_type="structure", size_estimate="large", smoke_color="black")
+    assert assess(c, trend="growing", burn_scheduled=True) == Severity.ALERT
+
+
+def test_scheduled_burn_never_hides_large_black_wildland():
+    c = ctx(size_estimate="large", smoke_color="black")
+    assert assess(c, trend="growing", burn_scheduled=True) == Severity.ALERT
+
+
+def test_large_black_benign_source_is_at_least_monitor():
+    c = ctx(source_type="controlled_burn", size_estimate="large", smoke_color="black")
+    assert assess(c, trend="static") == Severity.MONITOR
+
+
+def test_unclear_attendance_counts_as_unattended():
+    assert assess(ctx(source_type="campfire", attended="unclear"), trend="static") == Severity.MONITOR
 ```
 
 **Step 2: Run to verify it fails**
@@ -586,7 +605,9 @@ def assess(ctx: ContextResult, trend: str | None,
     growing = trend == "growing"
     if ctx.source_type == "fog_dust_cloud":
         return Severity.IGNORE
-    if burn_scheduled and not ctx.near_structures:
+    if (burn_scheduled and not ctx.near_structures
+            and ctx.source_type not in {"structure", "vehicle"}
+            and ctx.size_estimate != "large" and ctx.smoke_color != "black"):
         return Severity.LOG
     if ctx.source_type in DANGEROUS:
         if growing or ctx.near_structures or ctx.size_estimate == "large" or ctx.smoke_color == "black":
@@ -597,7 +618,9 @@ def assess(ctx: ContextResult, trend: str | None,
             return Severity.ALERT
         if ctx.source_type == "industrial_stack" and in_benign_zone:
             return Severity.IGNORE
-        if ctx.source_type in ATTENDABLE and ctx.attended == "no":
+        if ctx.size_estimate == "large" or ctx.smoke_color == "black":
+            return Severity.MONITOR
+        if ctx.source_type in ATTENDABLE and ctx.attended != "yes":
             return Severity.MONITOR
         return Severity.LOG
     return Severity.ALERT if growing else Severity.MONITOR
@@ -611,7 +634,7 @@ def fallback_severity(trend: str | None) -> Severity:
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_severity.py -v`
-Expected: 14 passed
+Expected: 18 passed
 
 **Step 5: Commit**
 ```bash
