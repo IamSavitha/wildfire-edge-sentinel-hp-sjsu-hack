@@ -45,7 +45,7 @@ def main() -> None:
     metrics, link = Metrics(), Link(online=False)
     escalator = Escalator(Outbox(settings.db_path), link, fetch_forecast,
                           lambda payload: send_dispatch(settings.dispatch_url, payload), metrics)
-    pipeline = Pipeline(towers, YoloDetector(settings.detector_weights),
+    pipeline = Pipeline(towers, YoloDetector(settings.detector_weights, classes=settings.detector_classes),
                         ContextVLM(settings.vlm_model, settings.vlm_base_url, settings.vlm_timeout_s),
                         escalator, settings, metrics)
     rt = Runtime(pipeline, escalator, link)

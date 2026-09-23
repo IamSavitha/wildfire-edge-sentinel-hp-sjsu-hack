@@ -28,3 +28,10 @@ def test_load_towers(tmp_path):
     p.write_text(json.dumps([{"id": "t1", "name": "A", "lat": 1.0, "lon": 2.0, "source": "x"}]))
     towers = load_towers(p)
     assert towers["t1"].name == "A" and towers["t1"].benign_zones == []
+
+
+def test_detector_classes_setting(tmp_path):
+    assert Settings().detector_classes is None
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"detector_weights": "yolov8s-worldv2.pt", "detector_classes": ["smoke", "fire"]}))
+    assert load_settings(p).detector_classes == ["smoke", "fire"]
