@@ -87,10 +87,18 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] VLM before/after JSONs + LoRA training log + loss curve; `results/before_after.md` generated
 - [ ] End-to-end bench JSONs + `results/before_after.md`
 
+## Versions (tags + frozen weights) 🏷️
+
+- [x] Tags `v1.0.0-baseline` (d0bfc87), `v1.1.0-finetuned` (d74d185), `v1.2.0-tower` (d511635) pushed; one document each in [docs/versions/](versions/README.md) with models, SHA-256 checksums, config, results, known issues, restore steps
+- [x] Weights frozen read-only on the Nano in `models/versions/<tag>/` with `SHA256SUMS`
+- [x] `CONTRIBUTING.md`, PR template, `CODEOWNERS`
+- [ ] GitHub rulesets (owner action): require PRs on `main` for everyone but the owner; protect `v*` tags from deletion/moving
+- [ ] `v1.3.0-joint` after stage-3 training is evaluated
+
 ## Phase 6 — End-to-end benchmark and cost 🖥️ [T25, T25b, T26]
 
 - [x] `data/bench/clips.csv` with 20–40 clips (`alert` / `no_alert`) — 25 real tower clips via `scripts/make_bench_clips.py`: 15 alert (5 FIgLib post-ignition + 10 pyro smoke windows), 10 no_alert (smoke-free tower footage)
-- [ ] ⏳ `bench.py --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model <base id> --recheck-s 5`
+- [x] `bench.py --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model <base id> --recheck-s 5`
 - [ ] `bench.py --name after --detector-weights models/smoke_yolo.pt --model context --recheck-s 5`
 - [ ] `bench.py --name base_full --model <base id> --full-frame --recheck-s 5` (token ablation for the cost model)
 - [ ] `bench.py --name detector_only --detector-only` (optional ablation)
