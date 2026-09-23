@@ -250,3 +250,56 @@ def test_cloud_vlm_from_env_rejects_bad_format_without_echoing_the_key():
     with pytest.raises(SystemExit, match="CLOUD_VLM_RESPONSE_FORMAT") as e:
         cloud_vlm_from_env(env={**ENV, "CLOUD_VLM_RESPONSE_FORMAT": "yaml"})
     assert SECRET not in str(e.value)
+
+
+# ---------------------------------------------------------------- prompts, parse retries, fingerprint
+
+def test_cloud_client_does_not_rebill_on_a_parse_failure():
+    v = cloud_vlm_from_env(env=ENV, response_format="json_object")
+    assert v.parse_retries == 0
+    completions = FakeCompletions(["garbage", VALID])
+    v.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    assert v.classify(b"\xff\xd8fake") == (None, 340)
+    assert len(completions.calls) == 1
+    assert cloud_vlm_from_env(env=ENV, parse_retries=1).parse_retries == 1
+
+
+def test_local_client_still_retries_once():
+    v, c = vlm(["bad", VALID])
+    assert v.classify(b"\xff\xd8fake")[0] is not None and len(c.calls) == 2
+
+
+def test_json_schema_mode_falls_back_to_extracting_the_object():
+    v, c = vlm(["```json\n" + VALID + "\n```"])
+    assert v.classify(b"\xff\xd8fake")[0].source_type == "campfire" and len(c.calls) == 1
+
+
+def test_full_frame_prompt_is_sent_when_configured():
+    from sentinel.vlm_client import CLOUD_FULL_FRAME_PROMPT
+    assert "most frames contain no smoke" in CLOUD_FULL_FRAME_PROMPT.lower()
+    assert '"none"' in CLOUD_FULL_FRAME_PROMPT and '"fog_dust_cloud"' in CLOUD_FULL_FRAME_PROMPT
+    v = cloud_vlm_from_env(env=ENV, response_format="none", system_prompt=CLOUD_FULL_FRAME_PROMPT)
+    completions = FakeCompletions([VALID])
+    v.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    v.classify(b"\xff\xd8fake")
+    assert completions.calls[0]["messages"][0]["content"].startswith(CLOUD_FULL_FRAME_PROMPT)
+
+
+def test_fingerprint_changes_with_prompt_host_model_mode_and_max_tokens():
+    from sentinel.vlm_client import CLOUD_FULL_FRAME_PROMPT
+    base = ContextVLM("m", base_url="https://a.example/v1", client=object())
+    fp = base.fingerprint()
+    assert fp["host"] == "a.example" and fp["model"] == "m" and fp["mode"] == "json_schema" and fp["max_tokens"] == 160
+    others = [ContextVLM("m", base_url="https://b.example/v1", client=object()),
+              ContextVLM("m2", base_url="https://a.example/v1", client=object()),
+              ContextVLM("m", base_url="https://a.example/v1", client=object(), response_format="none"),
+              ContextVLM("m", base_url="https://a.example/v1", client=object(), max_tokens=200),
+              ContextVLM("m", base_url="https://a.example/v1", client=object(), system_prompt=CLOUD_FULL_FRAME_PROMPT)]
+    assert all(o.fingerprint() != fp for o in others)
+    assert SECRET not in json.dumps(ContextVLM("m", client=object(), api_key=SECRET).fingerprint())
+
+
+def test_request_exception_is_kept_for_the_retry_policy():
+    v, _ = cloud([TimeoutError("slow")], "json_object")
+    v.classify(b"\xff\xd8fake")
+    assert isinstance(v.last_exception, TimeoutError)

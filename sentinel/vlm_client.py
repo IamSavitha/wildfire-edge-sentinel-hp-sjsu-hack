@@ -2,6 +2,7 @@
 same model (Qwen2.5-VL-7B-Instruct) behind a hosted OpenAI-compatible provider for the cloud-only
 baseline (`cloud_vlm_from_env`). API keys are read from the environment only and never logged."""
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -24,6 +25,18 @@ SYSTEM_PROMPT = (
     "description: one factual sentence, at most 25 words."
 )
 USER_PROMPT = "Classify this scene."
+
+# Cloud-only baseline (scripts/bench_cloud.py): the camera's WHOLE frame, not a detector crop, so the
+# model must also say when there is nothing there. smoke_color "none" is mapped to IGNORE.
+CLOUD_FULL_FRAME_PROMPT = (
+    "You are a wildfire lookout assistant. You see the FULL FRAME from a fixed lookout camera on a "
+    "remote tower. Most frames contain no smoke at all. If there is no smoke or fire, answer "
+    "smoke_color \"none\" and source_type \"fog_dust_cloud\". If there is smoke, classify its source "
+    "and context. Benign sources (campfire, BBQ/chimney, industrial stack, controlled burn) and "
+    "look-alikes (fog, dust, low cloud) are common, so look for fire rings, people, buildings, roads "
+    "and smoke color. Answer ONLY with JSON matching the schema. "
+    "description: one factual sentence, at most 25 words."
+)
 
 # json_schema: server-side constrained decoding (vLLM, some providers).
 # json_object: provider "JSON mode"; the schema goes into the system prompt.
@@ -91,14 +104,23 @@ def _openai_client(base_url: str, timeout_s: float, api_key: str | None = None) 
 
 
 class ContextVLM:
+    """parse_retries: extra requests after an unparseable reply (1 for the local server; 0 for a paid
+    cloud API, where a retry at temperature 0 bills twice for the same answer)."""
+
     def __init__(self, model: str, base_url: str = "http://localhost:8000/v1",
                  timeout_s: float = 5.0, max_tokens: int = 160, client=None,
-                 api_key: str | None = None, response_format: str = "json_schema"):
+                 api_key: str | None = None, response_format: str = "json_schema",
+                 system_prompt: str = SYSTEM_PROMPT, user_prompt: str = USER_PROMPT,
+                 parse_retries: int = 1):
         if response_format not in RESPONSE_FORMATS:
             raise ValueError(f"response_format must be one of {RESPONSE_FORMATS}, got {response_format!r}")
         self.model = model
         self.max_tokens = max_tokens
         self.response_format = response_format
+        self.system_prompt = system_prompt
+        self.user_prompt = user_prompt
+        self.parse_retries = max(0, int(parse_retries))
+        self.last_exception: Exception | None = None  # the latest request error itself (for retry policy)
         self.host = urlparse(base_url).hostname or base_url.split("://")[0]
         self.last_usage: dict = {}  # prompt/completion split of the latest classify() call
         self.last_error: str | None = None  # redacted request error of the latest call, if any
@@ -110,14 +132,22 @@ class ContextVLM:
 
     __str__ = __repr__
 
+    def fingerprint(self) -> dict:
+        """Everything that changes the answer to the same image: used as the response-cache key."""
+        prompt = "\0".join((self.system_prompt, self.user_prompt, schema_hint()))
+        return {"host": self.host, "model": self.model, "mode": self.response_format,
+                "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(), "max_tokens": self.max_tokens}
+
     def _messages(self, jpeg: bytes) -> list[dict]:
         url = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
-        system = SYSTEM_PROMPT if self.response_format == "json_schema" else SYSTEM_PROMPT + "\n\n" + schema_hint()
+        system = self.system_prompt
+        if self.response_format != "json_schema":
+            system += "\n\n" + schema_hint()
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": [
                 {"type": "image_url", "image_url": {"url": url}},
-                {"type": "text", "text": USER_PROMPT},
+                {"type": "text", "text": self.user_prompt},
             ]},
         ]
 
@@ -131,7 +161,10 @@ class ContextVLM:
 
     def _parse(self, content: str | None) -> ContextResult:
         if self.response_format == "json_schema":
-            return ContextResult.model_validate_json(content)
+            try:
+                return ContextResult.model_validate_json(content)
+            except (ValidationError, ValueError, TypeError):
+                pass  # e.g. a provider that wraps even schema-constrained output in a code fence
         obj = extract_json(content)
         if obj is None:
             raise ValueError("no JSON object in the reply")
@@ -141,14 +174,15 @@ class ContextVLM:
         """Returns (context or None, total tokens spent). The in/out split is kept in last_usage."""
         tokens = 0
         usage = self.last_usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
-        self.last_error = None
-        for _ in range(2):
+        self.last_error = self.last_exception = None
+        for _ in range(1 + self.parse_retries):
             try:
                 resp = self.client.chat.completions.create(
                     model=self.model, messages=self._messages(jpeg),
                     max_tokens=self.max_tokens, temperature=0, **self._request_kwargs(),
                 )
             except Exception as exc:
+                self.last_exception = exc
                 self.last_error = self._redact(f"{type(exc).__name__}: {exc}")[:300]
                 log.warning("VLM request failed: %s", self.last_error)
                 return None, tokens
@@ -169,10 +203,11 @@ class ContextVLM:
 
 def cloud_vlm_from_env(prefix: str = "CLOUD_VLM", env: Mapping[str, str] | None = None,
                        timeout_s: float = 60.0, response_format: str | None = None,
-                       client=None) -> ContextVLM:
+                       client=None, system_prompt: str = SYSTEM_PROMPT, parse_retries: int = 0) -> ContextVLM:
     """The cloud-only baseline's client, configured only from environment variables:
     <prefix>_BASE_URL, <prefix>_MODEL, <prefix>_API_KEY and optional <prefix>_RESPONSE_FORMAT
-    (json_schema | json_object | none; `response_format` overrides it). The key is never printed."""
+    (json_schema | json_object | none; `response_format` overrides it). The key is never printed.
+    No parse retry by default: at temperature 0 it would bill twice for the same answer."""
     env = os.environ if env is None else env
     values = {}
     for suffix in ("BASE_URL", "MODEL", "API_KEY"):
@@ -184,7 +219,8 @@ def cloud_vlm_from_env(prefix: str = "CLOUD_VLM", env: Mapping[str, str] | None 
     if fmt not in RESPONSE_FORMATS:
         raise SystemExit(f"{prefix}_RESPONSE_FORMAT must be one of {RESPONSE_FORMATS}, got {fmt!r}")
     return ContextVLM(values["MODEL"], values["BASE_URL"], timeout_s=timeout_s, client=client,
-                      api_key=values["API_KEY"], response_format=fmt)
+                      api_key=values["API_KEY"], response_format=fmt, system_prompt=system_prompt,
+                      parse_retries=parse_retries)
 
 
 def ensure_served(client, model: str, base_url: str) -> None:

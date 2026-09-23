@@ -57,7 +57,8 @@ def evaluate(rows, classify, read_bytes=lambda p: Path(p).read_bytes(), clock=ti
     latencies, tokens = [], []
     per_source: dict[str, dict[str, int]] = {}
     cloud = {"fresh_ms": [], "cached_ms": [], "errors": 0, "usage_missing": 0,
-             "billed_in": 0, "billed_out": 0, "in": 0, "out": 0, "answered": 0}
+             "billed_in": 0, "billed_out": 0, "in": 0, "out": 0, "answered": 0,
+             "ans_exact": 0, "ans_group": 0}
     for r in rows:
         jpeg = read_bytes(r["image"])
         t0 = clock()
@@ -65,8 +66,9 @@ def evaluate(rows, classify, read_bytes=lambda p: Path(p).read_bytes(), clock=ti
         ms = (clock() - t0) * 1000
         latencies.append(ms)
         tokens.append(tok)
+        answered = True
         if source is not None:
-            _account(cloud, source, ms)
+            answered = _account(cloud, source, ms)
         want = r["label"]["source_type"]
         bucket = per_source.setdefault(want, {"n": 0, "correct": 0})
         bucket["n"] += 1
@@ -74,9 +76,13 @@ def evaluate(rows, classify, read_bytes=lambda p: Path(p).read_bytes(), clock=ti
             fails += 1
             continue
         hit = ctx.source_type == want
+        same_group = GROUP[ctx.source_type] == GROUP[want]
         exact += hit
         bucket["correct"] += hit
-        group += GROUP[ctx.source_type] == GROUP[want]
+        group += same_group
+        if answered:
+            cloud["ans_exact"] += hit
+            cloud["ans_group"] += same_group
     n = len(rows)
     out = {
         "n": n,
@@ -93,14 +99,15 @@ def evaluate(rows, classify, read_bytes=lambda p: Path(p).read_bytes(), clock=ti
     return out
 
 
-def _account(c: dict, source, ms: float) -> None:
+def _account(c: dict, source, ms: float) -> bool:
+    """Tally one cloud call; False when the request itself failed (no answer at all)."""
     usage = source.last_usage or {}
     if source.last_cached:
         if source.last_latency_ms is not None:
             c["cached_ms"].append(float(source.last_latency_ms))
     elif source.last_error:
         c["errors"] += 1
-        return
+        return False
     else:
         c["fresh_ms"].append(ms)
         c["billed_in"] += int(usage.get("prompt_tokens") or 0)
@@ -109,13 +116,19 @@ def _account(c: dict, source, ms: float) -> None:
     c["answered"] += 1
     c["in"] += int(usage.get("prompt_tokens") or 0)
     c["out"] += int(usage.get("completion_tokens") or 0)
+    return True
 
 
 def _cloud_summary(c: dict, source, n: int) -> dict:
     answered = c["answered"]
     return {
         "n_fresh": source.n_fresh, "n_cached": source.n_cached, "n_request_errors": c["errors"],
+        "n_retries": getattr(source, "n_retries", 0),
         "request_error_rate": c["errors"] / n,
+        # the same accuracies over calls that got an answer (request errors excluded)
+        "n_answered": answered,
+        "source_type_acc_answered": c["ans_exact"] / answered if answered else None,
+        "group_acc_answered": c["ans_group"] / answered if answered else None,
         # fresh calls only: cache hits are free and have no new latency
         "latency_ms_p50": _pct(c["fresh_ms"], 50), "latency_ms_p95": _pct(c["fresh_ms"], 95),
         # latency measured when the cached answers were originally fetched
@@ -141,6 +154,9 @@ def parse_args(argv=None) -> argparse.Namespace:
                     help="json_schema (default) | json_object | none; overrides CLOUD_VLM_RESPONSE_FORMAT")
     ap.add_argument("--limit", type=int, help="score only the first N rows (deterministic subsample)")
     ap.add_argument("--cache", default="data/cloud_cache.jsonl", help="--cloud response cache (JSONL)")
+    ap.add_argument("--parse-retries", type=int, default=0,
+                    help="--cloud: extra paid requests after an unparseable reply (default 0: at "
+                         "temperature 0 a retry bills twice for the same answer)")
     ap.add_argument("--max-fresh-calls", type=int,
                     help="--cloud: stop before more than N billed calls (cached answers are free)")
     ap.add_argument("--force", action="store_true", help="overwrite an existing results file")
@@ -164,12 +180,14 @@ def main(argv=None) -> None:
         rows = rows[:a.limit]
 
     if a.cloud:
-        vlm = cloud_vlm_from_env(timeout_s=a.timeout, response_format=a.response_format)
+        vlm = cloud_vlm_from_env(timeout_s=a.timeout, response_format=a.response_format,
+                                 parse_retries=a.parse_retries)
         cached = CachedVLM(vlm, ResponseCache(a.cache), max_fresh_calls=a.max_fresh_calls)
         print(f"cloud: model {vlm.model} at {vlm.host} ({vlm.response_format}); {len(rows)} crops, "
               f"{len(cached.cache)} cached answers on file", file=sys.stderr)
         result = {"name": a.name, "model": vlm.model, "split": a.split, "cloud": True,
                   "provider_host": vlm.host, "response_format": vlm.response_format, "limit": a.limit,
+                  "prompt": "crop (SYSTEM_PROMPT, same as the edge)", "parse_retries": vlm.parse_retries,
                   **evaluate(rows, cached.classify, source=cached)}
     else:
         vlm = ContextVLM(a.model, a.base_url, timeout_s=a.timeout,

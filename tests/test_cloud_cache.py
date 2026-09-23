@@ -41,11 +41,23 @@ class StepClock:
         return self.t
 
 
-def test_cache_key_depends_on_model_mode_and_bytes():
-    k = cache_key("m", "json_object", b"img")
-    assert k == cache_key("m", "json_object", b"img")
-    assert len({k, cache_key("m2", "json_object", b"img"), cache_key("m", "none", b"img"),
-                cache_key("m", "json_object", b"img2")}) == 4
+FP = {"host": "api.example.com", "model": "m", "mode": "json_object", "prompt_sha256": "abc", "max_tokens": 160}
+
+
+def test_cache_key_depends_on_every_fingerprint_field_and_bytes():
+    k = cache_key(FP, b"img")
+    assert k == cache_key(dict(reversed(list(FP.items()))), b"img")
+    variants = [cache_key({**FP, f: "other"}, b"img") for f in FP] + [cache_key(FP, b"img2")]
+    assert len({k, *variants}) == len(FP) + 2
+
+
+def test_key_uses_the_vlm_fingerprint(tmp_path):
+    from sentinel.vlm_client import CLOUD_FULL_FRAME_PROMPT, ContextVLM
+    path = tmp_path / "c.jsonl"
+    a = ContextVLM("m", base_url="https://a.example/v1", client=object(), response_format="none")
+    b = ContextVLM("m", base_url="https://a.example/v1", client=object(), response_format="none",
+                   system_prompt=CLOUD_FULL_FRAME_PROMPT)
+    assert CachedVLM(a, ResponseCache(path)).fingerprint != CachedVLM(b, ResponseCache(path)).fingerprint
 
 
 def test_miss_calls_the_vlm_and_stores_context_usage_and_latency(tmp_path):
@@ -56,7 +68,7 @@ def test_miss_calls_the_vlm_and_stores_context_usage_and_latency(tmp_path):
     assert vlm.last_cached is False and vlm.last_latency_ms == pytest.approx(800)
     assert (vlm.n_fresh, vlm.n_cached) == (1, 0)
     rec = json.loads(path.read_text().splitlines()[0])
-    assert rec["key"] == cache_key("qwen", "json_object", b"img")
+    assert rec["key"] == cache_key({"model": "qwen", "mode": "json_object"}, b"img")
     assert rec["context"]["source_type"] == "wildland" and rec["usage"]["prompt_tokens"] == 500
     assert rec["latency_ms"] == pytest.approx(800)
     assert "img" not in path.read_text()  # image bytes are not stored
@@ -95,12 +107,15 @@ def test_different_mode_is_a_different_entry(tmp_path):
     assert other.last_cached is False
 
 
-def test_truncated_last_line_is_ignored(tmp_path):
+def test_truncated_last_line_is_repaired(tmp_path):
     path = tmp_path / "c.jsonl"
     CachedVLM(FakeVLM([CTX]), ResponseCache(path)).classify(b"img")
     with path.open("a") as f:
         f.write('{"key": "abc", "cont')
     assert len(ResponseCache(path)) == 1
+    assert path.read_text().endswith("}\n") and '"abc"' not in path.read_text()
+    CachedVLM(FakeVLM([CTX]), ResponseCache(path)).classify(b"img2")  # appends on a clean line
+    assert len(ResponseCache(path)) == 2
 
 
 def test_max_fresh_calls_stops_before_billing_more(tmp_path):
@@ -116,3 +131,65 @@ def test_consecutive_request_errors_abort(tmp_path):
     vlm.classify(b"a")
     with pytest.raises(SystemExit, match="2 cloud requests failed"):
         vlm.classify(b"b")
+
+
+# ---------------------------------------------------------------- transient-error retries
+
+import httpx  # noqa: E402
+import openai  # noqa: E402
+
+REQ = httpx.Request("POST", "https://api.example.com/v1/chat/completions")
+
+
+def rate_limited(retry_after=None):
+    headers = {"retry-after": retry_after} if retry_after else {}
+    return openai.RateLimitError("slow down", response=httpx.Response(429, headers=headers, request=REQ), body=None)
+
+
+class Flaky(FakeVLM):
+    """Raises the scripted exceptions (as ContextVLM reports them) before answering."""
+
+    def __init__(self, errors, answer=CTX):
+        super().__init__([])
+        self.errors, self.answer = list(errors), answer
+        self.last_exception = None
+
+    def classify(self, jpeg):
+        self.calls += 1
+        if self.errors:
+            self.last_exception = self.errors.pop(0)
+            self.last_usage, self.last_error = {"calls": 0}, type(self.last_exception).__name__
+            return None, 0
+        self.last_exception, self.last_error = None, None
+        self.last_usage = {"prompt_tokens": 500, "completion_tokens": 60, "calls": 1}
+        return self.answer, 560
+
+
+def test_transient_errors_are_retried_with_retry_after_or_backoff_and_untimed(tmp_path):
+    from sentinel.cloud_cache import is_transient
+    slept = []
+    fake = Flaky([rate_limited("3"), openai.APITimeoutError(request=REQ),
+                  openai.InternalServerError("boom", response=httpx.Response(503, request=REQ), body=None)])
+    clock = StepClock(0.4)
+    vlm = CachedVLM(fake, ResponseCache(tmp_path / "c.jsonl"), clock=clock, sleep=slept.append)
+    ctx, _ = vlm.classify(b"img")
+    assert ctx == CTX and fake.calls == 4 and vlm.n_retries == 3
+    assert slept == [3.0, 4.0, 8.0]  # Retry-After, then 2^n
+    assert vlm.last_latency_ms == pytest.approx(400)  # the final attempt only
+    assert vlm.n_fresh == 1 and vlm.n_errors == 0
+    assert is_transient(openai.APIConnectionError(request=REQ)) and not is_transient(ValueError())
+
+
+def test_retries_give_up_after_three(tmp_path):
+    fake = Flaky([rate_limited()] * 5)
+    vlm = CachedVLM(fake, ResponseCache(tmp_path / "c.jsonl"), sleep=lambda s: None)
+    assert vlm.classify(b"img") == (None, 0)
+    assert fake.calls == 4 and vlm.n_errors == 1 and vlm.last_error == "RateLimitError"
+
+
+def test_non_transient_errors_are_not_retried(tmp_path):
+    bad = openai.BadRequestError("no json_schema", response=httpx.Response(400, request=REQ), body=None)
+    fake = Flaky([bad])
+    vlm = CachedVLM(fake, ResponseCache(tmp_path / "c.jsonl"), sleep=lambda s: pytest.fail("slept"))
+    vlm.classify(b"img")
+    assert fake.calls == 1 and vlm.n_errors == 1

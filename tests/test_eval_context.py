@@ -152,6 +152,9 @@ def test_cloud_evaluate_splits_fresh_cached_errors_and_billed_tokens(tmp_path):
     assert (out["billed_prompt_tokens"], out["billed_completion_tokens"]) == (800, 100)
     assert (out["prompt_tokens_total"], out["completion_tokens_total"]) == (1200, 150)
     assert out["prompt_tokens_per_call"] == pytest.approx(400)
+    # over answered calls only (c had no answer): a and d right out of a, b, d
+    assert out["n_answered"] == 3 and out["source_type_acc_answered"] == pytest.approx(2 / 3)
+    assert out["group_acc_answered"] == pytest.approx(2 / 3) and out["n_retries"] == 0
 
 
 def test_local_evaluate_has_no_cloud_fields():
