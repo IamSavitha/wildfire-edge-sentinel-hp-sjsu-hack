@@ -21,8 +21,8 @@ a request that got no answer does not reset it), which is lenient to the cloud.
 Measured vs modelled:
   MEASURED  cloud answers, billed tokens (provider usage), cloud latency (real wall time of each HTTPS
             request from this machine; for a cache hit, the latency measured when the call was made),
-            and net_baseline_ms: the median of 5 cheap authenticated requests (GET /models), i.e. the
-            network + HTTPS overhead already inside every measured latency.
+            and net_baseline_ms: the fastest of 5 cheap authenticated requests (GET /models), an
+            approximation of the network + HTTPS overhead already inside every measured latency.
   MODELLED  the tower's uplink (sentinel/netprofile.py). Per sent frame:
               upload_end = start + serialize_s(bytes)     (the uplink is busy only while serializing)
               decided_at = upload_end + rtt_s(1) + max(0, latency - net_baseline_ms)

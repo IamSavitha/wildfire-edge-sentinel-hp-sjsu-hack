@@ -305,11 +305,24 @@ def test_request_exception_is_kept_for_the_retry_policy():
     assert isinstance(v.last_exception, TimeoutError)
 
 
-def test_net_baseline_is_the_median_of_cheap_requests():
+def test_net_baseline_is_the_fastest_of_cheap_requests():
     from sentinel.vlm_client import measure_net_baseline_ms
     ticks = iter([0, 0.10, 1, 1.30, 2, 2.20, 3, 3.90, 4, 4.25])
     v = ContextVLM("m", client=SimpleNamespace(models=FakeModels(["m"])))
-    assert measure_net_baseline_ms(v, n=5, clock=lambda: next(ticks)) == pytest.approx(250)
+    assert measure_net_baseline_ms(v, n=5, clock=lambda: next(ticks)) == pytest.approx(100)
+
+
+def test_net_baseline_warns_on_a_large_models_body(caplog):
+    from sentinel.vlm_client import measure_net_baseline_ms
+
+    class Raw:
+        def list(self):
+            return SimpleNamespace(content=b"x" * 60_000)
+    models = SimpleNamespace(with_raw_response=Raw(), list=lambda: None)
+    v = ContextVLM("m", client=SimpleNamespace(models=models))
+    with caplog.at_level(logging.WARNING):
+        assert measure_net_baseline_ms(v, n=2) is not None
+    assert "60000 bytes" in caplog.text
     broken = ContextVLM("m", client=SimpleNamespace(models=FakeModels(error=RuntimeError(f"bad key {SECRET}"))),
                         api_key=SECRET)
     assert measure_net_baseline_ms(broken) is None

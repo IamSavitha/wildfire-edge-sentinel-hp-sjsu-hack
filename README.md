@@ -305,9 +305,12 @@ the fire again quickly, as long as it is still visible.
   decision time: 1 per cloud request on a kept-alive connection, and 3 for the edge's one-shot alert POST
   on a new HTTPS connection.
 - **Upload policy:** the live policy sends the newest frame whenever the uplink frees (`--policy latest`).
-- **No double counting:** each run measures a network baseline (the median of 5 `GET /models`
+- **No double counting:** each run measures a network baseline (the fastest of 5 `GET /models`
   requests) and subtracts it from the measured cloud latency before a link profile is added. Without
-  this, the eval machine's own network time would be a constant overstatement on every link.
+  this, the eval machine's own network time would be a constant overstatement on every link. The
+  baseline is approximate: it is a different request from an inference call, and the image upload
+  from the eval machine is not in it. A large `/models` body inflates it, and the script warns about
+  that.
 - **Edge delivery:** follows the shipped code. The outbox retries after 2, 4, 8 s and then every 10 s,
   flushes every 2 s, and sends the alert before the forecast.
 - **Paired statistics:** the tables report the p50 over clips where both sides alerted, plus per-clip

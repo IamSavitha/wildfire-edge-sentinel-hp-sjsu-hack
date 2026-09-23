@@ -85,13 +85,16 @@ def is_transient(exc) -> bool:
                             openai.InternalServerError))
 
 
+MAX_RETRY_AFTER_S = 60.0
+
+
 def retry_delay_s(exc, attempt: int) -> float:
-    """Retry-After (seconds) when the provider sends it, else 2^attempt."""
+    """Retry-After (seconds, capped at MAX_RETRY_AFTER_S) when the provider sends it, else 2^attempt."""
     response = getattr(exc, "response", None)
     try:
         value = response.headers.get("retry-after") if response is not None else None
         if value is not None:
-            return max(0.0, float(value))
+            return min(MAX_RETRY_AFTER_S, max(0.0, float(value)))
     except (TypeError, ValueError, AttributeError):
         pass
     return float(2 ** attempt)

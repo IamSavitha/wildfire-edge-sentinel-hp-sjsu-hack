@@ -223,23 +223,34 @@ def cloud_vlm_from_env(prefix: str = "CLOUD_VLM", env: Mapping[str, str] | None 
                       parse_retries=parse_retries)
 
 
+BASELINE_BODY_WARN_BYTES = 50_000
+
+
 def measure_net_baseline_ms(vlm: ContextVLM, n: int = 5, clock=None) -> float | None:
-    """Median wall time of n cheap authenticated requests (GET /models) to the provider: the network
-    + HTTPS overhead already inside every measured cloud latency. Subtracted before a modelled link is
-    added, so the machine's own link is not counted twice. None if the provider refuses the request."""
-    import statistics
+    """Approximate network + HTTPS overhead already inside every measured cloud latency: the fastest
+    of n cheap authenticated requests (GET /models). The minimum is used because the extra time of a
+    slow sample is queueing/jitter, not the fixed overhead. Subtracted before a modelled link is
+    added, so this machine's own link is not counted twice. None if the provider refuses the request.
+    A large /models body (> ~50 KB) inflates it; that is logged."""
     import time
     clock = clock or time.perf_counter
-    samples = []
+    models = vlm.client.models
+    raw = getattr(models, "with_raw_response", None)
+    samples, body = [], 0
     for _ in range(n):
         t0 = clock()
         try:
-            vlm.client.models.list()
+            resp = raw.list() if raw is not None else models.list()
         except Exception as exc:  # noqa: BLE001 - optional measurement
             log.warning("network baseline not measured: %s", vlm._redact(f"{type(exc).__name__}: {exc}")[:200])
             return None
         samples.append((clock() - t0) * 1000)
-    return float(statistics.median(samples))
+        content = getattr(resp, "content", None)
+        body = len(content) if isinstance(content, (bytes, bytearray)) else body
+    if body > BASELINE_BODY_WARN_BYTES:
+        log.warning("network baseline: GET /models returned %d bytes; the baseline includes that download "
+                    "and overstates the fixed overhead", body)
+    return float(min(samples))
 
 
 def ensure_served(client, model: str, base_url: str) -> None:

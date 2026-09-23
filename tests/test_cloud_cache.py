@@ -193,3 +193,9 @@ def test_non_transient_errors_are_not_retried(tmp_path):
     vlm = CachedVLM(fake, ResponseCache(tmp_path / "c.jsonl"), sleep=lambda s: pytest.fail("slept"))
     vlm.classify(b"img")
     assert fake.calls == 1 and vlm.n_errors == 1
+
+
+def test_retry_after_is_capped_at_60_s():
+    from sentinel.cloud_cache import retry_delay_s
+    assert retry_delay_s(rate_limited("3600"), 1) == 60.0
+    assert retry_delay_s(rate_limited("5"), 1) == 5.0 and retry_delay_s(rate_limited(), 2) == 4.0
