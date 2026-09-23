@@ -156,3 +156,25 @@ def test_overrides_recheck_s_only_when_given():
     from scripts.bench import apply_overrides, parse_args
     assert apply_overrides(Settings(recheck_s=30), parse_args(["--name", "x", "--recheck-s", "5"])).recheck_s == 5.0
     assert apply_overrides(Settings(recheck_s=30), parse_args(["--name", "x"])).recheck_s == 30
+
+
+def test_run_clip_reports_first_alert_time_and_payload(tmp_path):
+    info = {}
+    run_clip(write_clip(tmp_path, "fire"), SETTINGS, fixed_detector([SMOKE]), FakeVLM(ctx()), Metrics(), info)
+    assert info["first_alert_s"] == 1.0  # min_frames=3 at 2 fps: the gate opens on frame 2
+    assert info["first_alert_compute_ms"] >= 0
+    assert info["alert_payload_bytes"] > 100  # JSON report with its thumbnail
+
+
+def test_run_clip_without_alert_reports_none(tmp_path):
+    info = {}
+    run_clip(write_clip(tmp_path, "fog"), SETTINGS, fixed_detector([SMOKE]),
+             FakeVLM(ctx(source_type="fog_dust_cloud")), Metrics(), info)
+    assert info == {"first_alert_s": None, "first_alert_compute_ms": None, "alert_payload_bytes": None}
+
+
+def test_bench_rows_carry_first_alert_fields(tmp_path):
+    rows = [{"path": write_clip(tmp_path, "fire"), "label": "alert"}]
+    out = bench("after", rows, SETTINGS, fixed_detector([SMOKE]), FakeVLM(ctx()))
+    clip = out["clips"][0]
+    assert clip["first_alert_s"] == 1.0 and clip["alert_payload_bytes"] > 0

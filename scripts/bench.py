@@ -12,6 +12,7 @@ Ablations: --detector-only (any candidate = alert, no VLM), --full-frame (no cro
 import argparse
 import csv
 import json
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -51,13 +52,29 @@ def read_clips(path) -> list[dict]:
     return rows
 
 
-def run_clip(path: str, settings: Settings, detector, vlm, metrics: Metrics) -> list[Severity]:
-    """Replay one clip through a fresh pipeline; returns final severities plus any still-provisional one."""
+def run_clip(path: str, settings: Settings, detector, vlm, metrics: Metrics,
+             info: dict | None = None) -> list[Severity]:
+    """Replay one clip through a fresh pipeline; returns final severities plus any still-provisional one.
+
+    If `info` is given it receives the first ALERT: `first_alert_s` (sim seconds from clip start to
+    the frame on which ALERT was decided, or None), `first_alert_compute_ms` (measured wall time of
+    that frame's detector + VLM work on this device) and `alert_payload_bytes` (the JSON report,
+    thumbnail included, that the outbox would send to dispatch)."""
     tower = Tower(id="bench", name=Path(path).stem, lat=37.0, lon=-121.0, source=path)
     esc = Escalator(Outbox(":memory:"), Link(), lambda *a: {}, lambda p: None, metrics)
     pipe = Pipeline({"bench": tower}, detector, vlm, esc, settings, metrics)
+    if info is not None:
+        info.update(first_alert_s=None, first_alert_compute_ms=None, alert_payload_bytes=None)
     for i, frame in enumerate(frames(path, settings.fps, loop=False)):
+        seen = len(pipe.history)
+        t0 = time.perf_counter()
         pipe.process("bench", frame, now=i / settings.fps)
+        wall_ms = (time.perf_counter() - t0) * 1000
+        if info is not None and info["first_alert_s"] is None:
+            alert = next((e for e in pipe.history[seen:] if e.severity == Severity.ALERT), None)
+            if alert is not None:
+                info.update(first_alert_s=i / settings.fps, first_alert_compute_ms=wall_ms,
+                            alert_payload_bytes=len(json.dumps(alert.report).encode()))
     return ([e.severity for e in pipe.history]
             + [e.severity for e in pipe.active.values() if e.severity is not None])
 
@@ -101,13 +118,13 @@ def bench(name: str, rows: list[dict], settings: Settings, detector, vlm,
           detector_only: bool = False) -> dict:
     total, clips, predictions = Metrics(), [], []
     for row in rows:
-        m = Metrics()
-        severities = run_clip(row["path"], settings, detector, vlm, m)
+        m, info = Metrics(), {}
+        severities = run_clip(row["path"], settings, detector, vlm, m, info)
         predicted = m.counters["candidates"] > 0 if detector_only else Severity.ALERT in severities
         predictions.append(predicted)
         clips.append({"path": row["path"], "label": row["label"], "predicted_alert": predicted,
                       "severities": [s.name for s in severities],
-                      "frames": m.counters["frames"], "vlm_calls": m.counters["vlm_calls"]})
+                      "frames": m.counters["frames"], "vlm_calls": m.counters["vlm_calls"], **info})
         total.merge(m)
     return summarize(name, score(rows, predictions), total.summary(), clips, detector_only)
 
@@ -165,7 +182,7 @@ def main() -> None:
     result["config"] = {"detector_weights": s.detector_weights, "detector_classes": s.detector_classes,
                         "vlm_model": None if a.detector_only else s.vlm_model,
                         "full_frame": s.full_frame, "recheck_s": s.recheck_s,
-                        "vlm_timeout_s": s.vlm_timeout_s, "clips": a.clips}
+                        "vlm_timeout_s": s.vlm_timeout_s, "clips": a.clips, "fps": s.fps}
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2) + "\n")
