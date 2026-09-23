@@ -14,21 +14,23 @@ def main() -> None:
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--device", default="0", help='CUDA device index, or "cpu"')
+    ap.add_argument("--name", default="smoke", help="run name: runs/<name>/ and runs/<name>.yaml")
+    ap.add_argument("--out", default="models/smoke_yolo.pt", help="where to copy the best weights")
     a = ap.parse_args()
 
     from ultralytics import YOLO  # lazy: --help works without torch
 
-    data_yaml = write_dfire_yaml(a.root, "runs/dfire.yaml")
+    data_yaml = write_dfire_yaml(a.root, f"runs/{a.name}.yaml")
     model = YOLO(a.model)
     # absolute project dir: a relative one gets nested under runs/detect/
     model.train(data=str(data_yaml), epochs=a.epochs, imgsz=a.imgsz, batch=a.batch, device=a.device,
-                project=str(Path("runs").resolve()), name="smoke", exist_ok=True)
+                project=str(Path("runs").resolve()), name=a.name, exist_ok=True)
     metrics = model.val(data=str(data_yaml), imgsz=a.imgsz, device=a.device, split="val")
     print(f"mAP50={metrics.box.map50:.3f} mAP50-95={metrics.box.map:.3f}")
 
-    Path("models").mkdir(exist_ok=True)
-    shutil.copy(model.trainer.best, "models/smoke_yolo.pt")  # runs/smoke/weights/best.pt under the cwd
-    print("saved models/smoke_yolo.pt")
+    Path(a.out).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(model.trainer.best, a.out)  # runs/<name>/weights/best.pt under the cwd
+    print(f"saved {a.out}")
 
 
 if __name__ == "__main__":
