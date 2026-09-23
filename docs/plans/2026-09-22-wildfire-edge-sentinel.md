@@ -433,6 +433,13 @@ from pathlib import Path
 
 from sentinel.labels import write_dfire_yaml
 
+try:
+    from scripts.eval_context import check_output
+except ModuleNotFoundError as e:  # run as `python scripts/eval_detector.py`: scripts/ is on sys.path, not the repo root
+    if e.name != "scripts":
+        raise
+    from eval_context import check_output
+
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
@@ -467,7 +474,10 @@ def main() -> None:
     ap.add_argument("--root", default="data/dfire")
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--device", default="0", help='CUDA device index, or "cpu"')
+    ap.add_argument("--force", action="store_true", help="overwrite an existing results file")
     a = ap.parse_args()
+    out = Path("results") / f"detector_{a.name}.json"
+    check_output(out, a.force)
     classes = [c.strip() for c in a.classes.split(",")] if a.classes else None
 
     from ultralytics import YOLO  # lazy: --help and tests work without torch
@@ -482,7 +492,6 @@ def main() -> None:
     n_images = sum(1 for p in test_images.iterdir() if p.suffix.lower() in IMAGE_EXTS) if test_images.is_dir() else None
     result = summarize(a.name, a.weights, classes, m.box, m.speed, m.names, n_images)
 
-    out = Path("results") / f"detector_{a.name}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
@@ -501,7 +510,7 @@ python scripts/eval_detector.py --weights yolov8s-worldv2.pt --classes smoke,fir
 python scripts/train_detector.py --epochs <N>
 python scripts/eval_detector.py --weights models/smoke_yolo.pt --name after_yolo11s
 ```
-Expected: `results/detector_before_yoloworld.json` and `results/detector_after_yolo11s.json`, each with `map50`, `map50_95`, `precision`, `recall`, `per_class_map50`, `ms_per_image`, `n_images`. Put both rows side by side in `results/detector.md`.
+Expected: `results/detector_before_yoloworld.json` and `results/detector_after_yolo11s.json`, each with `map50`, `map50_95`, `precision`, `recall`, `per_class_map50`, `ms_per_image`, `n_images`. It refuses to overwrite an existing results file (exit 1); pass `--force` to re-run a row on purpose. `scripts/compare.py` (Task 25b) puts both rows side by side.
 
 **CLIP / offline note:** YOLO-World's first `set_classes()` needs the CLIP package (in `requirements.txt`, installed from git) and downloads the text-encoder weights. Run the BEFORE eval above once while online so those weights are cached; the BEFORE runtime config below depends on that cache for offline demos. Both scripts take `--device` (default `0`; `cpu` also works).
 
@@ -3762,6 +3771,7 @@ python scripts/eval_context.py --model "<base id from /v1/models>" --name before
 python scripts/eval_context.py --model "<teacher id>" --base-url http://localhost:8001/v1 --name ref_teacher32b
 # TRAIN (done in Task 16; skip if adapters/context/adapter_config.json exists)
 python scripts/train_lora.py
+# AFTER: stop the base-7B `vlm` server on :8000 first
 # AFTER (re-serve with --enable-lora --lora-modules context=$HOME/sentinel/adapters/context per Task 24 Step 1)
 python scripts/eval_context.py --model context --name after_lora7b
 # cheap baseline
@@ -3796,7 +3806,7 @@ data/demo/benign_campfire01,no_alert
 
 **Step 2: Tests** (`tests/test_bench.py`, laptop, no GPU): a fake detector returning fixed `Detection`s, fake VLMs returning fixed `ContextResult`s, and tiny image-folder clips written with `cv2.imwrite` into `tmp_path`. They cover `run_clip` (ALERT, nothing detected, a still-provisional MONITOR at clip end), `score` (confusion counts, zero-division, bad labels), `bench` end to end (precision/recall, tokens and frames per VLM call, time-to-decision), the detector-only ablation, `apply_overrides` for the before/after switches, and `read_clips`.
 
-Run: `pytest tests/test_bench.py -v` → 12 passed.
+Run: `pytest tests/test_bench.py -v` → 13 passed (including the `--recheck-s` override).
 
 **Step 3: `scripts/bench.py`** (pure `run_clip` / `score` / `summarize` / `bench`; the detector and VLM are built only in `main()`, so `--help` and the tests need no ultralytics)
 
@@ -3807,8 +3817,9 @@ Writes results/bench_<name>.json. Run on the Nano with sentinel.main stopped (fr
 clips.csv rows are `path,label` where path is a video or a folder of time-ordered images and
 label is `alert` (a fire that should page dispatch) or `no_alert` (campfire, fog, stack, BBQ...).
 
-BEFORE: --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model "<base id>"
-AFTER:  --name after  --detector-weights models/smoke_yolo.pt --model context
+BEFORE: --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model "<base id>" --recheck-s 5
+AFTER:  --name after  --detector-weights models/smoke_yolo.pt --model context --recheck-s 5
+Use the same --recheck-s for both runs, below the clip length, so a growing fire can escalate in-clip.
 Ablations: --detector-only (any candidate = alert, no VLM), --full-frame (no crop).
 """
 import argparse
@@ -3921,6 +3932,7 @@ def apply_overrides(s: Settings, a: argparse.Namespace) -> Settings:
         full_frame=a.full_frame,
         vlm_model=a.model or s.vlm_model,
         vlm_timeout_s=a.timeout,
+        recheck_s=a.recheck_s if a.recheck_s is not None else s.recheck_s,
         detector_weights=a.detector_weights or s.detector_weights,
         # new weights without classes means a fine-tuned checkpoint: drop any YOLO-World prompts
         detector_classes=classes if (classes or a.detector_weights) else s.detector_classes,
@@ -3937,6 +3949,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--detector-classes", help="comma-separated YOLO-World prompts in class-id order")
     ap.add_argument("--full-frame", action="store_true", help="send the whole frame, not the crop")
     ap.add_argument("--detector-only", action="store_true", help="no VLM: any candidate counts as alert")
+    ap.add_argument("--recheck-s", type=float, default=None,
+                    help="override settings.recheck_s in simulated seconds; set below clip length so growth can escalate")
     ap.add_argument("--timeout", type=float, default=30, help="per-VLM-request timeout, seconds")
     ap.add_argument("--force", action="store_true", help="overwrite an existing results file")
     return ap.parse_args(argv)
@@ -3959,7 +3973,8 @@ def main() -> None:
     result = bench(a.name, rows, s, detector, vlm, a.detector_only)
     result["config"] = {"detector_weights": s.detector_weights, "detector_classes": s.detector_classes,
                         "vlm_model": None if a.detector_only else s.vlm_model,
-                        "full_frame": s.full_frame, "clips": a.clips}
+                        "full_frame": s.full_frame, "recheck_s": s.recheck_s,
+                        "vlm_timeout_s": s.vlm_timeout_s, "clips": a.clips}
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2) + "\n")
@@ -3973,7 +3988,7 @@ if __name__ == "__main__":
     main()
 ```
 
-Output `results/bench_<name>.json`: `precision`, `recall`, `false_alarms`, `missed` (plus `tp/fp/fn/tn`), `tokens_per_vlm_call`, `frames_per_vlm_call`, `time_to_decision_s_p50/p95` (from the `decision_s` metric), the merged `metrics` summary, per-clip rows and the `config` used. It refuses to overwrite an existing file (exit 1) unless `--force`.
+Output `results/bench_<name>.json`: `precision`, `recall`, `false_alarms`, `missed` (plus `tp/fp/fn/tn`), `tokens_per_vlm_call`, `frames_per_vlm_call`, `time_to_decision_s_p50/p95` (from the `decision_s` metric), the merged `metrics` summary, per-clip rows and the `config` used (including `recheck_s` and `vlm_timeout_s`). Time to decision is in simulated clip seconds (frames/fps) and excludes VLM latency; an event still MONITOR at clip end counts as not alerted. It refuses to overwrite an existing file (exit 1) unless `--force`.
 
 **Step 4: Optional ablation matrix** (stop `sentinel.main` first to free the GPU; the before/after pair is Task 25b)
 ```bash
@@ -3999,10 +4014,12 @@ BEFORE is the untuned stack (YOLO-World zero-shot + base Qwen2.5-VL-7B); AFTER i
 
 **Step 1: Run**
 ```bash
-python scripts/bench.py --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model "<base id>"
-python scripts/bench.py --name after  --detector-weights models/smoke_yolo.pt --model context
+python scripts/bench.py --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model "<base id>" --recheck-s 5
+python scripts/bench.py --name after  --detector-weights models/smoke_yolo.pt --model context --recheck-s 5
 python scripts/compare.py
 ```
+`--recheck-s 5` (simulated seconds; default `recheck_s` is 30) must be below the clip length so a growing fire can escalate on the trend re-check inside the clip; keep it identical for both runs.
+
 Expected: `results/bench_before.json`, `results/bench_after.json` and `results/before_after.md`. YOLO-World needs its CLIP text encoder cached (`scripts/setup_nano.sh` warms it while online).
 
 **Step 2: Commit the results**
@@ -4144,6 +4161,7 @@ pip install -e .
 python -c "from ultralytics import YOLO; YOLO('yolov8s-worldv2.pt').set_classes(['smoke','fire'])"
 command -v zrt >/dev/null || sudo snap install --classic zrt
 zrt pull Qwen/Qwen2.5-VL-7B-Instruct
+zrt pull Qwen/Qwen2.5-VL-32B-Instruct-AWQ   # teacher for distillation; verify the exact repo id on Hugging Face
 echo "Next: ./scripts/download_data.sh, then see README 'Reproduce'."
 ```
 

@@ -29,3 +29,16 @@ def test_summarize_uses_ap_class_index_and_n_images():
     assert out["classes"] == ["smoke", "fire"]
     assert out["per_class_map50"] == {"fire": pytest.approx(0.4)}
     assert out["n_images"] == 4306
+
+
+def test_main_refuses_to_overwrite_existing_result(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    script = Path(__file__).resolve().parents[1] / "scripts" / "eval_detector.py"
+    (tmp_path / "results").mkdir()
+    (tmp_path / "results" / "detector_before_yoloworld.json").write_text("{}")
+    r = subprocess.run([sys.executable, str(script), "--weights", "w.pt", "--name", "before_yoloworld"],
+                       cwd=tmp_path, capture_output=True, text=True)
+    assert r.returncode == 1 and "--force" in r.stderr
+    assert (tmp_path / "results" / "detector_before_yoloworld.json").read_text() == "{}"

@@ -109,15 +109,19 @@ python scripts/teacher_label.py --model "<teacher id>" --n 2000   # -> data/teac
 python scripts/eval_context.py --model "<base id>" --name before_base7b
 python scripts/eval_context.py --model "<teacher id>" --base-url http://localhost:8001/v1 --name ref_teacher32b
 python scripts/train_lora.py                            # stop the teacher first; -> adapters/context
+# stop the base-7B `vlm` server (it holds :8000), then re-serve it with the adapter:
 zrt serve hf:Qwen/Qwen2.5-VL-7B-Instruct --host 0.0.0.0 --port 8000 --max-model-len 8192 \
   --gpu-memory-utilization 0.30 --enable-prefix-caching \
   --enable-lora --max-lora-rank 16 --lora-modules context=$HOME/sentinel/adapters/context
 python scripts/eval_context.py --model context --name after_lora7b
 python scripts/linear_probe.py
+# optional hand-checked gold split (same JSONL format): real accuracy, not teacher agreement
+python scripts/eval_context.py --model "<base id>" --split data/gold/gold.jsonl --name before_base7b_gold
+python scripts/eval_context.py --model context --split data/gold/gold.jsonl --name after_lora7b_gold
 
 # 4. End-to-end: before -> after (stop sentinel.main first to free the GPU)
-python scripts/bench.py --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model "<base id>"
-python scripts/bench.py --name after  --detector-weights models/smoke_yolo.pt --model context
+python scripts/bench.py --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model "<base id>" --recheck-s 5
+python scripts/bench.py --name after  --detector-weights models/smoke_yolo.pt --model context --recheck-s 5
 
 # 5. Tables and cost model
 python scripts/compare.py                               # -> results/before_after.md
@@ -127,7 +131,8 @@ python scripts/cost_model.py > results/cost_model.jsonl # fill config/cost_input
 ./scripts/run_all.sh
 ```
 
-Optional ablations: `bench.py --detector-only` (no VLM) and `--full-frame` (no crop: token cost of
+`--recheck-s 5` shortens the trend re-check (default 30 s) so growth can escalate within a clip; use the
+same value for both runs. Optional ablations: `bench.py --detector-only` (no VLM) and `--full-frame` (no crop: token cost of
 cropping). To run the live demo with the BEFORE detector, set `"detector_weights": "yolov8s-worldv2.pt",
 "detector_classes": ["smoke", "fire"]` in `config/settings.json`.
 
@@ -158,6 +163,8 @@ Ultralytics enterprise license.
   the gold split measures real accuracy, and it is small.
 - **Small end-to-end set:** 20–40 clips give coarse precision/recall, so treat differences of one or two
   clips as noise.
+- **Bench time-to-decision** is in simulated clip seconds (frames/fps) and excludes VLM latency; events
+  still MONITOR at clip end count as not alerted.
 - **Single-threaded loop:** one replay thread serves every tower, and a VLM call stalls frame processing
   for all towers until it returns (bounded by the VLM timeout).
 

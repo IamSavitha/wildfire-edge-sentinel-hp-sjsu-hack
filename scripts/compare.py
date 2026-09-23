@@ -49,7 +49,7 @@ def delta(before, after, kind: str) -> str:
     if before is None or after is None:
         return DASH
     d = after - before
-    return f"{d * 100:+.1f} pp" if kind == "pct" else f"{d:+.0f}"
+    return f"{d * 100:+.1f} pp" if kind == "pct" else f"{d:+.1f}"
 
 
 def table(header: list[str], rows: list[list[str]]) -> list[str]:
@@ -66,7 +66,7 @@ def detector_section(results: dict) -> list[str]:
     rows = []
     for label, field, kind in DETECTOR_METRICS:
         values = [results[key].get(field) for key, _ in runs]
-        fmt = pct if kind == "pct" else ms
+        fmt = pct if kind == "pct" else (lambda v: num(v, 1))
         rows.append([label, *(fmt(v) for v in values)] + ([delta(*values, kind)] if both else []))
     return ["## Detector (D-Fire test split)", "",
             *table(header, rows), "",
@@ -99,14 +99,17 @@ def bench_section(results: dict) -> list[str]:
     keys += sorted(k for k in results if k.startswith("bench_") and k not in BENCH_ORDER)
     rows = [[f"`{results[k].get('name', k.removeprefix('bench_'))}`", pct(results[k].get("precision")),
              pct(results[k].get("recall")), num(results[k].get("false_alarms")), num(results[k].get("missed")),
-             num(results[k].get("tokens_per_vlm_call")), num(results[k].get("frames_per_vlm_call"), 1)]
+             num(results[k].get("tokens_per_vlm_call")), num(results[k].get("frames_per_vlm_call"), 1),
+             num(results[k].get("time_to_decision_s_p50"), 1), num(results[k].get("time_to_decision_s_p95"), 1)]
             for k in keys]
     if not rows:
         return []
-    header = ["Run", "Precision", "Recall", "False alarms", "Missed", "Tokens/VLM call", "Frames per VLM call"]
+    header = ["Run", "Precision", "Recall", "False alarms", "Missed", "Tokens/VLM call", "Frames per VLM call",
+              "Decision p50 (sim s)", "Decision p95 (sim s)"]
     return ["## End-to-end (labeled clips, `scripts/bench.py`)", "",
             *table(header, rows), "",
-            "Clip-level: a clip counts as an alert if the cascade raised ALERT on it.", ""]
+            "Clip-level: a clip counts as an alert if the cascade raised ALERT on it. Time to decision is in "
+            "simulated clip seconds (frames / fps) from event open to final severity; it excludes VLM latency.", ""]
 
 
 def render(results: dict) -> str:

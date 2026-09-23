@@ -13,4 +13,5 @@ pip install -e .
 python -c "from ultralytics import YOLO; YOLO('yolov8s-worldv2.pt').set_classes(['smoke','fire'])"
 command -v zrt >/dev/null || sudo snap install --classic zrt
 zrt pull Qwen/Qwen2.5-VL-7B-Instruct
+zrt pull Qwen/Qwen2.5-VL-32B-Instruct-AWQ   # teacher for distillation; verify the exact repo id on Hugging Face
 echo "Next: ./scripts/download_data.sh, then see README 'Reproduce'."

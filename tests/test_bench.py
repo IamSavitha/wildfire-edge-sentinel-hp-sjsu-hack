@@ -150,3 +150,9 @@ def test_overrides_new_weights_without_classes_drop_prompts():
     assert after.detector_classes is None and after.vlm_model == "context" and after.full_frame
     kept = apply_overrides(base, parse_args(["--name", "x"]))
     assert kept.detector_classes == ["smoke", "fire"] and kept.vlm_model == base.vlm_model
+
+
+def test_overrides_recheck_s_only_when_given():
+    from scripts.bench import apply_overrides, parse_args
+    assert apply_overrides(Settings(recheck_s=30), parse_args(["--name", "x", "--recheck-s", "5"])).recheck_s == 5.0
+    assert apply_overrides(Settings(recheck_s=30), parse_args(["--name", "x"])).recheck_s == 30

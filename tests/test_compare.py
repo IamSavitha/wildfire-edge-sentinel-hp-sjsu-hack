@@ -18,7 +18,8 @@ def ctx(name, acc, group, fail, p50, tokens):
 
 def bench(name, p, r, fa, tok, fpc):
     return {"name": name, "precision": p, "recall": r, "false_alarms": fa, "missed": 1,
-            "tokens_per_vlm_call": tok, "frames_per_vlm_call": fpc}
+            "tokens_per_vlm_call": tok, "frames_per_vlm_call": fpc,
+            "time_to_decision_s_p50": 5.0, "time_to_decision_s_p95": 12.25}
 
 
 FULL = {
@@ -49,7 +50,7 @@ def test_detector_table_formats_percent_ms_and_delta():
     (row,) = lines_with(md, "| mAP50 |")
     assert row == "| mAP50 | 20.0% | 65.4% | +45.4 pp |"
     (row,) = lines_with(md, "| ms/image |")
-    assert row == "| ms/image | 30 | 13 | -18 |"
+    assert row == "| ms/image | 30.4 | 12.6 | -17.8 |"
 
 
 def test_context_rows_in_fixed_order_with_linear_probe_blanks():
@@ -64,7 +65,8 @@ def test_context_rows_in_fixed_order_with_linear_probe_blanks():
 def test_end_to_end_table():
     md = render(FULL)
     (row,) = lines_with(md, "| `after` |")
-    assert row == "| `after` | 90.0% | 80.0% | 1 | 1 | 790 | 55.5 |"
+    assert row == "| `after` | 90.0% | 80.0% | 1 | 1 | 790 | 55.5 | 5.0 | 12.2 |"
+    assert "Decision p50 (sim s)" in md and "Decision p95 (sim s)" in md
 
 
 def test_partial_results_omit_rows_tables_and_note_missing():
@@ -86,9 +88,11 @@ def test_empty_results():
 
 
 def test_none_values_render_as_dash():
-    md = render({"bench_detector_only": bench("detector_only", 0.3, 0.9, 8, 0, None)})
+    b = bench("detector_only", 0.3, 0.9, 8, 0, None)
+    b["time_to_decision_s_p50"] = b["time_to_decision_s_p95"] = None
+    md = render({"bench_detector_only": b})
     (row,) = lines_with(md, "| `detector_only` |")
-    assert row.endswith("| 0 | — |")
+    assert row.endswith("| 0 | — | — | — |")
 
 
 def test_load_results_reads_known_prefixes(tmp_path):

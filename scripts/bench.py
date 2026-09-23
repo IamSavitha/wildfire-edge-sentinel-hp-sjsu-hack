@@ -4,8 +4,9 @@ Writes results/bench_<name>.json. Run on the Nano with sentinel.main stopped (fr
 clips.csv rows are `path,label` where path is a video or a folder of time-ordered images and
 label is `alert` (a fire that should page dispatch) or `no_alert` (campfire, fog, stack, BBQ...).
 
-BEFORE: --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model "<base id>"
-AFTER:  --name after  --detector-weights models/smoke_yolo.pt --model context
+BEFORE: --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model "<base id>" --recheck-s 5
+AFTER:  --name after  --detector-weights models/smoke_yolo.pt --model context --recheck-s 5
+Use the same --recheck-s for both runs, below the clip length, so a growing fire can escalate in-clip.
 Ablations: --detector-only (any candidate = alert, no VLM), --full-frame (no crop).
 """
 import argparse
@@ -118,6 +119,7 @@ def apply_overrides(s: Settings, a: argparse.Namespace) -> Settings:
         full_frame=a.full_frame,
         vlm_model=a.model or s.vlm_model,
         vlm_timeout_s=a.timeout,
+        recheck_s=a.recheck_s if a.recheck_s is not None else s.recheck_s,
         detector_weights=a.detector_weights or s.detector_weights,
         # new weights without classes means a fine-tuned checkpoint: drop any YOLO-World prompts
         detector_classes=classes if (classes or a.detector_weights) else s.detector_classes,
@@ -134,6 +136,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--detector-classes", help="comma-separated YOLO-World prompts in class-id order")
     ap.add_argument("--full-frame", action="store_true", help="send the whole frame, not the crop")
     ap.add_argument("--detector-only", action="store_true", help="no VLM: any candidate counts as alert")
+    ap.add_argument("--recheck-s", type=float, default=None,
+                    help="override settings.recheck_s in simulated seconds; set below clip length so growth can escalate")
     ap.add_argument("--timeout", type=float, default=30, help="per-VLM-request timeout, seconds")
     ap.add_argument("--force", action="store_true", help="overwrite an existing results file")
     return ap.parse_args(argv)
@@ -156,7 +160,8 @@ def main() -> None:
     result = bench(a.name, rows, s, detector, vlm, a.detector_only)
     result["config"] = {"detector_weights": s.detector_weights, "detector_classes": s.detector_classes,
                         "vlm_model": None if a.detector_only else s.vlm_model,
-                        "full_frame": s.full_frame, "clips": a.clips}
+                        "full_frame": s.full_frame, "recheck_s": s.recheck_s,
+                        "vlm_timeout_s": s.vlm_timeout_s, "clips": a.clips}
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2) + "\n")
