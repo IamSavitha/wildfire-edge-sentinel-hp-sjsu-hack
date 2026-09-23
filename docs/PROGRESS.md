@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 13:05 (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 13:20 (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -41,9 +41,9 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] `git clone` the repo into `~/sentinel`
 - [x] `./scripts/setup_nano.sh` → CUDA torch check prints `True`
 - [x] `zrt config set proxy.auth.type none && zrt config set proxy.tls.enabled false` (use `sudo` if needed)
-- [ ] Serve base Qwen2.5-VL-7B on :8000 (tmux `vlm`) — ⏳ starting (restarted at `--gpu-memory-fraction 0.45`)
-- [ ] `curl localhost:8000/v1/models` → put the exact id in `config/settings.json` as `vlm_model`
-- [ ] Smoke test: chat returns "OK"; a `json_schema` request returns valid JSON
+- [x] Serve base Qwen2.5-VL-7B on :8000 (tmux `vlm`) — served as model id `base7b` at `--gpu-memory-fraction 0.45`
+- [x] `curl localhost:8000/v1/models` → put the exact id in `config/settings.json` as `vlm_model` — `base7b`
+- [x] Smoke test: chat returns "OK"; a `json_schema` request returns valid JSON — 7–26 s/call while YOLO trains; base model calls smoke crops "fog/cloud"
 - [x] D-Fire in `data/dfire/{train,test}/{images,labels}`; confirm 0 = smoke, 1 = fire — 17,221 train / 4,306 test via HF mirror `badsaarow/d-fire` + `scripts/prepare_dfire.py`
 - [ ] PyroNear `pyro-sdis` downloaded (optional) — ⏳ downloading
 - [ ] 4–6 FIgLib sequences in `data/demo/<name>/`
@@ -95,6 +95,15 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [ ] Benign tower shows LOG/IGNORE and never reaches dispatch
 - [ ] Record a backup screen capture of the full demo
 
+## Phase 7b — Demo UI page 💻🖥️
+
+- [ ] Design the demo page: what judges see in 5 minutes (live tower feeds, event timeline, escalation/outbox, online/offline toggle, metrics)
+- [ ] Before vs after view: same frame through base vs fine-tuned models, side by side (detector boxes + VLM verdict)
+- [ ] Results panel that reads `results/*.json` (detector mAP, VLM accuracy, end-to-end precision/recall, cost model)
+- [ ] Architecture + "why edge" panel (escalation rule, bytes sent vs video, tokens per event)
+- [ ] Implement, test, and serve it from the Nano dashboard (port 8080, via SSH tunnel)
+- [ ] Rehearse the demo flow on the page end to end
+
 ## Phase 8 — Deliverables (due Fri 9/25, 8pm) [T28]
 
 - [ ] README "Results" section updated from `results/before_after.md`
@@ -131,4 +140,5 @@ Fill these in as runs finish (they also land in `results/*.json`).
 - 2026-09-23: CUDA PyTorch 2.14 (cu130) installed in `.venv`; transformers 5.17, trl 1.13, peft 0.21, ultralytics 8.4.160.
 - 2026-09-23: zrt serves ALL models behind ONE proxy (set to port 8000); models are selected by name. The teacher will NOT be on :8001 — use the default base URL with the teacher's model id.
 - 2026-09-23: vLLM at 30% memory failed (no KV cache room while YOLO ran) → use `--gpu-memory-fraction 0.45`.
+- 2026-09-23: Runtime `vlm_timeout_s` (15 s) is too low while training shares the GPU — set it from measured p95 after Phase 5.
 - 2026-09-23: YOLO-World zero-shot baseline is near zero (mAP50 0.002). Consider more descriptive prompts (e.g. "wildfire smoke plume") so the baseline isn't seen as a strawman.
