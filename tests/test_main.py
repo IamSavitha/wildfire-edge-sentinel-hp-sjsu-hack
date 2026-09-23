@@ -126,3 +126,15 @@ def test_warn_if_not_served_warns_when_server_unreachable(caplog):
         assert warn_if_not_served(fake_vlm(error=ConnectionError("refused")), "m", "http://x/v1") is False
     msg = caplog.records[-1].getMessage()
     assert "cannot list models" in msg and "detector-only fallback" in msg
+
+
+def test_build_detector_uses_settings_imgsz(monkeypatch):
+    import sentinel.main as m
+    seen = {}
+
+    class Fake:
+        def __init__(self, weights, imgsz=640, classes=None, **kw):
+            seen.update(weights=weights, imgsz=imgsz, classes=classes)
+    monkeypatch.setattr(m, "YoloDetector", Fake)
+    m.build_detector(Settings(detector_weights="models/joint_yolo.pt", detector_imgsz=960))
+    assert seen == {"weights": "models/joint_yolo.pt", "imgsz": 960, "classes": None}

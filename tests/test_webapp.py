@@ -397,3 +397,21 @@ def test_list_served_models_over_a_unix_socket_url():
 
     ids = list_served_models("unix:///opt/hp/zrt/run/vllm-base7b.sock", transport=httpx.MockTransport(handler))
     assert ids == ["base7b", "context"] and seen["url"] == "http://localhost/v1/models"
+
+
+def test_after_detector_runs_at_960_for_tower_and_joint_weights(monkeypatch):
+    import sentinel.detector as det
+    from sentinel.webapp import default_detector_factory, detector_specs, imgsz_for
+    assert imgsz_for("models/joint_yolo.pt") == 960 and imgsz_for("models/tower_yolo.pt") == 960
+    assert imgsz_for("models/smoke_yolo.pt") == 640 and imgsz_for("yolov8s-worldv2.pt") == 640
+    specs = detector_specs("yolov8s-worldv2.pt", "models/joint_yolo.pt")
+    assert specs["yoloworld"]["imgsz"] == 640 and specs["yolo11s"]["imgsz"] == 960
+    assert detector_specs("a.pt", "models/smoke_yolo.pt", after_imgsz=800)["yolo11s"]["imgsz"] == 800
+    seen = {}
+
+    class Fake:
+        def __init__(self, weights, conf=0.25, imgsz=640, classes=None, model=None):
+            seen.update(weights=weights, imgsz=imgsz)
+    monkeypatch.setattr(det, "YoloDetector", Fake)
+    default_detector_factory(specs["yolo11s"])
+    assert seen == {"weights": "models/joint_yolo.pt", "imgsz": 960}

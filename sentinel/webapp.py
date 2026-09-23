@@ -43,10 +43,22 @@ _FIGLIB_RE = re.compile(r"_([+-]\d+)\.[A-Za-z]+$")   # FIgLib: <epoch>_<offset s
 
 DETECTORS = {
     "yoloworld": {"label": "YOLO-World zero-shot", "weights": "yolov8s-worldv2.pt",
-                  "classes": ["smoke", "fire"]},
+                  "classes": ["smoke", "fire"], "imgsz": 640},
     "yolo11s": {"label": "YOLO11s fine-tuned on D-Fire", "weights": "models/smoke_yolo.pt",
-                "classes": None},
+                "classes": None, "imgsz": 640},
 }
+
+
+def imgsz_for(weights: str) -> int:
+    """Tower-trained detectors (tower_*/joint_* weights) were trained at 960 px; the rest at 640."""
+    name = Path(weights).name.lower()
+    return 960 if ("joint" in name or "tower" in name) else 640
+
+
+def detector_specs(before_weights: str, after_weights: str, after_imgsz: int | None = None) -> dict:
+    return {"yoloworld": {**DETECTORS["yoloworld"], "weights": before_weights, "imgsz": imgsz_for(before_weights)},
+            "yolo11s": {**DETECTORS["yolo11s"], "weights": after_weights,
+                        "imgsz": after_imgsz or imgsz_for(after_weights)}}
 PIPELINES = {
     "before": {"label": "BEFORE fine-tuning", "detector": "yoloworld", "vlm": "base7b",
                "vlm_label": "Qwen2.5-VL-7B base", "optional": False},
@@ -184,7 +196,7 @@ def list_served_models(base_url: str, timeout_s: float = 2.0, transport=None) ->
 def default_detector_factory(spec: dict):
     from sentinel.detector import YoloDetector   # ultralytics is imported lazily inside
     # low display threshold: weak boxes are shown (greyed) even though the 0.4 gate drops them
-    return YoloDetector(spec["weights"], conf=0.1, classes=spec.get("classes"))
+    return YoloDetector(spec["weights"], conf=0.1, imgsz=spec.get("imgsz", 640), classes=spec.get("classes"))
 
 
 class NetworkState(BaseModel):
@@ -489,11 +501,12 @@ def main(argv=None):
     ap.add_argument("--teacher-vlm", default="teacher32b", help="served name of the optional teacher")
     ap.add_argument("--before-weights", default=DETECTORS["yoloworld"]["weights"])
     ap.add_argument("--after-weights", default=DETECTORS["yolo11s"]["weights"])
+    ap.add_argument("--after-imgsz", type=int,
+                    help="AFTER detector inference size (default: 960 for tower/joint weights, else 640)")
     ap.add_argument("--no-monitor", action="store_true", help="skip live vLLM metrics")
     args = ap.parse_args(argv)
 
-    detectors = {"yoloworld": {**DETECTORS["yoloworld"], "weights": args.before_weights},
-                 "yolo11s": {**DETECTORS["yolo11s"], "weights": args.after_weights}}
+    detectors = detector_specs(args.before_weights, args.after_weights, args.after_imgsz)
     pipelines = {"before": {**PIPELINES["before"], "vlm": args.before_vlm},
                  "after": {**PIPELINES["after"], "vlm": args.after_vlm},
                  "teacher": {**PIPELINES["teacher"], "vlm": args.teacher_vlm}}

@@ -178,3 +178,11 @@ def test_bench_rows_carry_first_alert_fields(tmp_path):
     out = bench("after", rows, SETTINGS, fixed_detector([SMOKE]), FakeVLM(ctx()))
     clip = out["clips"][0]
     assert clip["first_alert_s"] == 1.0 and clip["alert_payload_bytes"] > 0
+
+
+def test_detector_imgsz_override():
+    from scripts.bench import apply_overrides, parse_args
+    assert apply_overrides(Settings(), parse_args(["--name", "x"])).detector_imgsz == 640
+    s = apply_overrides(Settings(), parse_args(["--name", "x", "--detector-weights", "models/joint_yolo.pt",
+                                               "--detector-imgsz", "960"]))
+    assert s.detector_imgsz == 960

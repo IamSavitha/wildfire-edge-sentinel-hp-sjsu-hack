@@ -137,6 +137,7 @@ def apply_overrides(s: Settings, a: argparse.Namespace) -> Settings:
         vlm_model=a.model or s.vlm_model,
         vlm_timeout_s=a.timeout,
         recheck_s=a.recheck_s if a.recheck_s is not None else s.recheck_s,
+        detector_imgsz=a.detector_imgsz or s.detector_imgsz,
         detector_weights=a.detector_weights or s.detector_weights,
         # new weights without classes means a fine-tuned checkpoint: drop any YOLO-World prompts
         detector_classes=classes if (classes or a.detector_weights) else s.detector_classes,
@@ -151,6 +152,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--model", help='served VLM id (base id, or "context" for the LoRA adapter)')
     ap.add_argument("--detector-weights", help="override settings.detector_weights")
     ap.add_argument("--detector-classes", help="comma-separated YOLO-World prompts in class-id order")
+    ap.add_argument("--detector-imgsz", type=int,
+                    help="detector inference size (default settings.detector_imgsz = 640; 960 for tower/joint weights)")
     ap.add_argument("--full-frame", action="store_true", help="send the whole frame, not the crop")
     ap.add_argument("--detector-only", action="store_true", help="no VLM: any candidate counts as alert")
     ap.add_argument("--recheck-s", type=float, default=None,
@@ -177,9 +180,10 @@ def main() -> None:
     else:
         vlm = ContextVLM(s.vlm_model, s.vlm_base_url, s.vlm_timeout_s)
         ensure_served(vlm.client, s.vlm_model, s.vlm_base_url)
-    detector = YoloDetector(s.detector_weights, classes=s.detector_classes)
+    detector = YoloDetector(s.detector_weights, imgsz=s.detector_imgsz, classes=s.detector_classes)
     result = bench(a.name, rows, s, detector, vlm, a.detector_only)
     result["config"] = {"detector_weights": s.detector_weights, "detector_classes": s.detector_classes,
+                        "detector_imgsz": s.detector_imgsz,
                         "vlm_model": None if a.detector_only else s.vlm_model,
                         "full_frame": s.full_frame, "recheck_s": s.recheck_s,
                         "vlm_timeout_s": s.vlm_timeout_s, "clips": a.clips, "fps": s.fps}

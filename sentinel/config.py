@@ -11,6 +11,7 @@ class Settings:
     vlm_timeout_s: float = 15.0
     detector_weights: str = "models/smoke_yolo.pt"
     detector_classes: list[str] | None = None  # set for YOLO-World zero-shot, e.g. ["smoke", "fire"]
+    detector_imgsz: int = 640  # inference size; 960 for the tower/joint detectors (trained at 960 px)
     fps: float = 2.0
     min_conf: float = 0.4
     min_frames: int = 3

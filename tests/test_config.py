@@ -40,3 +40,13 @@ def test_detector_classes_setting(tmp_path):
 def test_vlm_timeout_default_allows_a_7b_call_on_the_nano():
     # ~2x a measured p95 of a few seconds; tune per eval_context latency_ms_p95
     assert Settings().vlm_timeout_s == 15.0
+
+
+def test_detector_imgsz_defaults_to_640_and_is_configurable(tmp_path):
+    import json
+
+    from sentinel.config import Settings, load_settings
+    assert Settings().detector_imgsz == 640
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"detector_imgsz": 960}))
+    assert load_settings(p).detector_imgsz == 960

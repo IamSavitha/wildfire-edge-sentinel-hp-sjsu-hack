@@ -46,6 +46,11 @@ def run_loop(rt: Runtime, streams: dict, settings: Settings, stop: threading.Eve
         time.sleep(max(0.0, period - (time.time() - tick)))
 
 
+def build_detector(settings: Settings) -> YoloDetector:
+    return YoloDetector(settings.detector_weights, imgsz=settings.detector_imgsz,
+                        classes=settings.detector_classes)
+
+
 def warn_if_not_served(vlm: ContextVLM, model: str, base_url: str) -> bool:
     """Warn (don't exit) when the VLM model isn't served: the live demo still runs on the fallback."""
     try:
@@ -64,8 +69,7 @@ def main() -> None:
                           lambda payload: send_dispatch(settings.dispatch_url, payload), metrics)
     vlm = ContextVLM(settings.vlm_model, settings.vlm_base_url, settings.vlm_timeout_s)
     warn_if_not_served(vlm, settings.vlm_model, settings.vlm_base_url)
-    pipeline = Pipeline(towers, YoloDetector(settings.detector_weights, classes=settings.detector_classes),
-                        vlm, escalator, settings, metrics)
+    pipeline = Pipeline(towers, build_detector(settings), vlm, escalator, settings, metrics)
     rt = Runtime(pipeline, escalator, link)
     stop = threading.Event()
     streams = {tid: frames(t.source, settings.fps) for tid, t in towers.items()}
