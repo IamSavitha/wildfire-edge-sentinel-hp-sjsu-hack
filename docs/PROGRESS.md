@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 00:30 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 02:00 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -72,7 +72,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] Stop the teacher; `train_lora.py` (tmux `lora`) — done: 326 steps in 1h31m; loss 1.21 → 0.137, answer-token accuracy 70% → 95.1% (`results/lora_training/`); → `adapters/context/adapter_config.json`
 - [x] Stop the base `vlm` server; re-serve with `--enable-lora --max-lora-rank 16 --lora-modules context=$HOME/sentinel/adapters/context`
 - [x] `/v1/models` lists both the base id and `context` — but the zrt proxy only routes `base7b`; use the backend socket `unix:///opt/hp/zrt/run/vllm-base7b.sock` (fix `ec8358a`). Spot check: LoRA fixes controlled-burn and unknown cases the base model got wrong
-- [ ] ⏳ **After:** `eval_context.py --model context --base-url unix:///opt/hp/zrt/run/vllm-base7b.sock --name after_lora7b` (running)
+- [x] **After:** `eval_context.py --model context --base-url unix:///opt/hp/zrt/run/vllm-base7b.sock --name after_lora7b` — source-type **73.6%** (from 45.0%), group **75.6%** (from 53.0%), 293 tokens/call; unknown 0→123/138, controlled burn 1→34/53, industrial stack 54→38/66 (regression)
 - [ ] Baseline: `linear_probe.py`
 - [ ] (Optional) Gold set: `--split data/gold/gold.jsonl` for `before_base7b_gold` and `after_lora7b_gold`
 
@@ -82,7 +82,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] Detector: `results/detector_{before_yoloworld,after_yolo11s}.json` + `results/detector_training/` (15 plots, `results.csv`)
 - [x] Teacher label mix: `results/teacher_labels_summary.json` (2,600 train / 500 held-out)
 - [x] Live dashboard snapshots every minute: `results/live/live_metrics.jsonl`
-- [ ] VLM before/after JSONs + LoRA training log
+- [x] VLM before/after JSONs + LoRA training log + loss curve; `results/before_after.md` generated
 - [ ] End-to-end bench JSONs + `results/before_after.md`
 
 ## Phase 6 — End-to-end benchmark and cost 🖥️ [T25, T25b, T26]
@@ -143,7 +143,7 @@ Fill these in as runs finish (they also land in `results/*.json`).
 | detector `after_yolo11s` | mAP50 | **0.787** (mAP50-95 0.460, P 0.78, R 0.72, 3.3 ms/img) | 2026-09-23 |
 | context `ref_teacher32b` | group accuracy | | |
 | context `before_base7b` | group accuracy | 53.0% (source-type 45.0%) | 2026-09-23 |
-| context `after_lora7b` | group accuracy | | |
+| context `after_lora7b` | group accuracy | **75.6%** (source-type 73.6%) | 2026-09-24 |
 | context `linear_probe` | group accuracy | | |
 | bench `before` | precision / recall | | |
 | bench `after` | precision / recall | | |

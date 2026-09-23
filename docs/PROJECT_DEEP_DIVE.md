@@ -2,7 +2,7 @@
 
 **What this is:** the complete engineering record of the project: what was built and why, how each decision was made, what went wrong and how it was fixed, and the technical detail needed to explain and defend it as its engineer.
 
-**Status as of 2026-09-23 23:15 (Nano time, ICT):** code complete and reviewed (278 tests). Detector before/after measured. VLM LoRA training in its final epoch, BEFORE VLM evaluation running, stage-2 tower detector queued. Numbers marked *pending* are filled in as runs finish (see `docs/PROGRESS.md` and `results/`).
+**Status as of 2026-09-24 02:00 (Nano time, ICT):** code complete and reviewed (280 tests). Detector and VLM before/after both measured; demo app live with both pipelines. Stage-2 tower detector training and the end-to-end bench are next. Numbers marked *pending* are filled in as runs finish (see `docs/PROGRESS.md` and `results/`).
 
 ---
 
@@ -21,8 +21,10 @@
 | Detector mAP50 on D-Fire test (4,306 images) | 0.002 (YOLO-World zero-shot) | **0.787** (YOLO11s) |
 | Detector precision / recall | 0.10 / 0.008 | **0.78 / 0.72** |
 | Detector on lookout-tower smoke (pyro-sdis val) | — | 0.213 (domain gap found) → stage-2 fine-tune *pending* |
-| VLM LoRA training loss (answer tokens) | 1.21 at step 10 | **0.149** after epoch 1 (token accuracy 70% → 94.7%) |
-| VLM context accuracy (500 held-out crops) | base 7B *pending* | LoRA 7B *pending* |
+| VLM LoRA training loss (answer tokens) | 1.21 at step 10 | **0.137** after 2 epochs (answer-token accuracy 70% → 95.1%) |
+| VLM source-type agreement with teacher (500 held-out crops) | 45.0% (base 7B) | **73.6%** (LoRA 7B) |
+| VLM danger / benign / look-alike group agreement | 53.0% | **75.6%** |
+| VLM per class: unknown / controlled burn / industrial stack | 0 / 1 / 54 correct | **123 / 34** / 38 correct (stack regressed) |
 
 ---
 
@@ -199,7 +201,8 @@ flowchart LR
 | Precision | bf16 + gradient checkpointing | Fits alongside a served vLLM model in unified memory |
 | Prompt | Imported from `sentinel.vlm_client` | Training prompt is byte-identical to the runtime prompt |
 
-- **Training so far:** loss 1.21 → 0.149 and answer-token accuracy 70% → 94.7% by the end of epoch 1.
+- **Training:** 2 epochs, 326 steps, 1h31m; loss 1.21 → 0.137, answer-token accuracy 70% → 95.1% (`results/lora_training/loss_curve.png`).
+- **Result:** source-type agreement 45.0% → 73.6%, group 53.0% → 75.6% on the same 500 held-out crops; tokens per call 304 → 293. Biggest gains on "unknown" (0 → 123 of 138) and controlled burns (1 → 34 of 53); industrial stacks regressed (54 → 38 of 66), which the report states as a known trade-off.
 
 ### 6.3 Baselines used for honesty
 
