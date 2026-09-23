@@ -207,7 +207,8 @@ def test_bench_cloud_scores_rules_cadence_and_profiles(tmp_path):
     assert out["temporal"]["recall"] == 0.5 and out["temporal"]["profiles"]["fiber"]["recall"] == 0.5
     # cadence 2: frames 0 and 2 of each clip; frame 2 of the fire clip is ALERT
     assert out["cadence"]["stride"] == 2 and out["cadence"]["per_frame"]["recall"] == 0.5
-    assert out["cadence"]["temporal"]["recall"] == 0.0  # only one positive frame at that cadence
+    # persist 2 at stride 1 = 1 s; at a 2-frame cadence that is 1 frame, so the temporal row can alert
+    assert out["cadence"]["temporal_persist"] == 1 and out["cadence"]["temporal"]["recall"] == 0.5
     # per camera frame, the sparser cadence sends half the bytes (10 camera frames either way)
     full, cad = out["profiles"]["fiber"], out["cadence"]["per_frame"]["profiles"]["fiber"]
     assert full["camera_frames"] == cad["camera_frames"] == 10
@@ -276,3 +277,12 @@ class _Proxy:
     @property
     def last_error(self):
         return self._fake.last_error
+
+
+def test_cadence_temporal_persist_keeps_the_same_seconds(tmp_path):
+    vlm, _ = cached(tmp_path, {200: FIRE})
+    clip = write_clip(tmp_path, "f", [200] * 40)
+    out = bench_cloud("t", [{"path": clip, "label": "alert"}], vlm, fps=2.0, profiles=[FIBER],
+                      persist=3, cadence_stride=20)
+    assert out["cadence"]["temporal_persist"] == 1  # ceil(3 * 1 / 20)
+    assert out["cadence"]["temporal"]["recall"] == 1.0  # a 20 s clip at 10 s cadence can still alert

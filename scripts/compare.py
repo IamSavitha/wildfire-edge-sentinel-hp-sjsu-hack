@@ -189,9 +189,12 @@ def _cloud_rows(b: dict, key: str) -> list[tuple[str, dict]]:
     if b.get("temporal"):
         rows.append((f"temporal (persist {b.get('persist')}, trend over {b.get('recheck_s', 0):g} s)", b["temporal"]))
     cad = b.get("cadence") or {}
-    for rule in ("per_frame", "temporal"):
-        if cad.get(rule):
-            rows.append((f"{rule.replace('_', '-')}, one frame per {cad.get('seconds_between_frames', 0):g} s", cad[rule]))
+    every = f"one frame per {cad.get('seconds_between_frames', 0):g} s"
+    if cad.get("per_frame"):
+        rows.append((f"per-frame, {every}", cad["per_frame"]))
+    if cad.get("temporal"):
+        persist = cad.get("temporal_persist")
+        rows.append((f"temporal{f' (persist {persist})' if persist else ''}, {every}", cad["temporal"]))
     return rows
 
 

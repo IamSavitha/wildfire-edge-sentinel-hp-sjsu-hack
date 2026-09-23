@@ -137,7 +137,7 @@ CLOUD_BENCH = {
     "temporal": {"recall": 0.5, "false_alarms": 1, "missed": 7,
                  "profiles": {"fiber": prof(0.5, 4.0, 1.9, 0.0, 0.2766, [4.0, None]),
                               "rural_cellular": prof(0.5, 33.0, 45.0, 38.2, 0.2766, [33.0, None])}},
-    "cadence": {"stride": 20, "seconds_between_frames": 10.0,
+    "cadence": {"stride": 20, "seconds_between_frames": 10.0, "temporal_persist": 1,
                 "per_frame": {"recall": 0.4, "false_alarms": 0, "missed": 9,
                               "profiles": {"fiber": prof(0.4, 10.9, 1.2, 0.0, 0.0138, [10.9, None])}},
                 "temporal": {"recall": 0.0, "false_alarms": 0, "missed": 15, "profiles": {}}},
@@ -193,6 +193,7 @@ def test_edge_vs_cloud_clip_table_has_every_rule_and_cadence():
     assert "| 50.0% | 1 | 7 |" in row
     (row,) = lines_with(sec, "per-frame, one frame per 10 s")
     assert "| 40.0% | 0 | 9 | $0.0138 |" in row
+    assert lines_with(sec, "cloud-only, temporal (persist 1), one frame per 10 s")
     (row,) = lines_with(sec, "| `after` (recheck 5 s) | edge cascade")
     assert row.endswith("| $0 API | 0.25 MB |")  # 20 KB alert over 80 frames
     assert lines_with(sec, "| `before` (recheck 5 s) | edge cascade")

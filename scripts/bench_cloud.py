@@ -13,7 +13,10 @@ Two decision rules are reported, so the comparison with the edge's gate + trend 
   temporal       a cloud trend from the size_estimate rank vs the answered frame --recheck-s earlier
                  is passed into assess(), and ALERT needs --persist K consecutive positive answered frames.
 A cheaper realistic cadence (every --cadence-stride-th frame, default 20 = one frame per 10 s at
-2 fps) is derived from the same answers: no extra calls.
+2 fps) is derived from the same answers: no extra calls. Its temporal rule keeps the same persistence
+in seconds: persist = max(1, ceil(K * frame_stride / cadence_stride)), so it can still alert in a
+~20 s clip. The consecutive run continues across failed requests (only answered frames count, and
+a request that got no answer does not reset it), which is lenient to the cloud.
 
 Measured vs modelled:
   MEASURED  cloud answers, billed tokens (provider usage), cloud latency (real wall time of each HTTPS
@@ -42,6 +45,7 @@ data/cloud_cache.jsonl so re-running (e.g. with other --profiles, --policy or --
 """
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -123,7 +127,9 @@ def _trend(prev: dict | None, cur: dict | None) -> str | None:
 def first_alert(decided: list[dict], alert_on: str = "alert", temporal: dict | None = None) -> float | None:
     """When the first alert lands. decided: answered frames with t, decided_at, ctx, severity.
     temporal = {"persist": K, "recheck_s": R}: trend from the answered frame R s earlier, and ALERT
-    only after K consecutive positive frames (the alert lands when the K-th answer arrives)."""
+    only after K consecutive positive frames (the alert lands when the K-th answer arrives).
+    Only answered frames are passed in, so a failed request does not break the run (lenient to the
+    cloud); an answered but unparseable or non-positive frame does."""
     positive = ALERT_ON[alert_on]
     if temporal is None:
         times = [d["decided_at"] for d in decided if d.get("severity") in positive]
@@ -290,10 +296,13 @@ def bench_cloud(name: str, rows: list[dict], vlm, *, fps: float, profiles: list[
     with_logic = evaluate_rule(rows, clips, profiles, temporal=temporal, **common)
     cadence = None
     if cadence_stride and cadence_stride % stride == 0 and cadence_stride > stride:
+        # same persistence in seconds: K frames at the run's stride span K*stride frames of camera time
+        cad_persist = max(1, math.ceil(persist * stride / cadence_stride))
         cadence = {"stride": cadence_stride, "seconds_between_frames": cadence_stride / fps,
+                   "temporal_persist": cad_persist,
                    "per_frame": evaluate_rule(rows, clips, profiles, temporal=None, stride_filter=cadence_stride, **common),
-                   "temporal": evaluate_rule(rows, clips, profiles, temporal=temporal, stride_filter=cadence_stride,
-                                             **common)}
+                   "temporal": evaluate_rule(rows, clips, profiles, stride_filter=cadence_stride,
+                                             temporal={**temporal, "persist": cad_persist}, **common)}
     for c in clips:
         c["predicted_alert"] = any(f["severity"] in ALERT_ON[alert_on] for f in c["frames"])
         c["severities"] = {s: sum(f["severity"] == s for f in c["frames"]) for s in ("ALERT", "MONITOR", "LOG", "IGNORE")}
