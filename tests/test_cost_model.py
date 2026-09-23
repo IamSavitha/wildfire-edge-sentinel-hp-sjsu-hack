@@ -20,3 +20,11 @@ def test_cascade():
     row = compare(P)[2]
     assert row["vlm_calls"] == 20 and row["cloud_tokens"] == 0
     assert row["upstream_gb"] == 0.00005 and row["feasible"] is True
+
+
+def test_shipped_inputs_still_run_and_carry_split_prices():
+    import json
+    from pathlib import Path
+    params = json.loads((Path(__file__).parents[1] / "config" / "cost_inputs.json").read_text())
+    assert {"usd_per_mtok", "usd_per_mtok_in", "usd_per_mtok_out"} <= params.keys()
+    assert len(compare(params)) == 3
