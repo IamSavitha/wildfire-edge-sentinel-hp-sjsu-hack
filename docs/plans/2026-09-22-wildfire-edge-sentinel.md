@@ -3578,6 +3578,41 @@ git commit -m "feat: runtime entrypoint, dispatch stub, end-to-end demo"
 
 ---
 
+### Task 23b: Live model economics dashboard
+
+**Purpose:** a second, read-only page that judges can watch while models run. It shows tokens, tok/s,
+latency, TTFT and KV-cache use for every zrt-served vLLM backend, plus GPU utilisation and unified memory,
+and what the same tokens would cost on a cloud API. With the demo running it adds cascade vs
+cloud-per-frame cost, VLM calls avoided, and bytes sent vs streaming video. All prices are user-entered
+assumptions (defaults from `config/cost_inputs.json`, which are 0).
+
+**Files:**
+- Create: `sentinel/live_metrics.py` (pure: Prometheus parser, histogram quantile, per-model snapshot,
+  rates, economics, `vllm-*.json` discovery, host stats), `sentinel/monitor.py` (FastAPI app, `main()`),
+  `sentinel/static/monitor.html` (inline CSS/JS/SVG, polls `/api/live` every 2 s)
+- Modify: `config/cost_inputs.json` (add `usd_per_mtok_in`, `usd_per_mtok_out`; keep `usd_per_mtok` for
+  `scripts/cost_model.py`)
+- Test: `tests/test_live_metrics.py`, `tests/test_monitor.py`
+
+**Endpoints:** `GET /` (page), `GET /api/live` (models, system, pipeline, economics, prices),
+`POST /api/prices` (session-only overrides, non-negative numbers, unknown keys rejected).
+
+**Run (Nano), view from laptop**
+```bash
+python -m sentinel.monitor --pipeline-url http://localhost:8080/api/state   # 127.0.0.1:8090
+ssh -L 8090:localhost:8090 hp11@<nano-ip>                                  # laptop, then open localhost:8090
+```
+Data sources: `/opt/hp/zrt/run/vllm-<label>.json` and `GET http://localhost/metrics` over
+`vllm-<label>.sock`, `nvidia-smi --query-gpu=utilization.gpu`, and `/proc/meminfo` (GB10 unified memory).
+
+**Verify on the Nano**
+- [ ] Every served model shows as `live`, and its token counters match `curl --unix-socket /opt/hp/zrt/run/vllm-<label>.sock http://localhost/metrics`
+- [ ] tok/s rises during `eval_context.py` or `bench.py` and drops to 0 when idle
+- [ ] GPU utilisation and memory fill in (not "—")
+- [ ] Entering prices updates the cost cards live
+
+---
+
 ### Task 24: Serve the LoRA adapter and prove distillation
 
 **Files:**

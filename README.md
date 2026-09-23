@@ -150,6 +150,40 @@ Optional ablations: `bench.py --detector-only` (no VLM) and `--full-frame` (no c
 cropping). To run the live demo with the BEFORE detector, set `"detector_weights": "yolov8s-worldv2.pt",
 "detector_classes": ["smoke", "fire"]` in `config/settings.json`.
 
+## Live metrics dashboard
+
+`sentinel.monitor` is a second, read-only page that shows tokens, latency and edge-vs-cloud economics
+for every model zrt is serving, while those models run. It finds the backends from
+`/opt/hp/zrt/run/vllm-<label>.json` and reads each one's vLLM Prometheus `/metrics` over its unix
+socket (`vllm-<label>.sock`). It polls every 2 s and keeps nothing on disk.
+
+```bash
+# on the Nano (binds 127.0.0.1:8090); --pipeline-url is optional and needs the demo app on :8080
+python -m sentinel.monitor --pipeline-url http://localhost:8080/api/state
+# on your laptop, then open http://localhost:8090
+ssh -L 8090:localhost:8090 hp11@<nano-ip>
+```
+
+Other flags: `--run-dir` (default `/opt/hp/zrt/run`), `--prices` (default `config/cost_inputs.json`),
+`--host` and `--port`.
+
+| Panel | What it shows |
+|---|---|
+| Header | Last poll time, GPU utilisation (`nvidia-smi`), unified memory used/total (`/proc/meminfo`). Shows "—" where unavailable, e.g. on a laptop. |
+| Tokens processed at the edge | Sum of vLLM prompt + generation token counters across the served models. None of these tokens left the device. |
+| Equivalent cloud API cost | The same input/output tokens priced at the $/M-token assumptions below. |
+| Cloud-per-frame vs edge cascade | Needs `--pipeline-url`. Cost of sending every frame the pipeline saw to a cloud VLM (frames × tokens per full frame), next to the cascade's cost (uplink bytes only). |
+| Model calls avoided by the cascade | Frames seen minus VLM calls, and frames per VLM call. |
+| Bytes sent vs streaming video | Bytes the cascade actually sent upstream (alerts) vs frames × bytes per frame. |
+| Served models table | Per backend: status, running requests, request/token counters, tok/s in and out, e2e latency p50/p95 and TTFT p50 (from vLLM histograms), KV-cache use, zrt GPU memory fraction. |
+| Throughput | Input and output tok/s per model over the last 5 minutes, kept in the browser. |
+
+**Prices are user-supplied assumptions.** The page does not invent dollar figures. It starts from
+`config/cost_inputs.json` (all zeros, so the page shows "set prices to see $"). Enter current published
+rates in the price form: $/M input tokens, $/M output tokens, $/GB uplink, tokens per full frame and
+bytes per streamed frame. They apply to this session only (`POST /api/prices`) and are not written to
+disk. Token counts, latencies and frame counts are measured.
+
 ## Datasets and models
 
 Licenses below are as published by each source at the time of writing. **Verify each one before
@@ -186,6 +220,6 @@ Ultralytics enterprise license.
 
 ## Layout
 
-`sentinel/` runtime (pipeline, severity, escalation, outbox, dashboard) · `scripts/` training,
+`sentinel/` runtime (pipeline, severity, escalation, outbox, dashboard, live metrics monitor) · `scripts/` training,
 evaluation, benchmark and setup · `config/` settings, towers, cost inputs · `tests/` unit tests
 (`pytest`) · `docs/plans/` design and implementation plan.
