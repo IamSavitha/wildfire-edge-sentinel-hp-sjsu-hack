@@ -1,6 +1,13 @@
-"""OpenAI-compatible client for the local vLLM context classifier."""
+"""OpenAI-compatible client for the context classifier: the local vLLM server on the edge, or the
+same model (Qwen2.5-VL-7B-Instruct) behind a hosted OpenAI-compatible provider for the cloud-only
+baseline (`cloud_vlm_from_env`). API keys are read from the environment only and never logged."""
 import base64
+import json
 import logging
+import os
+import re
+from typing import Callable, Mapping
+from urllib.parse import urlparse
 
 import httpx
 from openai import OpenAI
@@ -18,8 +25,59 @@ SYSTEM_PROMPT = (
 )
 USER_PROMPT = "Classify this scene."
 
+# json_schema: server-side constrained decoding (vLLM, some providers).
+# json_object: provider "JSON mode"; the schema goes into the system prompt.
+# none: no response_format at all; the schema goes into the system prompt.
+RESPONSE_FORMATS = ("json_schema", "json_object", "none")
 
-def _openai_client(base_url: str, timeout_s: float) -> OpenAI:
+log = logging.getLogger(__name__)
+
+
+def schema_hint() -> str:
+    """The context schema as prompt text (field names + allowed values), for providers that
+    cannot enforce a JSON schema server-side."""
+    lines = ["Return a single JSON object with exactly these fields and nothing else:"]
+    for name, spec in CONTEXT_JSON_SCHEMA["properties"].items():
+        if "enum" in spec:
+            allowed = "one of " + ", ".join(json.dumps(v) for v in spec["enum"])
+        elif spec.get("type") == "boolean":
+            allowed = "true or false"
+        elif spec.get("type") == "string":
+            allowed = "string" + (f", at most {spec['maxLength']} characters" if "maxLength" in spec else "")
+        else:
+            allowed = spec.get("type", "value")
+        lines.append(f"- {name}: {allowed}")
+    return "\n".join(lines)
+
+
+def extract_json(text: str | None) -> dict | None:
+    """First decodable {...} object in text (tolerates ```json fences and prose around it)."""
+    if not text:
+        return None
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    while start != -1:
+        try:
+            obj, _ = decoder.raw_decode(text, start)
+        except ValueError:
+            start = text.find("{", start + 1)
+            continue
+        if isinstance(obj, dict):
+            return obj
+        start = text.find("{", start + 1)
+    return None
+
+
+def _redactor(secret: str | None) -> Callable[[str], str]:
+    """Scrubs the key (and anything shaped like a bearer key) from text bound for logs/results."""
+    def redact(text: str) -> str:
+        if secret:
+            text = text.replace(secret, "***")
+        return re.sub(r"(sk-|Bearer\s+)[A-Za-z0-9_\-\.\*]+", r"\1***", text)
+    return redact
+
+
+def _openai_client(base_url: str, timeout_s: float, api_key: str | None = None) -> OpenAI:
     """HTTP URL, or unix:///path/to.sock for a zrt backend socket.
 
     The zrt proxy routes only by the served label, so a LoRA adapter name (e.g. "context")
@@ -29,51 +87,104 @@ def _openai_client(base_url: str, timeout_s: float) -> OpenAI:
         transport = httpx.HTTPTransport(uds=base_url[len("unix://"):])
         return OpenAI(base_url="http://localhost/v1", api_key="EMPTY", max_retries=0,
                       http_client=httpx.Client(transport=transport, timeout=timeout_s))
-    return OpenAI(base_url=base_url, api_key="EMPTY", timeout=timeout_s, max_retries=0)
+    return OpenAI(base_url=base_url, api_key=api_key or "EMPTY", timeout=timeout_s, max_retries=0)
 
 
 class ContextVLM:
     def __init__(self, model: str, base_url: str = "http://localhost:8000/v1",
-                 timeout_s: float = 5.0, max_tokens: int = 160, client=None):
+                 timeout_s: float = 5.0, max_tokens: int = 160, client=None,
+                 api_key: str | None = None, response_format: str = "json_schema"):
+        if response_format not in RESPONSE_FORMATS:
+            raise ValueError(f"response_format must be one of {RESPONSE_FORMATS}, got {response_format!r}")
         self.model = model
         self.max_tokens = max_tokens
+        self.response_format = response_format
+        self.host = urlparse(base_url).hostname or base_url.split("://")[0]
         self.last_usage: dict = {}  # prompt/completion split of the latest classify() call
-        self.client = client or _openai_client(base_url, timeout_s)
+        self.last_error: str | None = None  # redacted request error of the latest call, if any
+        self._redact = _redactor(api_key)
+        self.client = client or _openai_client(base_url, timeout_s, api_key)
+
+    def __repr__(self) -> str:
+        return f"ContextVLM(model={self.model!r}, host={self.host!r}, response_format={self.response_format!r})"
+
+    __str__ = __repr__
 
     def _messages(self, jpeg: bytes) -> list[dict]:
         url = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
+        system = SYSTEM_PROMPT if self.response_format == "json_schema" else SYSTEM_PROMPT + "\n\n" + schema_hint()
         return [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system},
             {"role": "user", "content": [
                 {"type": "image_url", "image_url": {"url": url}},
                 {"type": "text", "text": USER_PROMPT},
             ]},
         ]
 
+    def _request_kwargs(self) -> dict:
+        if self.response_format == "json_schema":
+            return {"response_format": {"type": "json_schema",
+                                        "json_schema": {"name": "context", "schema": CONTEXT_JSON_SCHEMA}}}
+        if self.response_format == "json_object":
+            return {"response_format": {"type": "json_object"}}
+        return {}
+
+    def _parse(self, content: str | None) -> ContextResult:
+        if self.response_format == "json_schema":
+            return ContextResult.model_validate_json(content)
+        obj = extract_json(content)
+        if obj is None:
+            raise ValueError("no JSON object in the reply")
+        return ContextResult.model_validate(obj)
+
     def classify(self, jpeg: bytes) -> tuple[ContextResult | None, int]:
         """Returns (context or None, total tokens spent). The in/out split is kept in last_usage."""
         tokens = 0
         usage = self.last_usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
+        self.last_error = None
         for _ in range(2):
             try:
                 resp = self.client.chat.completions.create(
                     model=self.model, messages=self._messages(jpeg),
-                    max_tokens=self.max_tokens, temperature=0,
-                    response_format={"type": "json_schema",
-                                     "json_schema": {"name": "context", "schema": CONTEXT_JSON_SCHEMA}},
+                    max_tokens=self.max_tokens, temperature=0, **self._request_kwargs(),
                 )
             except Exception as exc:
-                logging.getLogger(__name__).warning("VLM request failed: %s", exc)
+                self.last_error = self._redact(f"{type(exc).__name__}: {exc}")[:300]
+                log.warning("VLM request failed: %s", self.last_error)
                 return None, tokens
-            tokens += resp.usage.prompt_tokens + resp.usage.completion_tokens
-            usage["prompt_tokens"] += resp.usage.prompt_tokens
-            usage["completion_tokens"] += resp.usage.completion_tokens
             usage["calls"] += 1
+            if resp.usage is None:  # some providers omit usage: count 0 and flag it
+                usage["usage_missing"] = usage.get("usage_missing", 0) + 1
+            else:
+                prompt, completion = resp.usage.prompt_tokens or 0, resp.usage.completion_tokens or 0
+                tokens += prompt + completion
+                usage["prompt_tokens"] += prompt
+                usage["completion_tokens"] += completion
             try:
-                return ContextResult.model_validate_json(resp.choices[0].message.content), tokens
-            except ValidationError:
+                return self._parse(resp.choices[0].message.content), tokens
+            except (ValidationError, ValueError, TypeError):
                 continue
         return None, tokens
+
+
+def cloud_vlm_from_env(prefix: str = "CLOUD_VLM", env: Mapping[str, str] | None = None,
+                       timeout_s: float = 60.0, response_format: str | None = None,
+                       client=None) -> ContextVLM:
+    """The cloud-only baseline's client, configured only from environment variables:
+    <prefix>_BASE_URL, <prefix>_MODEL, <prefix>_API_KEY and optional <prefix>_RESPONSE_FORMAT
+    (json_schema | json_object | none; `response_format` overrides it). The key is never printed."""
+    env = os.environ if env is None else env
+    values = {}
+    for suffix in ("BASE_URL", "MODEL", "API_KEY"):
+        name = f"{prefix}_{suffix}"
+        if not (env.get(name) or "").strip():
+            raise SystemExit(f"environment variable {name} is not set (needed for the cloud VLM baseline)")
+        values[suffix] = env[name].strip()
+    fmt = response_format or (env.get(f"{prefix}_RESPONSE_FORMAT") or "").strip() or "json_schema"
+    if fmt not in RESPONSE_FORMATS:
+        raise SystemExit(f"{prefix}_RESPONSE_FORMAT must be one of {RESPONSE_FORMATS}, got {fmt!r}")
+    return ContextVLM(values["MODEL"], values["BASE_URL"], timeout_s=timeout_s, client=client,
+                      api_key=values["API_KEY"], response_format=fmt)
 
 
 def ensure_served(client, model: str, base_url: str) -> None:
