@@ -1,0 +1,129 @@
+# Wildfire Edge Sentinel — Progress Tracker
+
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-22
+
+Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
+
+**Where things run:** 💻 laptop · 🖥️ ZGX Nano (over SSH)
+
+---
+
+## Phase 0 — Planning ✅
+
+- [x] Design doc — `docs/plans/2026-09-22-wildfire-edge-sentinel-design.md`
+- [x] Implementation plan — `docs/plans/2026-09-22-wildfire-edge-sentinel.md`
+- [x] Comparative study (Claude Docs: "Wildfire Edge Sentinel — Comparative Study")
+- [x] GitHub repo created: `IamSavitha/wildfire-edge-sentinel-hp-sjsu-hack`
+
+## Phase 1 — Code on the laptop ✅ (144 tests passing)
+
+- [x] Core pipeline: detector gate, context VLM client, severity rules, trend, zones, crops [T5–T11]
+- [x] Reports, offline outbox, escalation policy, cloud clients, metrics [T13–T19]
+- [x] Replayer, pipeline orchestration, dashboard, runtime entrypoint, dispatch stub [T20–T23]
+- [x] Cost model [T26]
+- [x] Detector before/after: YOLO-World baseline, `train_detector.py`, `eval_detector.py` [T4, T4b]
+- [x] VLM before/after: `teacher_label.py`, `train_lora.py`, `eval_context.py`, `linear_probe.py` [T12, T16, T24, T24b]
+- [x] End-to-end: `bench.py`, `compare.py`, data and setup scripts, README [T3, T25, T25b, T27]
+- [x] Code review of every batch + final whole-branch review; all Critical/Important issues fixed
+
+## Phase 2 — Repo housekeeping 💻
+
+- [ ] Decide: push `feat/core-pipeline` to GitHub, and/or merge into `main`
+- [ ] (Optional) Live demo warns when `vlm_model` is not served
+- [ ] (Optional) `run_all.sh`: narrow `trap 'kill 0'` to the stub's pid
+- [ ] (Optional) `teacher_label.py`: check the server before cutting crops
+- [ ] (Optional) Delete or set `sync: false` in `~/Library/Application Support/Ultralytics/settings.json`
+- [ ] Check the GitHub "Contributors" sidebar shows only IamSavitha (cache refresh)
+
+## Phase 3 — Nano setup 🖥️ [T2, T3]
+
+- [ ] Connect with ZTK; `nvidia-smi` shows GB10
+- [ ] `git clone` the repo into `~/sentinel`
+- [ ] `./scripts/setup_nano.sh` → CUDA torch check prints `True`
+- [ ] `zrt config set proxy.auth.type none && zrt config set proxy.tls.enabled false` (use `sudo` if needed)
+- [ ] Serve base Qwen2.5-VL-7B on :8000 (tmux `vlm`)
+- [ ] `curl localhost:8000/v1/models` → put the exact id in `config/settings.json` as `vlm_model`
+- [ ] Smoke test: chat returns "OK"; a `json_schema` request returns valid JSON
+- [ ] D-Fire in `data/dfire/{train,test}/{images,labels}`; confirm 0 = smoke, 1 = fire
+- [ ] PyroNear `pyro-sdis` downloaded (optional)
+- [ ] 4–6 FIgLib sequences in `data/demo/<name>/`
+- [ ] 150–300 benign images (campfire, BBQ, chimney, stack, fog, cloud) in `data/benign/`
+- [ ] (Optional) ~60 hand-checked crops in `data/gold/gold.jsonl`
+
+## Phase 4 — Detector: before → fine-tune → after 🖥️ [T4, T4b]
+
+- [ ] **Before:** `eval_detector.py --weights yolov8s-worldv2.pt --classes smoke,fire --name before_yoloworld` (run while online; caches CLIP)
+- [ ] `train_detector.py --epochs 1` → note time per epoch → choose N
+- [ ] `train_detector.py --epochs N` (tmux `train`) → `models/smoke_yolo.pt`
+- [ ] **After:** `eval_detector.py --weights models/smoke_yolo.pt --name after_yolo11s`
+
+## Phase 5 — Context VLM: before → fine-tune → after 🖥️ [T12, T16, T24, T24b]
+
+- [ ] Serve the 32B teacher on :8001 (tmux `teacher`)
+- [ ] `teacher_label.py --n 200` → check progress, several `source_type`s, note seconds per image
+- [ ] `teacher_label.py --n 2000` (overnight) → `data/teacher/train.jsonl`, `heldout.jsonl`
+- [ ] **Reference:** `eval_context.py --model <teacher id> --base-url http://localhost:8001/v1 --name ref_teacher32b`
+- [ ] **Before:** `eval_context.py --model <base id> --name before_base7b`
+- [ ] Set `vlm_timeout_s` in `config/settings.json` to ~2× the measured `latency_ms_p95`
+- [ ] Stop the teacher; `train_lora.py` (tmux `lora`) → `adapters/context/adapter_config.json`
+- [ ] Stop the base `vlm` server; re-serve with `--enable-lora --max-lora-rank 16 --lora-modules context=$HOME/sentinel/adapters/context`
+- [ ] `/v1/models` lists both the base id and `context`
+- [ ] **After:** `eval_context.py --model context --name after_lora7b`
+- [ ] Baseline: `linear_probe.py`
+- [ ] (Optional) Gold set: `--split data/gold/gold.jsonl` for `before_base7b_gold` and `after_lora7b_gold`
+
+## Phase 6 — End-to-end benchmark and cost 🖥️ [T25, T25b, T26]
+
+- [ ] `data/bench/clips.csv` with 20–40 clips (`alert` / `no_alert`)
+- [ ] `bench.py --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model <base id> --recheck-s 5`
+- [ ] `bench.py --name after --detector-weights models/smoke_yolo.pt --model context --recheck-s 5`
+- [ ] `bench.py --name base_full --model <base id> --full-frame --recheck-s 5` (token ablation for the cost model)
+- [ ] `bench.py --name detector_only --detector-only` (optional ablation)
+- [ ] `compare.py` → `results/before_after.md`
+- [ ] Fill `config/cost_inputs.json` (measured values + current published prices, with sources) → `cost_model.py`
+- [ ] Commit `results/` (JSON + `before_after.md`)
+
+## Phase 7 — Live demo 🖥️ [T23]
+
+- [ ] `config/towers.json` sources point at real `data/demo/...` folders
+- [ ] `config/settings.json`: `vlm_model` = `context` (or the base id), `detector_weights` = `models/smoke_yolo.pt`
+- [ ] `rm -f data/outbox.db`
+- [ ] `./scripts/run_all.sh`; laptop: `ssh -L 8080:localhost:8080 hpX@<nano-ip>` → http://localhost:8080
+- [ ] Both feeds show boxes
+- [ ] Wildfire tower: "classifying…" → ALERT, held in the outbox while OFFLINE
+- [ ] Link ONLINE → sent; `results/dispatch.log` shows `forecast=ok`
+- [ ] Benign tower shows LOG/IGNORE and never reaches dispatch
+- [ ] Record a backup screen capture of the full demo
+
+## Phase 8 — Deliverables (due Fri 9/25, 8pm) [T28]
+
+- [ ] README "Results" section updated from `results/before_after.md`
+- [ ] Comparative study: replace targets with measured numbers; open and verify each source
+- [ ] Public GitHub: final push, README renders, no secrets
+- [ ] 2-minute video uploaded to YouTube (public), plus the video file
+- [ ] Interactive presentation with the 3 required visuals: architecture, benchmarks, impact
+- [ ] SJSU Google Drive: project brief, video, links, deck, diagrams, photos
+- [ ] Social posts with the required tags
+- [ ] Pitch rehearsal: 3-minute pitch + Q&A (escalation rule, before/after numbers, cost model)
+
+---
+
+## Results log
+
+Fill these in as runs finish (they also land in `results/*.json`).
+
+| Run | Key metric | Value | Date |
+|---|---|---|---|
+| detector `before_yoloworld` | mAP50 | | |
+| detector `after_yolo11s` | mAP50 | | |
+| context `ref_teacher32b` | group accuracy | | |
+| context `before_base7b` | group accuracy | | |
+| context `after_lora7b` | group accuracy | | |
+| context `linear_probe` | group accuracy | | |
+| bench `before` | precision / recall | | |
+| bench `after` | precision / recall | | |
+| cost model | cascade vs cloud $/day | | |
+
+## Issues / notes
+
+- (add blockers here as they come up)
