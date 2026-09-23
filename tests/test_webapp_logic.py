@@ -7,8 +7,8 @@ import pytest
 
 from sentinel.config import Tower
 from sentinel.schema import ContextResult, Detection
-from sentinel.webapp_logic import (Session, escalate, ground_truth_score, load_benchmarks,
-                                   qwen_image_tokens, run_pass)
+from sentinel.webapp_logic import (Session, cloud_frame_tokens, escalate, ground_truth_score,
+                                   load_benchmarks, qwen_image_tokens, run_pass)
 
 TOWER = Tower("t1", "Test Lookout", 37.1, -121.9, "", temp_c=30.0)
 WILD = ContextResult(source_type="wildland", smoke_color="black", attended="no", near_structures=False,
@@ -82,6 +82,13 @@ def test_qwen_tokens_small_max_pixels_cap():
     assert qwen_image_tokens(1920, 1080, max_pixels=448 * 448) * 784 <= 448 * 448
 
 
+def test_cloud_frame_is_capped_at_the_edge_full_frame_size():
+    # same frame the edge VLM gets under force_vlm: longest side <= 1280 px
+    assert cloud_frame_tokens(1920, 1080) == qwen_image_tokens(1280, 720) == 26 * 46
+    assert cloud_frame_tokens(4000, 3000) == qwen_image_tokens(1280, 960)
+    assert cloud_frame_tokens(640, 480) == qwen_image_tokens(640, 480)  # never upscaled
+
+
 def test_qwen_tokens_scales_up_below_min_pixels():
     # 20x20 is below min_pixels (3136 = 56*56): upscaled to at least 2x2 patches
     assert qwen_image_tokens(20, 20) == 4
@@ -116,6 +123,7 @@ def test_strong_detection_calls_vlm_on_crop_and_reports():
     assert max(w, h) <= 448
     assert r["crop_image_tokens"] == qwen_image_tokens(w, h)
     assert r["full_frame_image_tokens"] == qwen_image_tokens(1280, 960)
+    assert r["full_frame_image_tokens_native"] == qwen_image_tokens(1280, 960)
     assert r["tokens"] == 420 and r["tokens_in"] == 380 and r["tokens_out"] == 40
     assert r["context"]["source_type"] == "wildland"
     assert r["severity"] == "ALERT"  # black smoke from a wildland source
@@ -133,6 +141,9 @@ def test_force_vlm_sends_full_frame_when_nothing_detected():
     assert r["vlm_called"] is True and r["vlm_input"] == "full_frame"
     w, h = jpeg_size(vlm.jpegs[0])
     assert (w, h) == (1280, 720)
+    # the cloud baseline is that same 1280x720 frame; the native 1920x1080 figure is secondary
+    assert r["full_frame_image_tokens"] == qwen_image_tokens(1280, 720) == r["crop_image_tokens"]
+    assert r["full_frame_image_tokens_native"] == qwen_image_tokens(1920, 1080)
     assert r["severity"] == "IGNORE" and r["context"]["source_type"] == "fog_dust_cloud"
     assert r["tokens_in"] is None  # classify gave only a total
     assert r["report_text"].startswith("[IGNORE]")
@@ -382,3 +393,37 @@ def test_full_frame_overhead_is_pooled_across_pipelines():
     p = s.summary()["pipelines"]
     assert p["before"]["full_frame_tokens_est"] == p["after"]["full_frame_tokens_est"] == 2691 + 124 + 40
     assert p["before"]["overhead_observed"] is True
+
+
+
+def unavailable_result(image_tokens=2691):
+    return {"vlm_called": False, "vlm_status": "unavailable", "tokens": 0, "tokens_in": None,
+            "tokens_out": None, "vlm_calls": 0, "crop_image_tokens": 0,
+            "full_frame_image_tokens": image_tokens, "detect_ms": 3.0, "vlm_ms": None, "severity": "MONITOR"}
+
+
+def test_detector_only_passes_are_excluded_from_the_savings_baseline():
+    s = Session()
+    s.record("after", called_result(), {"decision": "sent", "bytes_up": 5000},
+             truth="unknown", image_bytes=100_000, online=True)
+    s.record("after", unavailable_result(), {"decision": "logged", "bytes_up": 0},
+             truth="wildfire", image_bytes=900_000, online=True)
+    p = s.summary()["pipelines"]["after"]
+    assert p["images"] == 2 and p["vlm_unavailable"] == 1 and p["baseline_images"] == 1
+    assert p["image_upload_bytes"] == 100_000 and p["full_frame_image_tokens"] == 2691
+    assert p["full_frame_tokens_est"] == 2691 + 124 + 40
+    assert p["gt_total"] == 1 and p["accuracy"] == 1.0   # still scored (MONITOR = wildfire)
+    e = s.economics({"usd_per_gb": 10.0})["pipelines"]["after"]
+    assert e["cloud_bytes_up"] == 100_000 and e["vlm_unavailable"] == 1
+
+
+def test_queued_alert_bytes_count_as_edge_uplink():
+    s = Session()
+    s.record("after", called_result(), {"decision": "queued", "bytes_up": 0, "payload_bytes": 4000},
+             truth="unknown", image_bytes=1_000_000, online=False)
+    p = s.summary()["pipelines"]["after"]
+    assert p["bytes_up"] == 0 and p["bytes_queued"] == 4000
+    e = s.economics({"usd_per_gb": 10.0})["pipelines"]["after"]
+    assert e["edge_bytes_up"] == 4000 and e["edge_bytes_queued"] == 4000
+    assert e["edge_usd"] == pytest.approx(4000 / 1e9 * 10.0)
+    assert e["bytes_savings_pct"] == pytest.approx(100 * (1 - 4000 / 1_000_000))

@@ -198,7 +198,7 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                    detectors: dict | None = None, pipelines: dict | None = None,
                    vlm_base_url: str = "http://localhost:8000/v1", vlm_timeout_s: float = 60.0,
                    min_conf: float = 0.4, max_upload_bytes: int = MAX_UPLOAD_BYTES,
-                   clock: Callable[[], float] = time.time) -> FastAPI:
+                   clock: Callable[[], float] = time.time, warmup: bool = False) -> FastAPI:
     detectors = detectors or DETECTORS
     pipelines = pipelines or PIPELINES
     tower = tower or DEMO_TOWER
@@ -264,16 +264,35 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
         return {"session": session.summary(), "economics": session.economics(prices),
                 "prices": effective_prices(prices), "online": state["online"]}
 
+    def warm_detectors() -> None:
+        """Run each available detector once so the first judged click skips the cold CUDA/CLIP load."""
+        keys = dict.fromkeys(p["detector"] for p in pipelines.values())
+        for key in keys:
+            if not detector_available(detectors[key]):
+                continue
+            try:
+                with gpu_lock:
+                    get_detector(key)(np.zeros((640, 640, 3), np.uint8))
+                log.info("warmed detector %s", key)
+            except Exception:  # noqa: BLE001 - a failed warmup only means a slower first run
+                log.exception("detector warmup failed for %s", key)
+
     @asynccontextmanager
     async def lifespan(app):
         if monitor is not None:
             monitor.start()
+        app.state.warmup_thread = None
+        if warmup:
+            t = threading.Thread(target=warm_detectors, name="detector-warmup", daemon=True)
+            app.state.warmup_thread = t
+            t.start()
         yield
         if monitor is not None:
             monitor.stop()
 
     app = FastAPI(title="Wildfire Edge Sentinel demo", lifespan=lifespan)
     app.state.session = session
+    app.state.warmup_thread = None
 
     @app.get("/", response_class=HTMLResponse)
     def index():
@@ -362,16 +381,15 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
         session.record_request(online)
         return out
 
-    @app.post("/api/analyze")
-    async def analyze(request: Request):
-        ctype = request.headers.get("content-type", "")
-        body = await _read_body(request, max_upload_bytes + 256 * 1024)
-        if ctype.startswith("multipart/form-data"):
+    def handle_analyze(body: bytes, ctype: str) -> dict:
+        """Parse, validate, decode and run: all blocking work, so it runs in the threadpool."""
+        kind = ctype.split(";", 1)[0].strip().lower()
+        if kind == "multipart/form-data":
             try:
                 fields, files = parse_multipart(body, ctype)
             except Exception:  # noqa: BLE001
                 raise HTTPException(400, "malformed multipart body") from None
-        elif ctype.startswith("application/x-www-form-urlencoded"):
+        elif kind == "application/x-www-form-urlencoded":
             fields, files = parse_qs(body.decode("utf-8", "replace")), {}
         else:
             raise HTTPException(415, "send multipart/form-data (image or sample_id)")
@@ -408,9 +426,14 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
             raise HTTPException(400, "attach an image or choose a sample")
         info.update(width=int(image.shape[1]), height=int(image.shape[0]), bytes=len(data))
 
-        results = await run_in_threadpool(analyze_sync, image, names, truth, force_vlm, len(data))
+        results = analyze_sync(image, names, truth, force_vlm, len(data))
         return {"image": info, "truth": truth, "online": state["online"], "results": results,
                 **session_payload()}
+
+    @app.post("/api/analyze")
+    async def analyze(request: Request):
+        body = await _read_body(request, max_upload_bytes + 256 * 1024)
+        return await run_in_threadpool(handle_analyze, body, request.headers.get("content-type", ""))
 
     @app.post("/api/network")
     def set_network(s: NetworkState):
@@ -480,7 +503,7 @@ def main(argv=None):
         from sentinel.monitor import Monitor, fetch_json, fetch_uds_metrics
         monitor = Monitor(args.run_dir, _load_prices(args.prices), None, fetch_uds_metrics, time.time,
                           fetch_json, system_stats)
-    app = create_web_app(monitor=monitor, prices_path=args.prices,
+    app = create_web_app(monitor=monitor, prices_path=args.prices, warmup=True,
                          sample_dirs=args.samples or ["data/dfire/test/images", "data/demo", "data/benign"],
                          results_dir=args.results, tower=tower, detectors=detectors, pipelines=pipelines,
                          vlm_base_url=args.vlm_base_url, vlm_timeout_s=args.vlm_timeout)

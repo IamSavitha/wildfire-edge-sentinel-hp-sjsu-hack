@@ -334,3 +334,53 @@ def test_parse_multipart_keeps_binary_bytes():
     fields, files = parse_multipart(body, f"multipart/form-data; boundary={boundary}")
     assert fields == {"truth": ["wildfire"], "pipelines": ["before", "after"]}
     assert files["image"] == ("a.jpg", blob)
+
+
+
+def test_warmup_runs_each_available_detector_once(tmp_path):
+    client, made = make_app(tmp_path, warmup=True,
+                            available=lambda spec: spec["weights"] != "yolov8s-worldv2.pt")
+    with client:
+        client.app.state.warmup_thread.join(timeout=5)
+        assert set(made["detectors"]) == {"models/smoke_yolo.pt"}
+        assert made["detectors"]["models/smoke_yolo.pt"].calls == 1
+        # a later pass reuses the warmed instance
+        client.post("/api/analyze", files={"image": ("x.jpg", jpeg(), "image/jpeg")}, data={"pipelines": "after"})
+        assert made["detectors"]["models/smoke_yolo.pt"].calls == 2
+
+
+def test_no_warmup_by_default(tmp_path):
+    client, made = make_app(tmp_path)
+    with client:
+        assert client.app.state.warmup_thread is None
+    assert made["detectors"] == {}
+
+
+def test_warmup_failure_is_contained(tmp_path):
+    def broken(spec):
+        raise RuntimeError("CUDA not ready")
+    app = create_web_app(detector_factory=broken, vlm_factory=FakeVLM, model_lister=lambda: [],
+                         forecast_fn=lambda a, b: {}, monitor=None, prices_path=tmp_path / "p.json",
+                         sample_dirs=[], results_dir=tmp_path, tower=TOWER,
+                         detector_available=lambda s: True, warmup=True)
+    with TestClient(app) as client:
+        app.state.warmup_thread.join(timeout=5)
+        assert client.get("/api/config").status_code == 200
+
+
+def test_content_type_check_is_case_insensitive(tmp_path):
+    client, _ = make_app(tmp_path)
+    boundary = "b0undary"
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"pipelines\"\r\n\r\nafter\r\n"
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"x.jpg\"\r\n"
+            f"Content-Type: image/jpeg\r\n\r\n").encode() + jpeg() + f"\r\n--{boundary}--\r\n".encode()
+    r = client.post("/api/analyze", content=body,
+                    headers={"Content-Type": f"Multipart/Form-Data; boundary={boundary}"})
+    assert r.status_code == 200, r.text
+
+
+def test_pass_card_fields_include_native_full_frame(tmp_path):
+    client, _ = make_app(tmp_path)
+    r = client.post("/api/analyze", files={"image": ("x.jpg", jpeg(1920, 1080), "image/jpeg")},
+                    data={"pipelines": "after"}).json()["results"][0]
+    assert r["full_frame_image_tokens"] == 26 * 46 and r["full_frame_image_tokens_native"] == 39 * 69

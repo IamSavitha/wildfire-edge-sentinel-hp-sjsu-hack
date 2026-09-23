@@ -268,10 +268,12 @@
       <h3>Edge cascade vs cloud: every image to a VLM</h3>
       <div id="econ"><p class="hint">No images yet.</p></div>
       <p class="note">Edge: the detector runs on every image, the local VLM only on detections (on a ≤448 px crop), and only
-        ALERT reports leave the device. Inference on the Nano costs $0 per call; the edge pays uplink only.
-        Cloud: every image uploaded and sent whole to a Qwen2.5-VL-class model. Its image tokens are
-        <em>estimated</em> with Qwen's resize rule at vLLM's default max_pixels (12.8 MP); prompt and output tokens
-        per call are the ones measured here.</p>
+        ALERT reports leave the device. Edge: $0 marginal API cost (Nano hardware and power not included); the edge pays
+        uplink only, counting alerts sent and alerts queued to send when the link returns.
+        Cloud baseline: every image uploaded and sent whole to a Qwen2.5-VL-class model at ≤1280 px, the same frame
+        the edge VLM gets under “force”. Its image tokens are <em>estimated</em> with Qwen's resize rule; prompt and
+        output tokens per call are the ones measured here. Passes whose VLM is not served run detector-only and are
+        left out of both sides.</p>
     </div>
 
     <div class="card">
@@ -500,7 +502,7 @@
         <dt>VLM</dt><dd>${r.vlm_called ? ms(r.vlm_ms) : "not called"}</dd>
         <dt>Tokens used</dt><dd>${int(r.tokens)}${tokIO}</dd>
         <dt>Image tokens sent</dt><dd>${r.vlm_called ? int(r.crop_image_tokens) + " <small>est.</small>" : "0"}</dd>
-        <dt>Full frame to cloud</dt><dd>${int(r.full_frame_image_tokens)} image tokens <small>est.</small></dd></dl>
+        <dt>Full frame to cloud</dt><dd>${int(r.full_frame_image_tokens)} image tokens <small>est., ≤1280 px · native ${int(r.full_frame_image_tokens_native)}</small></dd></dl>
     </article>`;
   }
 
@@ -563,9 +565,14 @@
     $("econ").innerHTML = names.map((n) => {
       const x = e.pipelines[n], s = d.session.pipelines[n];
       const money = (v) => priced ? `<div class="big">${usd(v)}</div>` : `<div class="big hint">set prices to see $</div>`;
-      const per1k = (v) => priced && s.images ? `<small>≈ ${usd(v / s.images * 1000)} per 1,000 images</small>` : "";
+      const nb = x.baseline_images;
+      const per1k = (v) => priced && nb ? `<small>≈ ${usd(v / nb * 1000)} per 1,000 images</small>` : "";
+      const notes = [];
+      if (x.vlm_unavailable) notes.push(`${int(x.vlm_unavailable)} image${x.vlm_unavailable === 1 ? "" : "s"} ran detector-only; excluded from savings.`);
+      if (!x.overhead_observed) notes.push("Cloud tokens: image tokens only so far (no VLM call observed yet to measure prompt and output tokens).");
+      if (x.edge_bytes_queued) notes.push(`Edge bytes include ${bytes(x.edge_bytes_queued)} of queued alerts, sent when the link returns.`);
       return `<div class="econ">
-        <h4>${esc(pipeLabel(n))} · ${int(s.images)} image${s.images === 1 ? "" : "s"}</h4>
+        <h4>${esc(pipeLabel(n))} · ${int(nb)} image${nb === 1 ? "" : "s"} compared</h4>
         <div class="vs">
           <div class="side"><h5><i style="background:var(--s-edge)"></i>Edge cascade</h5>${money(x.edge_usd)}${per1k(x.edge_usd)}
             <small>${num(x.edge_tokens)} tokens, all local · ${bytes(x.edge_bytes_up)} up</small></div>
@@ -579,7 +586,7 @@
           <div><small>Cost saved</small><strong>${priced ? pct(x.savings_pct, 1) : DASH}</strong></div>
           <div><small>Tokens saved</small><strong>${pct(x.token_savings_pct, 1)}</strong></div>
           <div><small>Bytes saved</small><strong>${pct(x.bytes_savings_pct, 1)}</strong></div>
-        </div></div>`;
+        </div>${notes.map((t) => `<p class="note">${esc(t)}</p>`).join("")}</div>`;
     }).join("") + (priced ? "" : `<p class="note">All prices are 0, so dollar figures are hidden. Set them below to see $.</p>`);
   }
 

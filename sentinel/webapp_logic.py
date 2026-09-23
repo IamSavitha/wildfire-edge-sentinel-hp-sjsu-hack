@@ -25,8 +25,8 @@ from sentinel.severity import assess, fallback_severity
 
 log = logging.getLogger(__name__)
 
-# vLLM's default max_pixels for Qwen2.5-VL (16384 * 28 * 28): what a full frame costs if a cloud
-# deployment of the same model received it unresized. An estimate, not a measurement.
+# vLLM's default max_pixels for Qwen2.5-VL (16384 * 28 * 28); only a secondary "native" figure
+# uses it, since the cloud baseline is capped at FULL_FRAME_MAX_SIDE (see cloud_frame_tokens).
 QWEN_MAX_PIXELS = 12845056
 QWEN_MIN_PIXELS = 3136
 FULL_FRAME_MAX_SIDE = 1280   # what the edge VLM sees under force_vlm (Settings.full_frame_max_side)
@@ -56,6 +56,13 @@ def qwen_image_tokens(w: int, h: int, max_pixels: int = QWEN_MAX_PIXELS,
         h_bar = math.ceil(h * beta / factor) * factor
         w_bar = math.ceil(w * beta / factor) * factor
     return (h_bar // factor) * (w_bar // factor)
+
+
+def cloud_frame_tokens(w: int, h: int) -> int:
+    """Image tokens for the cloud baseline: the whole frame at <= 1280 px on its longest side, the
+    same frame the edge VLM gets under force_vlm (same int() sizing as crop_box). An estimate."""
+    s = min(1.0, FULL_FRAME_MAX_SIDE / max(w, h, 1))
+    return qwen_image_tokens(max(1, int(w * s)), max(1, int(h * s)))
 
 
 # ---------------------------------------------------------------- one pass
@@ -101,7 +108,8 @@ def run_pass(image_bgr: np.ndarray, detector, vlm, tower: Tower, *, min_conf: fl
         "vlm_called": False, "vlm_status": None, "vlm_input": None, "vlm_ms": None, "vlm_calls": 0,
         "tokens": 0, "tokens_in": None, "tokens_out": None,
         "crop_image_tokens": 0, "sent_size": None,
-        "full_frame_image_tokens": qwen_image_tokens(w, h),
+        "full_frame_image_tokens": cloud_frame_tokens(w, h),
+        "full_frame_image_tokens_native": qwen_image_tokens(w, h),
         "context": None, "severity": None, "report": None, "report_text": None,
         "thumbnail_b64": _thumbnail(image_bgr, dets, min_conf),
     }
@@ -221,7 +229,8 @@ class _Stats:
         self.split_crop_tokens = 0        # image tokens inside those passes' prompt tokens
         self.split_requests = 0
         self.full_frame_image_tokens = 0
-        self.bytes_up = self.image_upload_bytes = 0
+        self.bytes_up = self.bytes_queued = self.image_upload_bytes = 0
+        self.vlm_unavailable = 0          # detector-only passes: kept out of the savings baseline
         self.gt_correct = self.gt_total = 0
         self.alerts_sent = self.alerts_queued = 0
         self.online_images = self.offline_images = 0
@@ -230,10 +239,12 @@ class _Stats:
         self.vlm = deque(maxlen=LATENCY_SAMPLES)
 
     def summary(self, overhead: float, out_per: float, observed: bool) -> dict:
-        ff_in = self.full_frame_image_tokens + round(self.images * overhead)
-        ff_out = round(self.images * out_per)
+        baseline = self.images - self.vlm_unavailable
+        ff_in = self.full_frame_image_tokens + round(baseline * overhead)
+        ff_out = round(baseline * out_per)
         return {
-            "images": self.images, "detector_runs": self.detector_runs, "vlm_calls": self.vlm_calls,
+            "images": self.images, "baseline_images": baseline, "vlm_unavailable": self.vlm_unavailable,
+            "detector_runs": self.detector_runs, "vlm_calls": self.vlm_calls,
             "calls_avoided": self.calls_avoided, "tokens_actual": self.tokens_actual,
             "tokens_in": self.tokens_in if self.split_calls else None,
             "tokens_out": self.tokens_out if self.split_calls else None,
@@ -241,7 +252,8 @@ class _Stats:
             "full_frame_tokens_in_est": ff_in, "full_frame_tokens_out_est": ff_out,
             "full_frame_tokens_est": ff_in + ff_out,
             "overhead_observed": observed,
-            "bytes_up": self.bytes_up, "image_upload_bytes": self.image_upload_bytes,
+            "bytes_up": self.bytes_up, "bytes_queued": self.bytes_queued,
+            "image_upload_bytes": self.image_upload_bytes,
             "gt_correct": self.gt_correct, "gt_total": self.gt_total,
             "accuracy": self.gt_correct / self.gt_total if self.gt_total else None,
             "alerts_sent": self.alerts_sent, "alerts_queued": self.alerts_queued,
@@ -290,13 +302,19 @@ class Session:
                     s.tokens_out += int(result.get("tokens_out") or 0)
                     s.split_crop_tokens += int(result.get("crop_image_tokens") or 0) * requests
             s.tokens_actual += int(result.get("tokens") or 0)
-            s.full_frame_image_tokens += int(result.get("full_frame_image_tokens") or 0)
-            s.bytes_up += int(escalation.get("bytes_up") or 0)
-            s.image_upload_bytes += int(image_bytes or 0)
+            decision = escalation.get("decision")
+            if result.get("vlm_status") == "unavailable":
+                # detector-only: comparing it with a cloud VLM would inflate the savings
+                s.vlm_unavailable += 1
+            else:
+                s.full_frame_image_tokens += int(result.get("full_frame_image_tokens") or 0)
+                s.image_upload_bytes += int(image_bytes or 0)
+                s.bytes_up += int(escalation.get("bytes_up") or 0)
+                if decision == "queued":   # sent later, when the link returns
+                    s.bytes_queued += int(escalation.get("payload_bytes") or 0)
             if correct is not None:
                 s.gt_total += 1
                 s.gt_correct += int(correct)
-            decision = escalation.get("decision")
             s.alerts_sent += decision == "sent"
             s.alerts_queued += decision == "queued"
             if online:
@@ -333,12 +351,15 @@ class Session:
             }}
 
     def economics(self, prices: dict) -> dict:
-        """Edge cascade vs "cloud: every image full-frame to a VLM", per pipeline. Edge inference
-        is $0 marginal; the edge pays only uplink for what it sent. Prices are user-supplied."""
+        """Edge cascade vs "cloud: every image full-frame (<= 1280 px) to a VLM", per pipeline.
+        Edge: $0 marginal API cost (Nano hardware and power not included); the edge pays uplink
+        only, for alerts sent plus alerts queued to send later. Detector-only passes (VLM not
+        served) are excluded from both sides. Prices are user-supplied."""
         p = effective_prices(prices or {})
         out = {}
         for name, s in self.summary()["pipelines"].items():
-            edge_usd = s["bytes_up"] / 1e9 * p["usd_per_gb"]
+            edge_bytes = s["bytes_up"] + s["bytes_queued"]
+            edge_usd = edge_bytes / 1e9 * p["usd_per_gb"]
             cloud_usd = (s["full_frame_tokens_in_est"] / 1e6 * p["usd_per_mtok_in"]
                          + s["full_frame_tokens_out_est"] / 1e6 * p["usd_per_mtok_out"]
                          + s["image_upload_bytes"] / 1e9 * p["usd_per_gb"])
@@ -349,9 +370,12 @@ class Session:
                 "edge_tokens": s["tokens_actual"], "cloud_tokens_est": cloud_tokens,
                 "token_savings_pct": (100 * (1 - s["tokens_actual"] / cloud_tokens)
                                       if cloud_tokens > 0 else None),
-                "edge_bytes_up": s["bytes_up"], "cloud_bytes_up": s["image_upload_bytes"],
-                "bytes_savings_pct": (100 * (1 - s["bytes_up"] / s["image_upload_bytes"])
+                "edge_bytes_up": edge_bytes, "edge_bytes_queued": s["bytes_queued"],
+                "cloud_bytes_up": s["image_upload_bytes"],
+                "bytes_savings_pct": (100 * (1 - edge_bytes / s["image_upload_bytes"])
                                       if s["image_upload_bytes"] > 0 else None),
+                "baseline_images": s["baseline_images"], "vlm_unavailable": s["vlm_unavailable"],
+                "overhead_observed": s["overhead_observed"],
             }
         priced = p["usd_per_mtok_in"] > 0 or p["usd_per_mtok_out"] > 0 or p["usd_per_gb"] > 0
         return {"pipelines": out, "priced": priced, "prices": p}

@@ -219,14 +219,20 @@ labels the reports), `--no-monitor`.
 
 - **Network toggle:** online, an ALERT is sent with a forecast and its bytes are counted. Offline, it is
   queued in the outbox and nothing is sent. LOG and MONITOR stay on the device. Dispatch is simulated.
-- **Cloud estimate:** every image uploaded (its file size) and sent whole to a Qwen2.5-VL-class model.
-  Image tokens use Qwen's resize rule at vLLM's default `max_pixels` (12,845,056), so a 1920×1080 frame is
-  2,691 image tokens and a 448×448 crop is 256. Prompt-text and output tokens per call are the ones
-  measured on the Nano. This figure is an estimate and the page labels it as one.
+- **Cloud baseline:** every image uploaded (its file size) and sent whole to a Qwen2.5-VL-class model at
+  ≤1280 px on its longest side, the same frame the edge VLM gets under "force VLM". Image tokens use
+  Qwen's resize rule, so a 1920×1080 frame (sent as 1280×720) is 1,196 image tokens and a 448×448 crop is
+  256. Each pass card also shows the native-resolution figure (2,691 for 1920×1080 at vLLM's default
+  `max_pixels`). Prompt-text and output tokens per call are the ones measured on the Nano. This figure
+  is an estimate and the page labels it as one.
+- **Edge cost:** $0 marginal API cost (Nano hardware and power not included); the edge pays uplink only,
+  counting alerts sent and alerts queued in the outbox to send later. Passes whose VLM is not served run
+  detector-only and are left out of the savings comparison, on both sides.
 - **Prices** are user-supplied, the same as on the monitor: `config/cost_inputs.json` starts at zero, so
   the page shows "set prices to see $" until you enter rates. Tokens, bytes and latency are measured.
-- Uploads must be JPEG, PNG, WebP or BMP, 15 MB at most. GPU calls are serialized, and each detector is
-  loaded on first use.
+- Uploads must be JPEG, PNG, WebP or BMP, 15 MB at most. GPU calls are serialized. At startup each
+  available detector runs once on a blank frame in the background, so the first click does not pay the
+  cold CUDA/CLIP load.
 
 ## Datasets and models
 
