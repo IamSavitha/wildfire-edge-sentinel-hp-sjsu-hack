@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 21:50 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 21:58 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -62,15 +62,24 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] Serve the 32B teacher on :8001 (tmux `teacher`) — served as `teacher32b` on the shared zrt proxy (:8000) at 45% memory; base7b paused meanwhile
 - [x] `teacher_label.py --n 200` → check progress, several `source_type`s, note seconds per image — 500 crops in 6m50s (~0.8 s/crop, 32 workers); D-Fire smoke/fire crops → wildland/controlled burn/stack, only 6.6% called fog; no-fire crops → mostly fog/cloud ✔
 - [x] `teacher_label.py --n 2000` (overnight) → `data/teacher/train.jsonl`, `heldout.jsonl` — 3,100 crops labeled (2,000 D-Fire + 300 benign + 800 pyro-sdis tower smoke)
-- [ ] ⏳ **Reference:** `eval_context.py --model <teacher id> --base-url http://localhost:8001/v1 --name ref_teacher32b`
-- [ ] ⏳ **Before:** `eval_context.py --model <base id> --name before_base7b` (queued after the teacher row; 500 held-out crops)
+- [ ] ⏸ (optional, deferred — 32B at ~7.5 s/call ≈ 1 h for 500 crops) **Reference:** `eval_context.py --model <teacher id> --base-url http://localhost:8001/v1 --name ref_teacher32b`
+- [ ] ⏳ **Before:** `eval_context.py --model <base id> --name before_base7b` — ⏳ running on 500 held-out crops (~7.5 s/call while LoRA trains)
 - [ ] Set `vlm_timeout_s` in `config/settings.json` to ~2× the measured `latency_ms_p95`
-- [ ] Stop the teacher; `train_lora.py` (tmux `lora`) → `adapters/context/adapter_config.json`
+- [ ] ⏳ Stop the teacher; `train_lora.py` (tmux `lora`) — running on 2,600 teacher-labeled crops; → `adapters/context/adapter_config.json`
 - [ ] Stop the base `vlm` server; re-serve with `--enable-lora --max-lora-rank 16 --lora-modules context=$HOME/sentinel/adapters/context`
 - [ ] `/v1/models` lists both the base id and `context`
 - [ ] **After:** `eval_context.py --model context --name after_lora7b`
 - [ ] Baseline: `linear_probe.py`
 - [ ] (Optional) Gold set: `--split data/gold/gold.jsonl` for `before_base7b_gold` and `after_lora7b_gold`
+
+## Report artifacts (captured as we go) 📄
+
+- [x] `scripts/collect_artifacts.sh` gathers curves, confusion matrices, sample predictions, logs and label stats into `results/`; synced into the repo
+- [x] Detector: `results/detector_{before_yoloworld,after_yolo11s}.json` + `results/detector_training/` (15 plots, `results.csv`)
+- [x] Teacher label mix: `results/teacher_labels_summary.json` (2,600 train / 500 held-out)
+- [x] Live dashboard snapshots every minute: `results/live/live_metrics.jsonl`
+- [ ] VLM before/after JSONs + LoRA training log
+- [ ] End-to-end bench JSONs + `results/before_after.md`
 
 ## Phase 6 — End-to-end benchmark and cost 🖥️ [T25, T25b, T26]
 
