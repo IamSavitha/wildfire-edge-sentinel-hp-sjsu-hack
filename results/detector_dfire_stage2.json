@@ -1,0 +1,15 @@
+{
+  "name": "dfire_stage2",
+  "weights": "models/tower_yolo.pt",
+  "classes": null,
+  "map50": 0.10558469149508072,
+  "map50_95": 0.04337938175115515,
+  "precision": 0.680431911277986,
+  "recall": 0.1413362069786949,
+  "per_class_map50": {
+    "smoke": 0.21116938299016144,
+    "fire": 0.0
+  },
+  "ms_per_image": 3.3493813556246197,
+  "n_images": 4306
+}
