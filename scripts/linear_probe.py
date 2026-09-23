@@ -57,6 +57,7 @@ def main() -> None:
             imgs = [Image.open(p).convert("RGB") for p in paths[i:i + 64]]
             with torch.no_grad():
                 f = model.get_image_features(**proc(images=imgs, return_tensors="pt").to(a.device))
+            f = getattr(f, "pooler_output", f)  # newer transformers return a model output, not a tensor
             feats.append(torch.nn.functional.normalize(f, dim=-1).float().cpu().numpy())
         return np.concatenate(feats)
 

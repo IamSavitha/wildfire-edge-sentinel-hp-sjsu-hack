@@ -102,6 +102,7 @@ __pycache__/
 data/
 runs/
 models/*.pt
+*.pt
 adapters/
 results/*.tmp
 *.db
@@ -1304,12 +1305,6 @@ class ContextVLM:
             except Exception as exc:
                 logging.getLogger(__name__).warning("VLM request failed: %s", exc)
                 return None, tokens
-            tokens += resp.usage.prompt_tokens + resp.usage.completion_tokens
-            try:
-                return ContextResult.model_validate_json(resp.choices[0].message.content), tokens
-            except ValidationError:
-                continue
-        return None, tokens
             tokens += resp.usage.prompt_tokens + resp.usage.completion_tokens
             try:
                 return ContextResult.model_validate_json(resp.choices[0].message.content), tokens
@@ -3445,6 +3440,8 @@ Expected: 3 passed (a tower whose `process` always raises must not stop the othe
 
 ```python
 """Simulated cloud dispatch endpoint. Run: python scripts/dispatch_stub.py"""
+import argparse
+
 import uvicorn
 from fastapi import FastAPI
 
@@ -3466,7 +3463,11 @@ def reports():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=9000)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--port", type=int, default=9000)
+    a = ap.parse_args()
+    uvicorn.run(app, host=a.host, port=a.port)
 ```
 
 **Step 3: `scripts/run_all.sh`**
@@ -3820,6 +3821,7 @@ def main() -> None:
             imgs = [Image.open(p).convert("RGB") for p in paths[i:i + 64]]
             with torch.no_grad():
                 f = model.get_image_features(**proc(images=imgs, return_tensors="pt").to(a.device))
+            f = getattr(f, "pooler_output", f)  # newer transformers return a model output, not a tensor
             feats.append(torch.nn.functional.normalize(f, dim=-1).float().cpu().numpy())
         return np.concatenate(feats)
 
@@ -4105,13 +4107,13 @@ if __name__ == "__main__":
     main()
 ```
 
-Output `results/bench_<name>.json`: `precision`, `recall`, `false_alarms`, `missed` (plus `tp/fp/fn/tn`), `tokens_per_vlm_call`, `frames_per_vlm_call`, `time_to_decision_s_p50/p95` (from the `decision_s` metric), the merged `metrics` summary, per-clip rows and the `config` used (including `recheck_s` and `vlm_timeout_s`). Time to decision is in simulated clip seconds (frames/fps) and excludes VLM latency; an event still MONITOR at clip end counts as not alerted. It refuses to overwrite an existing file (exit 1) unless `--force`.
+Output `results/bench_<name>.json`: `precision`, `recall`, `false_alarms`, `missed` (plus `tp/fp/fn/tn`), `tokens_per_vlm_call`, `frames_per_vlm_call`, `time_to_decision_s_p50/p95` (from the `decision_s` metric), the merged `metrics` summary, per-clip rows and the `config` used (including `recheck_s` and `vlm_timeout_s`). Time to decision is in simulated clip seconds (frames/fps) and excludes VLM latency; an event still MONITOR at clip end counts as not alerted. It refuses to overwrite an existing file (exit 1) unless `--force`. Unless `--detector-only`, it exits before replaying anything if the VLM model id is not listed at `/v1/models`.
 
 **Step 4: Optional ablation matrix** (stop `sentinel.main` first to free the GPU; the before/after pair is Task 25b)
 ```bash
-python scripts/bench.py --name detector_only --detector-only
-python scripts/bench.py --name base_full  --model "<base id>" --full-frame
-python scripts/bench.py --name lora_full  --model context --full-frame
+python scripts/bench.py --name detector_only --detector-only --recheck-s 5
+python scripts/bench.py --name base_full  --model "<base id>" --full-frame --recheck-s 5   # needed by the cost model (Task 26)
+python scripts/bench.py --name lora_full  --model context --full-frame --recheck-s 5
 ```
 Expected: `detector_only` has the most false alarms and 0 tokens; `*_full` rows cost more tokens per call than the cropped before/after rows. `scripts/compare.py` puts every `bench_*.json` in its end-to-end table.
 
@@ -4193,8 +4195,8 @@ Expected: FAIL, `ModuleNotFoundError: No module named 'scripts.cost_model'`
 ```python
 """Per-day cost/feasibility: cloud-every-frame vs local-every-frame vs our cascade.
 Measured inputs come from results/bench_*.json; prices are filled from current published rates."""
+import argparse
 import json
-import sys
 
 DAY_S = 86_400
 
@@ -4220,7 +4222,10 @@ def compare(p: dict) -> list[dict]:
 
 
 if __name__ == "__main__":
-    params = json.load(open(sys.argv[1] if len(sys.argv) > 1 else "config/cost_inputs.json"))
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("inputs", nargs="?", default="config/cost_inputs.json", help="cost inputs JSON")
+    with open(ap.parse_args().inputs) as f:
+        params = json.load(f)
     for row in compare(params):
         print(json.dumps(row))
 ```

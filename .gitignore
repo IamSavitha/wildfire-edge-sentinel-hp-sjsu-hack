@@ -3,6 +3,7 @@ __pycache__/
 data/
 runs/
 models/*.pt
+*.pt
 adapters/
 results/*.tmp
 *.db

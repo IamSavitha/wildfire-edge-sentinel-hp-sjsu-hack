@@ -1,4 +1,6 @@
 """Simulated cloud dispatch endpoint. Run: python scripts/dispatch_stub.py"""
+import argparse
+
 import uvicorn
 from fastapi import FastAPI
 
@@ -20,4 +22,8 @@ def reports():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=9000)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--port", type=int, default=9000)
+    a = ap.parse_args()
+    uvicorn.run(app, host=a.host, port=a.port)
