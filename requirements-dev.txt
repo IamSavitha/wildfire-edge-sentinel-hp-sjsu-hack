@@ -6,3 +6,4 @@ uvicorn
 httpx
 openai>=1.40
 pytest
+pillow
