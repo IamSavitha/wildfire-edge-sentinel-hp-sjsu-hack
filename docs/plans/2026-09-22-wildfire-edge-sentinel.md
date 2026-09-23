@@ -54,6 +54,13 @@ requires-python = ">=3.10"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["sentinel"]
 ```
 
 `requirements-dev.txt` (laptop, no GPU):
@@ -66,21 +73,24 @@ uvicorn
 httpx
 openai>=1.40
 pytest
+pillow
 ```
 
 `requirements.txt` (Nano runtime):
 ```
 -r requirements-dev.txt
 ultralytics
+# YOLO-World set_classes() text encoder (BEFORE baseline); installed here so it is not fetched at runtime
+git+https://github.com/ultralytics/CLIP.git
 ```
 
-`requirements-train.txt` (Nano training):
+`requirements-train.txt` (Nano training; minimum versions verified end-to-end with `scripts/train_lora.py`):
 ```
-transformers
-peft
-trl
-accelerate
-datasets
+transformers>=5.17
+peft>=0.21
+trl>=1.13
+accelerate>=1.15
+datasets>=5.0
 pillow
 scikit-learn
 ```
@@ -92,6 +102,7 @@ __pycache__/
 data/
 runs/
 models/*.pt
+*.pt
 adapters/
 results/*.tmp
 *.db
@@ -124,7 +135,7 @@ results/*.tmp
 ```bash
 cd wildfire-edge-sentinel
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.txt && pip install -e .
 pytest
 ```
 Expected: `no tests ran` (exit code 5). That's fine.
@@ -187,10 +198,10 @@ python3 -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 If this prints `False` or `ModuleNotFoundError`, install CUDA PyTorch for GB10 (aarch64) exactly as the **NVIDIA DGX Spark playbook** says (hack guide resource list), *then*:
 ```bash
 python3 -m venv .venv --system-site-packages && source .venv/bin/activate
-pip install -r requirements.txt -r requirements-train.txt
-python -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))"
+pip install -r requirements.txt -r requirements-train.txt && pip install -e .
+python -c "import torch, torchvision; assert torch.cuda.is_available(), 'pip replaced CUDA torch'; print(torch.__version__, torchvision.__version__, torch.cuda.get_device_name(0))"
 ```
-Expected: the device name prints.
+Expected: the versions and device name print. If the assert fails, pip pulled a CPU torch (usually via torchvision): install torchvision per the DGX Spark playbook and rerun.
 
 ---
 
@@ -199,14 +210,14 @@ Expected: the device name prints.
 **Files:**
 - Create: `scripts/download_data.sh`
 
-**Step 1: Write the script**
+**Step 1: Write the script** (committed version; `hf` is tried before the older `huggingface-cli`)
 
 ```bash
 #!/usr/bin/env bash
 # Downloads training/eval data onto the Nano. Verify each dataset's license and record it in README.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-mkdir -p data/dfire data/benign data/demo data/bench data/pyro
+mkdir -p data/dfire data/benign data/demo data/bench data/pyro data/gold
 
 # 1) D-Fire (YOLO format; classes 0=smoke, 1=fire). Hosted via link on
 #    https://github.com/gaiasd/DFireDataset. Download on laptop if needed, then:
@@ -215,8 +226,14 @@ if [ ! -d data/dfire/train ]; then
   echo "MANUAL: place D-Fire under data/dfire/{train,test}/{images,labels}"; fi
 
 # 2) PyroNear lookout-tower smoke (optional extra detector data / eval).
-huggingface-cli download pyronear/pyro-sdis --repo-type dataset --local-dir data/pyro || \
-  echo "WARN: pyro-sdis download failed; continuing with D-Fire only"
+#    `hf` is the current Hugging Face CLI; older installs only ship `huggingface-cli`.
+HF=$(command -v hf || command -v huggingface-cli || true)
+if [ -n "$HF" ]; then
+  "$HF" download pyronear/pyro-sdis --repo-type dataset --local-dir data/pyro || \
+    echo "WARN: pyro-sdis download failed; continuing with D-Fire only"
+else
+  echo "WARN: no Hugging Face CLI found (pip install huggingface_hub); skipping pyro-sdis"
+fi
 
 # 3) FIgLib (HPWREN Fire Ignition Library) sequences for demo + trend eval:
 #    browse https://www.hpwren.ucsd.edu/FIgLib/ and download 4-6 sequences into
@@ -226,11 +243,20 @@ echo "MANUAL: FIgLib sequences -> data/demo/<sequence>/*.jpg"
 # 4) Benign look-alikes (campfire, BBQ, chimney, stack, fog, low cloud): 150-300 JPGs
 #    from openly licensed sources -> data/benign/*.jpg ; short clips -> data/demo/benign_*/
 echo "MANUAL: benign images -> data/benign/*.jpg"
+
+# 5) End-to-end benchmark list (scripts/bench.py): 20-40 rows of `path,label`,
+#    label alert (FIgLib/wildfire) or no_alert (campfire, fog, stack, BBQ).
+echo "MANUAL: data/bench/clips.csv with header 'path,label'"
+
+# 6) Optional hand-checked gold split for the context VLM (same JSONL format as teacher labels).
+echo "OPTIONAL: data/gold/gold.jsonl"
 ```
+
+Check it parses: `bash -n scripts/download_data.sh`.
 
 **Step 2: Run it and verify the D-Fire layout and class ids**
 ```bash
-chmod +x scripts/download_data.sh && ./scripts/download_data.sh
+./scripts/download_data.sh
 ls data/dfire/train/images | head -3; ls data/dfire/train/labels | head -3
 cat data/dfire/train/labels/$(ls data/dfire/train/labels | head -1)
 ```
@@ -238,9 +264,10 @@ Expected: YOLO lines `cls cx cy w h`, where cls ∈ {0, 1}. Confirm 0=smoke and 
 
 **Step 3: Inspect pyro-sdis before using it.** `ls data/pyro`. Only merge it into detector training if it's already images + YOLO labels. Otherwise use it just as eval images. Don't spend over 30 minutes here.
 
-**Step 4: Commit**
+**Step 4: Commit** (done together with `scripts/setup_nano.sh`, Task 27)
 ```bash
-git add scripts/download_data.sh && git commit -m "chore: dataset download script"
+git add scripts/download_data.sh scripts/setup_nano.sh
+git commit -m "chore: data download and Nano setup scripts"
 ```
 
 ---
@@ -251,8 +278,39 @@ git add scripts/download_data.sh && git commit -m "chore: dataset download scrip
 
 **Files:**
 - Create: `scripts/train_detector.py`
+- Modify: `sentinel/labels.py` (`write_dfire_yaml`)
+- Test: `tests/test_labels.py`
 
-**Step 1: Write the script**
+**Step 1: Write the helper and the script**
+
+Add the shared data-YAML helper to `sentinel/labels.py` (also used by `scripts/eval_detector.py`, Task 4b), test first in `tests/test_labels.py`:
+
+```python
+from sentinel.labels import write_dfire_yaml
+
+
+def test_write_dfire_yaml_uses_absolute_root(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data" / "dfire").mkdir(parents=True)
+    out = write_dfire_yaml("data/dfire", "runs/sub/dfire.yaml")
+    assert out.resolve() == (tmp_path / "runs" / "sub" / "dfire.yaml").resolve()
+    lines = out.read_text().splitlines()
+    assert f"path: {(tmp_path / 'data' / 'dfire').resolve()}" in lines
+    assert "train: train/images" in lines and "val: test/images" in lines
+    assert lines[lines.index("names:") + 1:] == ["  0: smoke", "  1: fire"]
+```
+
+```python
+def write_dfire_yaml(root: str | Path, out: str | Path) -> Path:
+    """Ultralytics data YAML for D-Fire (0=smoke, 1=fire), evaluated on its test split."""
+    root = Path(root).resolve()  # Ultralytics resolves relative paths against its own datasets dir
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(f"path: {root}\ntrain: train/images\nval: test/images\nnames:\n  0: smoke\n  1: fire\n")
+    return out
+```
+
+Then the training script (ultralytics is imported inside `main()` so `--help` works without torch):
 
 ```python
 """Fine-tune YOLO on D-Fire (0=smoke, 1=fire). Run on the Nano."""
@@ -260,33 +318,32 @@ import argparse
 import shutil
 from pathlib import Path
 
-from ultralytics import YOLO
+from sentinel.labels import write_dfire_yaml
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", default="data/dfire")
     ap.add_argument("--model", default="yolo11s.pt")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--batch", type=int, default=32)
+    ap.add_argument("--device", default="0", help='CUDA device index, or "cpu"')
     a = ap.parse_args()
 
-    root = Path(a.root).resolve()  # Ultralytics resolves relative paths against its own datasets dir
-    data_yaml = Path("runs/dfire.yaml")
-    data_yaml.parent.mkdir(parents=True, exist_ok=True)
-    data_yaml.write_text(
-        f"path: {root}\ntrain: train/images\nval: test/images\nnames:\n  0: smoke\n  1: fire\n"
-    )
+    from ultralytics import YOLO  # lazy: --help works without torch
 
+    data_yaml = write_dfire_yaml(a.root, "runs/dfire.yaml")
     model = YOLO(a.model)
-    model.train(data=str(data_yaml), epochs=a.epochs, imgsz=a.imgsz, batch=a.batch,
-                device=0, project="runs", name="smoke", exist_ok=True)
-    metrics = model.val()
+    # absolute project dir: a relative one gets nested under runs/detect/
+    model.train(data=str(data_yaml), epochs=a.epochs, imgsz=a.imgsz, batch=a.batch, device=a.device,
+                project=str(Path("runs").resolve()), name="smoke", exist_ok=True)
+    metrics = model.val(data=str(data_yaml), imgsz=a.imgsz, device=a.device, split="val")
     print(f"mAP50={metrics.box.map50:.3f} mAP50-95={metrics.box.map:.3f}")
 
     Path("models").mkdir(exist_ok=True)
-    shutil.copy("runs/smoke/weights/best.pt", "models/smoke_yolo.pt")
+    shutil.copy(model.trainer.best, "models/smoke_yolo.pt")  # runs/smoke/weights/best.pt under the cwd
+    print("saved models/smoke_yolo.pt")
 
 
 if __name__ == "__main__":
@@ -301,14 +358,179 @@ python scripts/train_detector.py --epochs 1
 Expected: training completes and prints `mAP50=...`, and `models/smoke_yolo.pt` exists. Note the time per epoch and pick `--epochs` so the full run finishes in ≤ 4 h.
 
 **Step 3: Full run (leave it running)**
+
+Run Task 4b's BEFORE evaluation first if it has not been recorded yet (it only needs the dataset).
 ```bash
 python scripts/train_detector.py --epochs <N>
 ```
-Record final mAP50 and mAP50-95 in `results/detector.md`. This is a benchmark deliverable.
+Record final mAP50 and mAP50-95 in `results/detector.md` alongside the Task 4b before/after JSON results. This is a benchmark deliverable.
 
 **Step 4: Commit**
 ```bash
+git add sentinel/labels.py tests/test_labels.py && git commit -m "feat: shared D-Fire data yaml helper"
 git add scripts/train_detector.py && git commit -m "feat: YOLO detector fine-tuning script"
+```
+
+---
+
+### Task 4b: Detector before/after evaluation (Nano)
+
+Measure an off-the-shelf detector, fine-tune, and measure again on the same D-Fire test split (`data/dfire/test`, the `val:` split of `runs/dfire.yaml`). A standard COCO YOLO has no smoke class, so the BEFORE baseline is YOLO-World zero-shot (`yolov8s-worldv2.pt`) prompted with `["smoke", "fire"]` via `model.set_classes(...)`; the prompt order must match the dataset class ids (0=smoke, 1=fire). AFTER is YOLO11s fine-tuned on D-Fire (Task 4) → `models/smoke_yolo.pt`.
+
+**Files:**
+- Create: `scripts/eval_detector.py`
+- Test: `tests/test_eval_detector.py`
+
+**Step 1: Write the failing test** (the pure summarizing part; no ultralytics needed)
+
+```python
+from types import SimpleNamespace
+
+import pytest
+
+from scripts.eval_detector import summarize
+
+
+def _box(**kw):
+    base = dict(map50=0.61, map=0.33, mp=0.7, mr=0.55, ap50=[0.5, 0.72])
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_summarize_builds_result_dict():
+    out = summarize("after_yolo11s", "models/smoke_yolo.pt", None, _box(),
+                    {"preprocess": 1.0, "inference": 12.5, "postprocess": 0.8}, {0: "smoke", 1: "fire"})
+    assert out == {
+        "name": "after_yolo11s", "weights": "models/smoke_yolo.pt", "classes": None,
+        "map50": 0.61, "map50_95": 0.33, "precision": 0.7, "recall": 0.55,
+        "per_class_map50": {"smoke": 0.5, "fire": 0.72}, "ms_per_image": 12.5,
+    }
+
+
+def test_summarize_uses_ap_class_index_and_n_images():
+    # Ultralytics reports ap50 only for classes present, in ap_class_index order
+    box = _box(ap50=[0.4], ap_class_index=[1])
+    out = summarize("before_yoloworld", "yolov8s-worldv2.pt", ["smoke", "fire"], box,
+                    {"inference": 30.0}, ["smoke", "fire"], n_images=4306)
+    assert out["classes"] == ["smoke", "fire"]
+    assert out["per_class_map50"] == {"fire": pytest.approx(0.4)}
+    assert out["n_images"] == 4306
+```
+
+Run: `pytest tests/test_eval_detector.py -v`
+Expected: FAIL, `ModuleNotFoundError`
+
+**Step 2: Implement `scripts/eval_detector.py`**
+
+```python
+"""Evaluate a detector on the D-Fire test split and save results/detector_<name>.json. Run on the Nano.
+
+BEFORE: --weights yolov8s-worldv2.pt --classes smoke,fire --name before_yoloworld  (zero-shot)
+AFTER:  --weights models/smoke_yolo.pt --name after_yolo11s                        (fine-tuned)
+"""
+import argparse
+import json
+from pathlib import Path
+
+from sentinel.labels import write_dfire_yaml
+
+try:
+    from scripts.eval_context import check_output
+except ModuleNotFoundError as e:  # run as `python scripts/eval_detector.py`: scripts/ is on sys.path, not the repo root
+    if e.name != "scripts":
+        raise
+    from eval_context import check_output
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+def summarize(name: str, weights: str, classes: list[str] | None, box, speed: dict, names,
+              n_images: int | None = None) -> dict:
+    """Turn Ultralytics val metrics (metrics.box, metrics.speed, class names) into a JSON-able dict."""
+    ap50 = [float(v) for v in box.ap50]
+    # ap50 has one entry per class present in the split, ordered by ap_class_index
+    idx = [int(i) for i in getattr(box, "ap_class_index", range(len(ap50)))]
+    out = {
+        "name": name,
+        "weights": weights,
+        "classes": classes,
+        "map50": float(box.map50),
+        "map50_95": float(box.map),
+        "precision": float(box.mp),
+        "recall": float(box.mr),
+        "per_class_map50": {names[i]: v for i, v in zip(idx, ap50)},
+        "ms_per_image": float(speed["inference"]),
+    }
+    if n_images is not None:
+        out["n_images"] = n_images
+    return out
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--weights", required=True)
+    ap.add_argument("--name", required=True, help="result tag, e.g. before_yoloworld / after_yolo11s")
+    ap.add_argument("--classes", default=None,
+                    help="comma-separated text prompts for YOLO-World, in class-id order (e.g. smoke,fire)")
+    ap.add_argument("--root", default="data/dfire")
+    ap.add_argument("--imgsz", type=int, default=640)
+    ap.add_argument("--device", default="0", help='CUDA device index, or "cpu"')
+    ap.add_argument("--force", action="store_true", help="overwrite an existing results file")
+    a = ap.parse_args()
+    out = Path("results") / f"detector_{a.name}.json"
+    check_output(out, a.force)
+    classes = [c.strip() for c in a.classes.split(",")] if a.classes else None
+
+    from ultralytics import YOLO  # lazy: --help and tests work without torch
+
+    data_yaml = write_dfire_yaml(a.root, "runs/dfire.yaml")
+    model = YOLO(a.weights)
+    if classes:
+        model.set_classes(classes)  # must match data yaml ids: 0=smoke, 1=fire
+    m = model.val(data=str(data_yaml), imgsz=a.imgsz, device=a.device, split="val", plots=False)
+
+    test_images = Path(a.root) / "test" / "images"
+    n_images = sum(1 for p in test_images.iterdir() if p.suffix.lower() in IMAGE_EXTS) if test_images.is_dir() else None
+    result = summarize(a.name, a.weights, classes, m.box, m.speed, m.names, n_images)
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result, indent=2))
+    print(f"wrote {out}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Run: `pytest tests/test_eval_detector.py -v` → 2 passed; `python scripts/eval_detector.py --help` works without ultralytics.
+
+**Step 3: Run BEFORE, train, run AFTER (Nano)**
+```bash
+python scripts/eval_detector.py --weights yolov8s-worldv2.pt --classes smoke,fire --name before_yoloworld
+python scripts/train_detector.py --epochs <N>
+python scripts/eval_detector.py --weights models/smoke_yolo.pt --name after_yolo11s
+```
+Expected: `results/detector_before_yoloworld.json` and `results/detector_after_yolo11s.json`, each with `map50`, `map50_95`, `precision`, `recall`, `per_class_map50`, `ms_per_image`, `n_images`. It refuses to overwrite an existing results file (exit 1); pass `--force` to re-run a row on purpose. `scripts/compare.py` (Task 25b) puts both rows side by side.
+
+**CLIP / offline note:** YOLO-World's first `set_classes()` needs the CLIP package (in `requirements.txt`, installed from git) and downloads the text-encoder weights. Run the BEFORE eval above once while online so those weights are cached; the BEFORE runtime config below depends on that cache for offline demos. Both scripts take `--device` (default `0`; `cpu` also works).
+
+**Step 4: Run the pipeline with either detector**
+
+The runtime detector is chosen in `config/settings.json` (Task 13 `detector_classes`, Task 20 `YoloDetector(classes=...)`):
+```json
+{"detector_weights": "yolov8s-worldv2.pt", "detector_classes": ["smoke", "fire"]}
+```
+(BEFORE, zero-shot) vs
+```json
+{"detector_weights": "models/smoke_yolo.pt"}
+```
+(AFTER, fine-tuned; the default).
+
+**Step 5: Commit**
+```bash
+git add scripts/eval_detector.py tests/test_eval_detector.py
+git commit -m "feat: detector evaluation for before/after comparison"
 ```
 
 ---
@@ -563,6 +785,25 @@ def test_fallback_without_context_never_ignores():
     assert fallback_severity(None) == Severity.MONITOR
     assert fallback_severity("static") == Severity.MONITOR
     assert fallback_severity("growing") == Severity.ALERT
+
+
+def test_scheduled_burn_never_hides_structure_fire():
+    c = ctx(source_type="structure", size_estimate="large", smoke_color="black")
+    assert assess(c, trend="growing", burn_scheduled=True) == Severity.ALERT
+
+
+def test_scheduled_burn_never_hides_large_black_wildland():
+    c = ctx(size_estimate="large", smoke_color="black")
+    assert assess(c, trend="growing", burn_scheduled=True) == Severity.ALERT
+
+
+def test_large_black_benign_source_is_at_least_monitor():
+    c = ctx(source_type="controlled_burn", size_estimate="large", smoke_color="black")
+    assert assess(c, trend="static") == Severity.MONITOR
+
+
+def test_unclear_attendance_counts_as_unattended():
+    assert assess(ctx(source_type="campfire", attended="unclear"), trend="static") == Severity.MONITOR
 ```
 
 **Step 2: Run to verify it fails**
@@ -586,7 +827,9 @@ def assess(ctx: ContextResult, trend: str | None,
     growing = trend == "growing"
     if ctx.source_type == "fog_dust_cloud":
         return Severity.IGNORE
-    if burn_scheduled and not ctx.near_structures:
+    if (burn_scheduled and not ctx.near_structures
+            and ctx.source_type not in {"structure", "vehicle"}
+            and ctx.size_estimate != "large" and ctx.smoke_color != "black"):
         return Severity.LOG
     if ctx.source_type in DANGEROUS:
         if growing or ctx.near_structures or ctx.size_estimate == "large" or ctx.smoke_color == "black":
@@ -597,7 +840,9 @@ def assess(ctx: ContextResult, trend: str | None,
             return Severity.ALERT
         if ctx.source_type == "industrial_stack" and in_benign_zone:
             return Severity.IGNORE
-        if ctx.source_type in ATTENDABLE and ctx.attended == "no":
+        if ctx.size_estimate == "large" or ctx.smoke_color == "black":
+            return Severity.MONITOR
+        if ctx.source_type in ATTENDABLE and ctx.attended != "yes":
             return Severity.MONITOR
         return Severity.LOG
     return Severity.ALERT if growing else Severity.MONITOR
@@ -611,7 +856,7 @@ def fallback_severity(trend: str | None) -> Severity:
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_severity.py -v`
-Expected: 14 passed
+Expected: 18 passed
 
 **Step 5: Commit**
 ```bash
@@ -829,6 +1074,22 @@ def test_crop_clips_to_frame():
 
 def test_to_jpeg_returns_jpeg_bytes():
     assert to_jpeg(FRAME)[:2] == b"\xff\xd8"
+
+
+def test_box_on_right_edge_is_never_empty():
+    crop = crop_box(FRAME, (640, 0, 640, 10), pad=0.0)
+    assert crop.size > 0
+    assert to_jpeg(crop)[:2] == b"\xff\xd8"
+
+
+def test_box_on_bottom_edge_is_never_empty():
+    crop = crop_box(FRAME, (0, 480, 10, 480), pad=0.0)
+    assert crop.size > 0
+    assert to_jpeg(crop)[:2] == b"\xff\xd8"
+
+
+def test_thin_tall_crop_survives_downscale():
+    assert crop_box(FRAME, (100, 0, 100.5, 480), pad=0.5, max_side=256).size > 0
 ```
 
 **Step 2: Run to verify it fails**
@@ -849,12 +1110,13 @@ def crop_box(frame: np.ndarray, box: tuple[float, float, float, float],
     h, w = frame.shape[:2]
     x1, y1, x2, y2 = box
     bw, bh = x2 - x1, y2 - y1
-    x1, y1 = max(0, int(x1 - pad * bw)), max(0, int(y1 - pad * bh))
+    x1, y1 = min(w - 1, max(0, int(x1 - pad * bw))), min(h - 1, max(0, int(y1 - pad * bh)))
     x2, y2 = min(w, int(x2 + pad * bw)), min(h, int(y2 + pad * bh))
+    x2, y2 = max(x2, min(w, x1 + 1)), max(y2, min(h, y1 + 1))
     crop = frame[y1:y2, x1:x2]
     scale = max_side / max(crop.shape[:2])
     if scale < 1:
-        size = (int(crop.shape[1] * scale), int(crop.shape[0] * scale))
+        size = (max(1, int(crop.shape[1] * scale)), max(1, int(crop.shape[0] * scale)))
         crop = cv2.resize(crop, size, interpolation=cv2.INTER_AREA)
     return crop
 
@@ -869,7 +1131,7 @@ def to_jpeg(img: np.ndarray, quality: int = 80) -> bytes:
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_imaging.py -v`
-Expected: 4 passed
+Expected: 7 passed
 
 **Step 5: Commit**
 ```bash
@@ -880,7 +1142,7 @@ git add sentinel/imaging.py tests/test_imaging.py && git commit -m "feat: contex
 
 ### Task 11: Context VLM client (`vlm_client.py`)
 
-It uses guided JSON output (a schema-constrained response), a tight token cap, and a fixed system prompt (so vLLM prefix caching kicks in). It retries once on bad JSON and returns no result immediately on timeout. The teacher labeling and eval scripts reuse the same client.
+It uses guided JSON output (a schema-constrained response), a tight token cap, and a fixed system prompt (so vLLM prefix caching kicks in). It retries once on bad JSON and returns no result immediately on timeout. The teacher labeling and eval scripts reuse the same client. Because `classify` swallows request errors, `ensure_served()` lets those scripts fail fast (exit with the served ids) when the model id is wrong or the server is down.
 
 **Files:**
 - Create: `sentinel/vlm_client.py`
@@ -950,6 +1212,37 @@ def test_request_is_token_capped_and_schema_constrained():
     assert call["max_tokens"] <= 200
     assert call["temperature"] == 0
     assert call["response_format"]["type"] == "json_schema"
+
+
+class FakeModels:
+    def __init__(self, ids=(), error=None):
+        self.ids, self.error = list(ids), error
+
+    def list(self):
+        if self.error:
+            raise self.error
+        return SimpleNamespace(data=[SimpleNamespace(id=i) for i in self.ids])
+
+
+def test_ensure_served_passes_when_model_listed():
+    from sentinel.vlm_client import ensure_served
+    ensure_served(SimpleNamespace(models=FakeModels(["base", "context"])), "context", "http://x/v1")
+
+
+def test_ensure_served_exits_when_model_missing():
+    import pytest
+
+    from sentinel.vlm_client import ensure_served
+    with pytest.raises(SystemExit, match=r"'context' not served at http://x/v1; available: \['base'\]"):
+        ensure_served(SimpleNamespace(models=FakeModels(["base"])), "context", "http://x/v1")
+
+
+def test_ensure_served_exits_when_server_unreachable():
+    import pytest
+
+    from sentinel.vlm_client import ensure_served
+    with pytest.raises(SystemExit, match="http://x/v1"):
+        ensure_served(SimpleNamespace(models=FakeModels(error=ConnectionError("refused"))), "m", "http://x/v1")
 ```
 
 **Step 2: Run to verify it fails**
@@ -962,6 +1255,7 @@ Expected: FAIL, `ModuleNotFoundError`
 ```python
 """OpenAI-compatible client for the local vLLM context classifier."""
 import base64
+import logging
 
 from openai import OpenAI
 from pydantic import ValidationError
@@ -1008,7 +1302,8 @@ class ContextVLM:
                     response_format={"type": "json_schema",
                                      "json_schema": {"name": "context", "schema": CONTEXT_JSON_SCHEMA}},
                 )
-            except Exception:
+            except Exception as exc:
+                logging.getLogger(__name__).warning("VLM request failed: %s", exc)
                 return None, tokens
             tokens += resp.usage.prompt_tokens + resp.usage.completion_tokens
             try:
@@ -1016,12 +1311,23 @@ class ContextVLM:
             except ValidationError:
                 continue
         return None, tokens
+
+
+def ensure_served(client, model: str, base_url: str) -> None:
+    """Fail fast if `model` is not served: classify() swallows request errors, so a wrong id or a
+    down server would otherwise produce a results file full of parse failures."""
+    try:
+        ids = [m.id for m in client.models.list().data]
+    except Exception as exc:
+        raise SystemExit(f"cannot list models at {base_url} ({exc}); is the VLM server up?") from exc
+    if model not in ids:
+        raise SystemExit(f"model {model!r} not served at {base_url}; available: {ids}")
 ```
 
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_vlm_client.py -v`
-Expected: 5 passed
+Expected: 8 passed
 
 **Step 5: Live smoke test on the Nano** (after `git pull`)
 ```bash
@@ -1051,7 +1357,7 @@ A large local teacher VLM labels crops with the context schema, and the LoRA stu
 - Create: `scripts/teacher_label.py`
 - Test: `tests/test_teacher_label.py`
 
-**Step 1: Write the failing test.** Only the YOLO-label parsing is tested. It lives in `sentinel/labels.py` so the test can import it.
+**Step 1: Write the failing test.** The YOLO-label parsing is tested first; it lives in `sentinel/labels.py` so the test can import it. The next two tests cover `make_crops` (accepts .jpg/.jpeg/.png) and `write_labels` (counts rows, skips failed labels) from Step 5, and the last checks that `main` verifies the teacher is served before cutting any crops.
 
 ```python
 # tests/test_teacher_label.py
@@ -1066,6 +1372,58 @@ def test_yolo_boxes_to_pixels(tmp_path):
 
 def test_missing_label_file_means_no_boxes(tmp_path):
     assert yolo_boxes(tmp_path / "none.txt", 100, 50) == []
+
+
+def test_make_crops_accepts_jpg_jpeg_png(tmp_path):
+    import cv2
+    import numpy as np
+
+    from scripts.teacher_label import make_crops
+    src, out = tmp_path / "benign", tmp_path / "crops"
+    src.mkdir(); out.mkdir()
+    img = np.full((40, 60, 3), 128, np.uint8)
+    for name in ("a.jpg", "b.jpeg", "c.png", "d.PNG", "notes.txt"):
+        if name.endswith("txt"):
+            (src / name).write_text("x")
+        else:
+            cv2.imwrite(str(src / name), img)
+    crops = make_crops(src, src / "_no_labels", out, 100)
+    assert sorted(p.name.rsplit("_", 1)[1] for p in crops) == ["a.jpg", "b.jpg", "c.jpg", "d.jpg"]
+    assert all(p.exists() for p in crops)
+
+
+def test_write_labels_counts_rows_and_skips_failures(tmp_path):
+    import io
+    from pathlib import Path
+
+    from scripts.teacher_label import write_labels
+    from sentinel.schema import ContextResult
+    ctx = ContextResult(source_type="campfire", smoke_color="white", attended="yes",
+                        near_structures=False, near_road=False, size_estimate="small",
+                        description="Campfire.")
+    ftr, fho = io.StringIO(), io.StringIO()
+    pairs = [(Path(f"x{i}.jpg"), ctx if i % 2 else None) for i in range(10)]
+    assert write_labels(pairs, ftr, fho, total=10) == 5
+    assert len((ftr.getvalue() + fho.getvalue()).splitlines()) == 5
+    assert write_labels([(Path("y.jpg"), None)], ftr, fho, total=1) == 0
+
+
+def test_main_checks_server_before_cutting_crops(tmp_path, monkeypatch):
+    import sys
+
+    import pytest
+
+    import scripts.teacher_label as tl
+    cropped = []
+    monkeypatch.setattr(tl, "make_crops", lambda *a, **k: cropped.append(a) or [])
+
+    def not_served(*a, **k):
+        raise SystemExit("model 'x' not served")
+    monkeypatch.setattr(tl, "ensure_served", not_served)
+    monkeypatch.setattr(sys, "argv", ["teacher_label.py", "--model", "x", "--out", str(tmp_path)])
+    with pytest.raises(SystemExit, match="not served"):
+        tl.main()
+    assert cropped == []
 ```
 
 **Step 2: Run to verify it fails**
@@ -1097,7 +1455,7 @@ def yolo_boxes(label_path: Path, w: int, h: int) -> list[tuple[float, float, flo
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_teacher_label.py -v`
-Expected: 2 passed
+Expected: the 2 label tests pass; after Step 5, 5 passed.
 
 **Step 5: Write `scripts/teacher_label.py`**
 
@@ -1114,11 +1472,13 @@ import cv2
 
 from sentinel.imaging import crop_box, to_jpeg
 from sentinel.labels import yolo_boxes
-from sentinel.vlm_client import ContextVLM
+from sentinel.vlm_client import ContextVLM, ensure_served
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
 
 def make_crops(images_dir: Path, labels_dir: Path, out_dir: Path, n: int, seed: int = 0) -> list[Path]:
-    imgs = sorted(images_dir.glob("*.jpg"))
+    imgs = sorted(p for p in images_dir.glob("*") if p.suffix.lower() in IMAGE_EXTS)
     random.Random(seed).shuffle(imgs)
     out = []
     for p in imgs[:n]:
@@ -1135,8 +1495,23 @@ def make_crops(images_dir: Path, labels_dir: Path, out_dir: Path, n: int, seed: 
     return out
 
 
+def write_labels(pairs, ftr, fho, total: int) -> int:
+    """Write (crop, ContextResult | None) pairs to train/heldout (15% hash split); returns rows written."""
+    written = 0
+    for i, (p, ctx) in enumerate(pairs):
+        if i % 100 == 0:
+            ftr.flush(); fho.flush()
+            print(f"{i}/{total} ({written} labeled)", flush=True)
+        if ctx is None:
+            continue
+        held = int(hashlib.md5(p.name.encode()).hexdigest(), 16) % 100 < 15
+        (fho if held else ftr).write(json.dumps({"image": str(p), "label": ctx.model_dump()}) + "\n")
+        written += 1
+    return written
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--images", default="data/dfire/train/images")
     ap.add_argument("--labels", default="data/dfire/train/labels")
     ap.add_argument("--benign", default="data/benign")
@@ -1145,7 +1520,12 @@ def main() -> None:
     ap.add_argument("--base-url", default="http://localhost:8001/v1")
     ap.add_argument("--workers", type=int, default=32)
     ap.add_argument("--out", default="data/teacher")
+    ap.add_argument("--append", action="store_true",
+                    help="append to train/heldout.jsonl instead of overwriting (e.g. topping up benign labels)")
     a = ap.parse_args()
+
+    teacher = ContextVLM(a.model, a.base_url, timeout_s=180, max_tokens=200)
+    ensure_served(teacher.client, a.model, a.base_url)  # before cropping: a dead teacher fails in seconds
 
     out = Path(a.out)
     crops_dir = out / "crops"
@@ -1154,20 +1534,16 @@ def main() -> None:
     crops += make_crops(Path(a.benign), Path(a.benign) / "_no_labels", crops_dir, 10_000)
     print(f"{len(crops)} crops to label")
 
-    teacher = ContextVLM(a.model, a.base_url, timeout_s=180, max_tokens=200)
-
     def label(p: Path):
         return p, teacher.classify(p.read_bytes())[0]
 
+    mode = "a" if a.append else "w"
     with ThreadPoolExecutor(a.workers) as ex, \
-            open(out / "train.jsonl", "w") as ftr, open(out / "heldout.jsonl", "w") as fho:
-        for i, (p, ctx) in enumerate(ex.map(label, crops)):
-            if ctx is None:
-                continue
-            held = int(hashlib.md5(p.name.encode()).hexdigest(), 16) % 100 < 15
-            (fho if held else ftr).write(json.dumps({"image": str(p), "label": ctx.model_dump()}) + "\n")
-            if i % 100 == 0:
-                print(f"{i}/{len(crops)}", flush=True)
+            open(out / "train.jsonl", mode) as ftr, open(out / "heldout.jsonl", mode) as fho:
+        written = write_labels(ex.map(label, crops), ftr, fho, len(crops))
+    if written == 0:
+        raise SystemExit("no labels written — check the teacher server")
+    print(f"wrote {written}/{len(crops)} labels to {out}")
 
 
 if __name__ == "__main__":
@@ -1183,7 +1559,7 @@ zrt serve hf:Qwen/Qwen2.5-VL-32B-Instruct-AWQ --host 0.0.0.0 --port 8001 \
 # new tmux window:
 python scripts/teacher_label.py --model "$(curl -s localhost:8001/v1/models | python -c 'import sys,json;print(json.load(sys.stdin)["data"][0]["id"])')" --n 200
 ```
-Expected: progress lines. Check that throughput is acceptable at `--n 200`, then rerun with `--n 2000`. Use a 72B-AWQ teacher only if the throughput allows. Also record the **teacher's** seconds per image for the distillation slide.
+Expected: progress lines, then `wrote N/M labels`. It exits at once, before cutting any crops, if the model id is not listed at `/v1/models`, and exits non-zero if no label was written. Check that throughput is acceptable at `--n 200`, then rerun with `--n 2000`. Use a 72B-AWQ teacher only if the throughput allows. Also record the **teacher's** seconds per image for the distillation slide.
 
 **Step 7: Commit**
 ```bash
@@ -1232,6 +1608,18 @@ def test_load_towers(tmp_path):
     p.write_text(json.dumps([{"id": "t1", "name": "A", "lat": 1.0, "lon": 2.0, "source": "x"}]))
     towers = load_towers(p)
     assert towers["t1"].name == "A" and towers["t1"].benign_zones == []
+
+
+def test_detector_classes_setting(tmp_path):
+    assert Settings().detector_classes is None
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"detector_weights": "yolov8s-worldv2.pt", "detector_classes": ["smoke", "fire"]}))
+    assert load_settings(p).detector_classes == ["smoke", "fire"]
+
+
+def test_vlm_timeout_default_allows_a_7b_call_on_the_nano():
+    # ~2x a measured p95 of a few seconds; tune per eval_context latency_ms_p95
+    assert Settings().vlm_timeout_s == 15.0
 ```
 
 **Step 2: Run to verify it fails**
@@ -1252,8 +1640,9 @@ from pathlib import Path
 class Settings:
     vlm_base_url: str = "http://localhost:8000/v1"
     vlm_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
-    vlm_timeout_s: float = 5.0
+    vlm_timeout_s: float = 15.0
     detector_weights: str = "models/smoke_yolo.pt"
+    detector_classes: list[str] | None = None  # set for YOLO-World zero-shot, e.g. ["smoke", "fire"]
     fps: float = 2.0
     min_conf: float = 0.4
     min_frames: int = 3
@@ -1296,7 +1685,9 @@ def load_towers(path: str | Path = "config/towers.json") -> dict[str, Tower]:
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_config.py -v`
-Expected: 4 passed
+Expected: 6 passed
+
+**VLM timeout:** the default `vlm_timeout_s` is 15 s. After Task 24b, set it in `config/settings.json` to about 2× the measured `latency_ms_p95` from `results/context_after_lora7b.json` (in seconds). Too low turns every slow call into a fallback MONITOR; too high stalls the single replay loop for all towers.
 
 **Step 5: Commit**
 ```bash
@@ -1361,6 +1752,18 @@ def test_report_without_context():
 
 def test_compass():
     assert compass(0) == "N" and compass(270) == "W" and compass(359) == "N" and compass(135) == "SE"
+
+
+def test_render_text_with_empty_forecast():
+    r = report()
+    r["forecast"] = {"temp_c": []}
+    assert "Forecast:" not in render_text(r)
+
+
+def test_render_text_with_partial_forecast():
+    r = report()
+    r["forecast"] = {"temp_c": [34]}
+    assert "Forecast:" not in render_text(r)
 ```
 
 **Step 2: Run to verify it fails**
@@ -1414,10 +1817,12 @@ def render_text(r: dict) -> str:
         f"Confidence {r['confidence']:.2f}. Trend: {r['trend'] or 'unknown'}. Local temp {r['temp_c']:.0f}°C.",
         r["description"],
     ]
-    fc = r.get("forecast")
-    if fc:
-        parts.append(f"Forecast: up to {max(fc['temp_c']):.0f}°C, wind {fc['wind_mph'][0]:.0f} mph "
-                     f"from {compass(fc['wind_dir_deg'][0])}.")
+    fc = r.get("forecast") or {}
+    temps = [t for t in fc.get("temp_c") or [] if t is not None]
+    winds, dirs = fc.get("wind_mph") or [], fc.get("wind_dir_deg") or []
+    if temps and winds and dirs and winds[0] is not None and dirs[0] is not None:
+        parts.append(f"Forecast: up to {max(temps):.0f}°C, wind {winds[0]:.0f} mph "
+                     f"from {compass(dirs[0])}.")
     elif r.get("forecast_status") == "pending":
         parts.append("Forecast pending (no connectivity at detection time).")
     return " ".join(parts)
@@ -1426,7 +1831,7 @@ def render_text(r: dict) -> str:
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_report.py -v`
-Expected: 6 passed
+Expected: 8 passed
 
 **Step 5: Commit**
 ```bash
@@ -1479,6 +1884,21 @@ def test_survives_restart(tmp_path):
     path = str(tmp_path / "o.db")
     Outbox(path).enqueue("e1", {"x": 1}, now=0)
     assert Outbox(path).pending_count() == 1
+
+
+def test_backoff_is_capped_after_many_failures():
+    ob = Outbox(":memory:")
+    ob.enqueue("e1", {}, now=0)
+    ob.db.execute("UPDATE outbox SET attempts = 70")
+    ob.mark_failed("e1", now=1000)
+    assert ob.due(now=1000) == []
+    assert ob.due(now=1300) != []
+
+
+def test_creates_parent_directory(tmp_path):
+    path = str(tmp_path / "sub" / "o.db")
+    Outbox(path).enqueue("e1", {}, now=0)
+    assert Outbox(path).pending_count() == 1
 ```
 
 **Step 2: Run to verify it fails**
@@ -1493,12 +1913,15 @@ Expected: FAIL, `ModuleNotFoundError`
 import json
 import sqlite3
 import threading
+from pathlib import Path
 
 MAX_BACKOFF_S = 300
 
 
 class Outbox:
     def __init__(self, path: str):
+        if path != ":memory:":
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.lock = threading.Lock()
         with self.lock:
@@ -1532,7 +1955,7 @@ class Outbox:
         with self.lock:
             self.db.execute(
                 "UPDATE outbox SET attempts = attempts + 1,"
-                " next_attempt_at = ? + min(?, 1 << (attempts + 1)) WHERE event_id = ?",
+                " next_attempt_at = ? + min(?, 1 << min(attempts + 1, 30)) WHERE event_id = ?",
                 (now, MAX_BACKOFF_S, event_id))
             self.db.commit()
 
@@ -1548,7 +1971,7 @@ class Outbox:
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_outbox.py -v`
-Expected: 5 passed
+Expected: 7 passed
 
 **Step 5: Run the full suite and commit**
 ```bash
@@ -1565,76 +1988,158 @@ git push
 
 **Files:**
 - Create: `scripts/train_lora.py`
+- Test: `tests/test_train_lora.py`
+- Modify: `requirements-dev.txt` (add `pillow`, used by the test)
 
 **Step 1: Free GPU memory.** Stop the teacher (`tmux kill-session -t teacher`). Check the label counts:
 ```bash
 wc -l data/teacher/train.jsonl data/teacher/heldout.jsonl
 python -c "import json,collections;print(collections.Counter(json.loads(l)['label']['source_type'] for l in open('data/teacher/train.jsonl')))"
 ```
-Expected: ≥ 1,000 train rows and more than one source_type. If a benign class has fewer than 30 rows, add images to `data/benign` and rerun T12 on just those.
+Expected: ≥ 1,000 train rows and more than one source_type. If a benign class has fewer than 30 rows, put extra images (.jpg/.jpeg/.png) in a new subfolder such as `data/benign/topup` and label just those without overwriting the existing splits:
+```bash
+python scripts/teacher_label.py --model "<teacher id>" --n 0 --benign data/benign/topup --append
+```
 
-**Step 2: Write the script**
+**Step 2: Write the failing test** (the pure example builder; no torch needed, only pillow)
 
 ```python
-"""LoRA-distill teacher context labels into Qwen2.5-VL-7B. Run on the Nano.
-Fallback if TRL/transformers versions disagree: adapt HP's Med_VLM_Fine-Tune_vLLM script
-(hack guide p.6) to this JSONL; the data format below is the same chat format."""
 import json
 
-from datasets import Dataset
-from peft import LoraConfig
 from PIL import Image
-from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
-from trl import SFTConfig, SFTTrainer
 
+from scripts.train_lora import to_example
 from sentinel.vlm_client import SYSTEM_PROMPT, USER_PROMPT
 
-BASE = "Qwen/Qwen2.5-VL-7B-Instruct"
+LABEL = {"source_type": "campfire", "smoke_color": "white", "attended": "yes",
+         "near_structures": False, "near_road": True, "size_estimate": "small",
+         "description": "Small campfire with people nearby."}
+
+
+def _row(tmp_path):
+    p = tmp_path / "crop.jpg"
+    Image.new("L", (8, 6), 128).save(p)  # greyscale on purpose: to_example must convert to RGB
+    return {"image": str(p), "label": LABEL}
+
+
+def test_to_example_is_prompt_completion_matching_runtime_prompt(tmp_path):
+    # prompt/completion format -> TRL computes loss on the JSON answer only
+    ex = to_example(_row(tmp_path))
+    assert set(ex) == {"images", "prompt", "completion"}
+    assert [m["role"] for m in ex["prompt"]] == ["system", "user"]
+    assert ex["prompt"][0]["content"] == [{"type": "text", "text": SYSTEM_PROMPT}]
+    assert ex["prompt"][1]["content"] == [{"type": "image"}, {"type": "text", "text": USER_PROMPT}]
+    assert ex["completion"] == [
+        {"role": "assistant", "content": [{"type": "text", "text": json.dumps(LABEL)}]}]
+
+
+def test_to_example_loads_one_rgb_image(tmp_path):
+    ex = to_example(_row(tmp_path))
+    assert len(ex["images"]) == 1
+    assert ex["images"][0].mode == "RGB"
+    assert ex["images"][0].size == (8, 6)
+```
+
+Run: `pytest tests/test_train_lora.py -v`
+Expected: FAIL, `ModuleNotFoundError`
+
+**Step 3: Write the script.** `to_example` returns TRL's prompt/completion format, so loss covers only the JSON answer (not the system prompt or the ~250 image tokens). It imports its prompts from `sentinel.vlm_client`, so the training prompt is the runtime prompt. Heavy imports (torch, datasets, peft, transformers, trl) live inside `main()` so `--help` and the test work on the laptop.
+
+```python
+"""LoRA-distill teacher context labels (scripts/teacher_label.py) into Qwen2.5-VL-7B. Run on the Nano.
+
+Tested with transformers 5.17, trl 1.13, peft 0.21 (requirements-train.txt).
+Writes a PEFT adapter to --out; serve it with vLLM `--enable-lora --lora-modules context=<out>`
+and score it with scripts/eval_context.py (plan Task 24 / 24b).
+
+Fallback if TRL/transformers versions disagree: adapt HP's Med_VLM_Fine-Tune_vLLM script
+(hack guide p.6) to this JSONL; the data format below is the same chat format.
+"""
+import argparse
+import json
+
+from sentinel.vlm_client import SYSTEM_PROMPT, USER_PROMPT  # training prompt == runtime prompt
 
 
 def to_example(row: dict) -> dict:
+    """One JSONL row -> TRL vision prompt/completion example (one image placeholder).
+
+    The prompt/completion split makes TRL compute loss on the JSON answer only, not on the
+    system prompt or the ~250 image tokens.
+    """
+    from PIL import Image  # lazy: --help works without pillow
+
+    with Image.open(row["image"]) as im:
+        image = im.convert("RGB")
     return {
-        "images": [Image.open(row["image"]).convert("RGB")],
-        "messages": [
+        "images": [image],
+        "prompt": [
             {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
             {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": USER_PROMPT}]},
+        ],
+        "completion": [
             {"role": "assistant", "content": [{"type": "text", "text": json.dumps(row["label"])}]},
         ],
     }
 
 
 def main() -> None:
-    rows = [json.loads(line) for line in open("data/teacher/train.jsonl")]
-    ds = Dataset.from_list([to_example(r) for r in rows])
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--base", default="Qwen/Qwen2.5-VL-7B-Instruct")
+    ap.add_argument("--train", default="data/teacher/train.jsonl")
+    ap.add_argument("--out", default="adapters/context")
+    ap.add_argument("--epochs", type=float, default=2)
+    ap.add_argument("--lr", type=float, default=1e-4)
+    ap.add_argument("--rank", type=int, default=16, help="LoRA rank; vLLM needs --max-lora-rank >= this")
+    ap.add_argument("--batch", type=int, default=4, help="per-device batch size")
+    ap.add_argument("--grad-accum", type=int, default=4)
+    ap.add_argument("--max-pixels", type=int, default=448 * 448, help="processor image budget (pixels)")
+    a = ap.parse_args()
 
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(BASE, torch_dtype="bfloat16")
-    processor = AutoProcessor.from_pretrained(BASE, max_pixels=448 * 448)
-    peft_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM",
+    # lazy: --help and unit tests work without torch/transformers/trl/peft
+    import torch
+    from datasets import Dataset
+    from peft import LoraConfig
+    from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+    from trl import SFTConfig, SFTTrainer
+
+    with open(a.train) as f:
+        rows = [json.loads(line) for line in f if line.strip()]
+    ds = Dataset.from_list([to_example(r) for r in rows])
+    print(f"{len(ds)} training examples from {a.train}")
+
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(a.base, dtype=torch.bfloat16)
+    processor = AutoProcessor.from_pretrained(a.base, max_pixels=a.max_pixels)
+    peft_config = LoraConfig(r=a.rank, lora_alpha=2 * a.rank, lora_dropout=0.05, task_type="CAUSAL_LM",
                              target_modules=["q_proj", "k_proj", "v_proj", "o_proj"])  # language model only
-    args = SFTConfig(output_dir="adapters/context", num_train_epochs=2,
-                     per_device_train_batch_size=4, gradient_accumulation_steps=4,
-                     learning_rate=1e-4, bf16=True, logging_steps=10, save_strategy="epoch",
+    args = SFTConfig(output_dir=a.out, num_train_epochs=a.epochs,
+                     per_device_train_batch_size=a.batch, gradient_accumulation_steps=a.grad_accum,
+                     learning_rate=a.lr, bf16=True, logging_steps=10, save_strategy="epoch",
                      gradient_checkpointing=True, max_length=None, report_to="none")
     trainer = SFTTrainer(model=model, args=args, train_dataset=ds,
                          processing_class=processor, peft_config=peft_config)
     trainer.train()
-    trainer.save_model("adapters/context")
+    trainer.save_model(a.out)
+    print(f"adapter saved to {a.out}")
 
 
 if __name__ == "__main__":
     main()
 ```
 
-**Step 3: Run**
+Run: `pytest tests/test_train_lora.py -v` → 2 passed; `python scripts/train_lora.py --help` works without torch.
+
+**Step 4: Run** (defaults: `--base Qwen/Qwen2.5-VL-7B-Instruct --train data/teacher/train.jsonl --out adapters/context --epochs 2 --lr 1e-4 --rank 16 --batch 4 --grad-accum 4 --max-pixels 200704`)
 ```bash
 tmux new -s lora
 python scripts/train_lora.py 2>&1 | tee results/lora_train.log
 ```
-Expected: loss decreasing in the logs, and `adapters/context/adapter_config.json` exists at the end. If it errors within 20 minutes, switch to the HP Med VLM script fallback. Don't debug TRL for more than 45 minutes; the cut line is serving the base model.
+Expected: loss decreasing in the logs, and `adapters/context/adapter_config.json` exists at the end. If it runs out of memory, try `--batch 2 --grad-accum 8`. If it errors within 20 minutes, switch to the HP Med VLM script fallback. Don't debug TRL for more than 45 minutes; the cut line is serving the base model. If you change `--rank`, vLLM's `--max-lora-rank` (Task 24 Step 1) must be at least that value.
 
-**Step 4: Commit**
+**Step 5: Commit**
 ```bash
-git add scripts/train_lora.py && git commit -m "feat: LoRA distillation script"
+git add scripts/train_lora.py tests/test_train_lora.py requirements-dev.txt
+git commit -m "feat: LoRA distillation script"
 ```
 
 ---
@@ -1772,7 +2277,7 @@ def parse_open_meteo(data: dict) -> dict:
 def fetch_forecast(lat: float, lon: float, hours: int = 6, timeout_s: float = 3.0) -> dict:
     params = {"latitude": lat, "longitude": lon,
               "hourly": "temperature_2m,wind_speed_10m,wind_direction_10m",
-              "wind_speed_unit": "mph", "forecast_hours": hours}
+              "wind_speed_unit": "mph", "forecast_hours": hours, "timezone": "auto"}
     r = httpx.get(OPEN_METEO_URL, params=params, timeout=timeout_s)
     r.raise_for_status()
     return parse_open_meteo(r.json())
@@ -1949,7 +2454,7 @@ git add sentinel/escalation.py tests/test_escalation.py && git commit -m "feat: 
 
 **Files:**
 - Create: `sentinel/replayer.py`, `sentinel/detector.py`
-- Test: `tests/test_replayer.py`
+- Test: `tests/test_replayer.py`, `tests/test_detector.py`
 
 **Step 1: Write the failing test**
 
@@ -1958,6 +2463,7 @@ import itertools
 
 import cv2
 import numpy as np
+import pytest
 
 from sentinel.replayer import frames
 
@@ -1973,6 +2479,16 @@ def test_image_dir_no_loop(tmp_path):
     for i in range(3):
         cv2.imwrite(str(tmp_path / f"{i:03d}.jpg"), np.zeros((10, 10, 3), np.uint8))
     assert len(list(frames(str(tmp_path), fps=2, loop=False))) == 3
+
+
+def test_empty_dir_raises(tmp_path):
+    with pytest.raises(ValueError):
+        next(frames(str(tmp_path), fps=2))
+
+
+def test_missing_video_raises(tmp_path):
+    with pytest.raises(ValueError):
+        next(frames(str(tmp_path / "nope.mp4"), fps=2))
 ```
 
 **Step 2: Run to verify it fails**
@@ -1997,6 +2513,8 @@ def frames(source: str, fps: float, loop: bool = True) -> Iterator[np.ndarray]:
     path = Path(source)
     if path.is_dir():
         files = sorted(p for p in path.iterdir() if p.suffix.lower() in IMAGE_EXTS)
+        if not files:
+            raise ValueError(f"no images in {source}")
         while True:
             for f in files:
                 img = cv2.imread(str(f))
@@ -2005,11 +2523,15 @@ def frames(source: str, fps: float, loop: bool = True) -> Iterator[np.ndarray]:
             if not loop:
                 return
     cap = cv2.VideoCapture(str(path))
+    if not cap.isOpened():
+        raise ValueError(f"cannot open video {source}")
     step = max(1, round((cap.get(cv2.CAP_PROP_FPS) or 30) / fps))
     i = 0
     while True:
         ok, img = cap.read()
         if not ok:
+            if i == 0:
+                raise ValueError(f"no readable frames in {source}")
             if not loop:
                 return
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -2019,19 +2541,86 @@ def frames(source: str, fps: float, loop: bool = True) -> Iterator[np.ndarray]:
         i += 1
 ```
 
-**Step 4: Implement `sentinel/detector.py`** (integration-tested on the Nano, no unit test)
+**Step 4: Implement `sentinel/detector.py`** (unit-tested with a fake model; real weights integration-tested on the Nano)
+
+`classes` enables the YOLO-World zero-shot baseline (Task 4b); `model` lets tests inject a fake.
 
 ```python
-"""Stage 1: YOLO smoke/fire detector."""
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+from sentinel.detector import YoloDetector
+from sentinel.schema import Detection
+
+
+class _Seq:
+    def __init__(self, values):
+        self.values = values
+
+    def tolist(self):
+        return self.values
+
+
+class FakeModel:
+    def __init__(self):
+        self.classes, self.predict_kwargs = None, None
+
+    def set_classes(self, classes):
+        self.classes = classes
+
+    def predict(self, frame, **kwargs):
+        self.predict_kwargs = kwargs
+        boxes = SimpleNamespace(xyxy=_Seq([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]),
+                                conf=_Seq([0.9, 0.5]), cls=_Seq([0.0, 1.0]))
+        return [SimpleNamespace(names={0: "smoke", 1: "fire"}, boxes=boxes)]
+
+
+def test_detector_builds_detections_from_result():
+    model = FakeModel()
+    det = YoloDetector("unused.pt", conf=0.3, imgsz=320, model=model)
+    out = det(np.zeros((10, 10, 3), np.uint8))
+    assert out == [Detection("smoke", 0.9, (1.0, 2.0, 3.0, 4.0)), Detection("fire", 0.5, (5.0, 6.0, 7.0, 8.0))]
+    assert model.predict_kwargs == {"conf": 0.3, "imgsz": 320, "verbose": False}
+
+
+def test_set_classes_only_when_given():
+    plain = FakeModel()
+    YoloDetector("unused.pt", model=plain)
+    assert plain.classes is None
+    world = FakeModel()
+    YoloDetector("yolov8s-worldv2.pt", classes=["smoke", "fire"], model=world)
+    assert world.classes == ["smoke", "fire"]
+
+
+def test_classes_require_yolo_world_model():
+    class PlainModel:
+        def predict(self, frame, **kwargs):
+            return []
+
+    with pytest.raises(ValueError, match="YOLO-World"):
+        YoloDetector("models/smoke_yolo.pt", classes=["smoke", "fire"], model=PlainModel())
+```
+
+```python
+"""Stage 1: YOLO smoke/fire detector (fine-tuned YOLO, or YOLO-World zero-shot with text classes)."""
 import numpy as np
 
 from sentinel.schema import Detection
 
 
 class YoloDetector:
-    def __init__(self, weights: str, conf: float = 0.25, imgsz: int = 640):
-        from ultralytics import YOLO  # imported lazily so laptop tests don't need torch
-        self.model = YOLO(weights)
+    def __init__(self, weights: str, conf: float = 0.25, imgsz: int = 640,
+                 classes: list[str] | None = None, model=None):
+        if model is None:
+            from ultralytics import YOLO  # imported lazily so laptop tests don't need torch
+            model = YOLO(weights)
+        self.model = model
+        if classes and not hasattr(self.model, "set_classes"):
+            raise ValueError("detector_classes requires a YOLO-World checkpoint")
+        if classes:
+            self.model.set_classes(classes)  # YOLO-World: prompt order defines class ids
         self.conf = conf
         self.imgsz = imgsz
 
@@ -2043,8 +2632,8 @@ class YoloDetector:
 
 **Step 5: Run tests, then a Nano smoke test**
 
-Run: `pytest tests/test_replayer.py -v`
-Expected: 2 passed
+Run: `pytest tests/test_replayer.py tests/test_detector.py -v`
+Expected: 7 passed
 
 On the Nano:
 ```bash
@@ -2054,7 +2643,7 @@ Expected: a list of `Detection(...)`, possibly empty for a negative image.
 
 **Step 6: Commit**
 ```bash
-git add sentinel/replayer.py sentinel/detector.py tests/test_replayer.py
+git add sentinel/replayer.py sentinel/detector.py tests/test_replayer.py tests/test_detector.py
 git commit -m "feat: frame replayer and YOLO detector wrapper"
 ```
 
@@ -2158,6 +2747,58 @@ def test_one_vlm_call_per_event_not_per_frame():
 def test_monitor_finalizes_after_max_rechecks():
     _, _, esc = run(ctx(), steady() + [(32, [SMALL]), (62, [SMALL])])
     assert [s for s, _ in esc.handled] == [Severity.MONITOR]
+
+
+def test_single_missed_detection_on_recheck_does_not_fake_growth():
+    _, _, esc = run(ctx(), steady() + [(32, []), (62, [SMALL])])
+    assert [s for s, _ in esc.handled] == [Severity.MONITOR]
+
+
+def test_persistent_fire_alerts_once_until_smoke_clears():
+    feed = {"dets": [SMALL]}
+    esc = RecordingEscalator()
+    p = Pipeline({"t1": TOWER}, lambda f: feed["dets"], FakeVLM(ctx(near_structures=True)), esc,
+                 Settings(min_frames=3, cooldown_s=60))
+    for t in range(300):
+        p.process("t1", FRAME, now=t)
+    assert [s for s, _ in esc.handled] == [Severity.ALERT]
+    feed["dets"] = []
+    for t in range(300, 361):
+        p.process("t1", FRAME, now=t)
+    feed["dets"] = [SMALL]
+    for t in range(361, 364):
+        p.process("t1", FRAME, now=t)
+    assert [s for s, _ in esc.handled] == [Severity.ALERT, Severity.ALERT]
+
+
+def test_vlm_exception_uses_fallback_path():
+    class RaisingVLM:
+        def classify(self, jpeg):
+            raise RuntimeError("boom")
+
+    esc = RecordingEscalator()
+    schedule = steady() + [(32, [BIG])]
+    dets = iter([d for _, d in schedule])
+    p = Pipeline({"t1": TOWER}, lambda frame: next(dets), RaisingVLM(), esc,
+                 Settings(min_frames=3, recheck_s=30, max_rechecks=2, cooldown_s=0))
+    for t, _ in schedule:
+        p.process("t1", FRAME, now=t)
+    severity, report = esc.handled[0]
+    assert severity == Severity.ALERT and report["source_type"] == "unknown"
+    assert p.metrics.counters["vlm_failures"] == 1
+
+
+def test_latch_expires_cooldown_after_last_smoke_even_if_smoke_returns():
+    feed = {"dets": [SMALL]}
+    esc = RecordingEscalator()
+    p = Pipeline({"t1": TOWER}, lambda f: feed["dets"], FakeVLM(ctx(near_structures=True)), esc,
+                 Settings(min_frames=3, cooldown_s=60))
+    for t in range(300):
+        p.process("t1", FRAME, now=t)
+    assert [s for s, _ in esc.handled] == [Severity.ALERT]
+    for t in range(400, 403):  # no frames processed in between; smoke is back
+        p.process("t1", FRAME, now=t)
+    assert [s for s, _ in esc.handled] == [Severity.ALERT, Severity.ALERT]
 ```
 
 **Step 2: Run to verify it fails**
@@ -2170,8 +2811,11 @@ Expected: FAIL, `ModuleNotFoundError`
 ```python
 """Stage orchestration: detect → gate → context VLM → trend → severity → escalate."""
 import base64
+import logging
 import time
+import threading
 import uuid
+from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
@@ -2185,6 +2829,8 @@ from sentinel.schema import ContextResult, Detection, Severity
 from sentinel.severity import assess, fallback_severity
 from sentinel.trend import classify_trend
 from sentinel.zones import in_any_zone
+
+AREA_WINDOW = 6  # frames (~3 s at 2 fps): one missed detection must not read as a trend
 
 
 @dataclass
@@ -2228,24 +2874,39 @@ class Pipeline:
         self.latest: dict[str, Detection | None] = {}
         self.last_frame: dict[str, tuple[np.ndarray, Detection | None]] = {}
         self.burn_towers: set[str] = set()
+        self.recent_area: dict[str, deque] = {}
+        self.latched: dict[str, float] = {}  # tower -> last time smoke was seen after an ALERT
+        self.lock = threading.Lock()  # guards state read by the dashboard; released during the VLM call
 
+    # Single writer: only run_loop's thread may call process().
     def process(self, tower_id: str, frame: np.ndarray, now: float) -> None:
-        self.metrics.inc("frames")
         t0 = time.perf_counter()
         dets = self.detector(frame)
-        self.metrics.time("detect_ms", (time.perf_counter() - t0) * 1000)
-        strong = [d for d in dets if d.conf >= self.s.min_conf]
-        best = max(strong, key=lambda d: d.conf, default=None)
-        self.latest[tower_id] = best
-        self.last_frame[tower_id] = (frame, best)
+        detect_ms = (time.perf_counter() - t0) * 1000
+        with self.lock:
+            self.metrics.inc("frames")
+            self.metrics.time("detect_ms", detect_ms)
+            strong = [d for d in dets if d.conf >= self.s.min_conf]
+            best = max(strong, key=lambda d: d.conf, default=None)
+            self.latest[tower_id] = best
+            self.last_frame[tower_id] = (frame, best)
+            self.recent_area.setdefault(tower_id, deque(maxlen=AREA_WINDOW)).append(
+                best.area if best else 0.0)
 
-        ev = self.active.get(tower_id)
-        if ev is None:
-            candidate = self.gate.update(tower_id, dets, now)
-            if candidate is not None:
-                self._open(tower_id, frame, candidate, now)
-        elif now >= ev.next_check_at:
-            self._recheck(ev, now)
+            ev = self.active.get(tower_id)
+            if ev is None:
+                if tower_id in self.latched:  # same fire already alerted: wait for it to clear
+                    if now - self.latched[tower_id] >= self.s.cooldown_s:
+                        del self.latched[tower_id]  # then fall through to the gate
+                    else:
+                        if best is not None:
+                            self.latched[tower_id] = now
+                        return
+                candidate = self.gate.update(tower_id, dets, now)
+                if candidate is not None:
+                    self._open(tower_id, frame, candidate, now)
+            elif now >= ev.next_check_at:
+                self._recheck(ev, now)
 
     def _open(self, tower_id: str, frame: np.ndarray, det: Detection, now: float) -> None:
         self.metrics.inc("candidates")
@@ -2257,11 +2918,20 @@ class Pipeline:
             crop = crop_box(frame, det.box, self.s.crop_pad, self.s.crop_max_side)
         thumb = base64.b64encode(to_jpeg(crop_box(frame, det.box, 0.5, 256), 70)).decode()
         ev = Event(id=uuid.uuid4().hex[:12], tower_id=tower_id, opened_at=now,
-                   confidence=det.conf, last_area=det.area, thumbnail_b64=thumb,
+                   confidence=det.conf, last_area=max(self.recent_area[tower_id]), thumbnail_b64=thumb,
                    in_zone=in_any_zone(det.box, tower.benign_zones))
 
+        self.active[tower_id] = ev  # visible on the dashboard as "classifying…"
         t0 = time.perf_counter()
-        ev.ctx, tokens = self.vlm.classify(to_jpeg(crop))
+        self.lock.release()
+        try:
+            ctx, tokens = self.vlm.classify(to_jpeg(crop))
+        except Exception:
+            logging.getLogger(__name__).exception("VLM classify raised")
+            ctx, tokens = None, 0
+        finally:
+            self.lock.acquire()
+        ev.ctx = ctx
         self.metrics.time("vlm_ms", (time.perf_counter() - t0) * 1000)
         self.metrics.inc("vlm_calls")
         self.metrics.inc("vlm_tokens", tokens)
@@ -2270,17 +2940,17 @@ class Pipeline:
 
         severity = self._assess(ev, trend=None)
         if severity in (Severity.ALERT, Severity.IGNORE):
+            del self.active[tower_id]
             self._finalize(ev, severity, now)
             return
         ev.severity = severity  # provisional until the trend re-check
         ev.next_check_at = now + self.s.recheck_s
-        self.active[tower_id] = ev
 
     def _recheck(self, ev: Event, now: float) -> None:
-        current = self.latest.get(ev.tower_id)
-        area = current.area if current else 0.0
+        area = max(self.recent_area[ev.tower_id])
         ev.trend = classify_trend(ev.last_area, area)
-        ev.last_area = area
+        if area > 0:
+            ev.last_area = area
         ev.rechecks += 1
         severity = self._assess(ev, ev.trend)
         if severity == Severity.MONITOR and ev.rechecks < self.s.max_rechecks:
@@ -2302,13 +2972,15 @@ class Pipeline:
         self.metrics.inc(f"severity_{severity.name}")
         self.metrics.time("decision_s", now - ev.opened_at)
         self.history.append(ev)
+        if severity == Severity.ALERT:
+            self.latched[ev.tower_id] = now
         self.escalator.handle(ev.report, severity, now)
 ```
 
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_pipeline.py -v`
-Expected: 7 passed
+Expected: 11 passed
 
 **Step 5: Commit**
 ```bash
@@ -2326,6 +2998,8 @@ git add sentinel/pipeline.py tests/test_pipeline.py && git commit -m "feat: casc
 **Step 1: Write the failing test**
 
 ```python
+import threading
+
 import numpy as np
 from fastapi.testclient import TestClient
 
@@ -2377,6 +3051,31 @@ def test_frame_event_and_feedback(tmp_path):
 
 def test_index_serves_dashboard(tmp_path):
     assert "Wildfire Edge Sentinel" in TestClient(create_app(runtime(tmp_path))).get("/").text
+
+
+def test_state_served_while_vlm_classifies(tmp_path):
+    started, release = threading.Event(), threading.Event()
+
+    class SlowVLM:
+        def classify(self, jpeg):
+            started.set()
+            release.wait(5)
+            return CTX, 300
+
+    rt = runtime(tmp_path)
+    rt.pipeline.vlm = SlowVLM()
+    client = TestClient(create_app(rt))
+    worker = threading.Thread(target=rt.pipeline.process,
+                              args=("t1", np.zeros((100, 100, 3), np.uint8), 0))
+    worker.start()
+    assert started.wait(5)
+    state = client.get("/api/state").json()
+    assert len(state["active"]) == 1 and state["active"][0]["severity"] is None
+    release.set()
+    worker.join(5)
+    assert not worker.is_alive()
+    state = client.get("/api/state").json()
+    assert state["active"] == [] and state["events"][0]["severity"] == "ALERT"
 ```
 
 **Step 2: Run to verify it fails**
@@ -2390,7 +3089,7 @@ Expected: FAIL, `ModuleNotFoundError`
 """Demo dashboard API: live feeds, events, outbox, link toggle, ranger feedback."""
 import json
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -2412,7 +3111,10 @@ class Runtime:
     escalator: Escalator
     link: Link
     feedback_path: Path = Path("data/feedback.jsonl")
-    lock: threading.Lock = field(default_factory=threading.Lock)
+    lock: "threading.Lock | None" = None  # quoted: threading.Lock is a function on Python 3.12
+
+    def __post_init__(self):
+        self.lock = self.lock or self.pipeline.lock
 
 
 class LinkState(BaseModel):
@@ -2563,7 +3265,7 @@ def create_app(rt: Runtime) -> FastAPI:
 **Step 5: Run to verify it passes**
 
 Run: `pytest tests/test_app.py -v`
-Expected: 3 passed
+Expected: 4 passed
 
 **Step 6: Commit**
 ```bash
@@ -2577,11 +3279,13 @@ git commit -m "feat: demo dashboard"
 
 **Files:**
 - Create: `sentinel/main.py`, `scripts/dispatch_stub.py`, `scripts/run_all.sh`
+- Test: `tests/test_main.py`
 
 **Step 1: Implement `sentinel/main.py`**
 
 ```python
 """Wires real components and runs the replay loop + dashboard. `python -m sentinel.main`"""
+import logging
 import threading
 import time
 
@@ -2596,28 +3300,46 @@ from sentinel.metrics import Metrics
 from sentinel.outbox import Outbox
 from sentinel.pipeline import Pipeline
 from sentinel.replayer import frames
-from sentinel.vlm_client import ContextVLM
+from sentinel.vlm_client import ContextVLM, ensure_served
 
 FLUSH_EVERY_S = 2.0
 
 
-def run_loop(rt: Runtime, settings: Settings, stop: threading.Event) -> None:
-    streams = {tid: frames(t.source, settings.fps) for tid, t in rt.pipeline.towers.items()}
+def run_loop(rt: Runtime, streams: dict, settings: Settings, stop: threading.Event) -> None:
+    # flush runs on this thread; Metrics has a single writer.
+    log = logging.getLogger(__name__)
     period = 1.0 / settings.fps
     last_flush = 0.0
     while not stop.is_set():
         tick = time.time()
-        for tid, stream in streams.items():
-            frame = next(stream)
-            with rt.lock:
-                rt.pipeline.process(tid, frame, tick)
+        for tid, stream in list(streams.items()):
+            try:  # isolate per tower: one bad source or frame must not skip the others
+                frame = next(stream)
+                rt.pipeline.process(tid, frame, tick)  # takes pipeline.lock itself; released during the VLM call
+            except StopIteration:  # a non-looping source ran out: drop it instead of logging every tick
+                log.error("tower %s stream ended", tid)
+                streams.pop(tid)
+            except Exception:
+                log.exception("tower %s failed", tid)
         if tick - last_flush >= FLUSH_EVERY_S:
-            with rt.lock:
+            try:
                 if rt.link.online:
                     rt.pipeline.burn_towers = fetch_burn_schedule()
-                rt.escalator.flush(tick)
+                rt.escalator.flush(tick)  # network I/O: never under the lock
+            except Exception:
+                log.exception("burn schedule / outbox flush failed")
             last_flush = tick
         time.sleep(max(0.0, period - (time.time() - tick)))
+
+
+def warn_if_not_served(vlm: ContextVLM, model: str, base_url: str) -> bool:
+    """Warn (don't exit) when the VLM model isn't served: the live demo still runs on the fallback."""
+    try:
+        ensure_served(vlm.client, model, base_url)
+    except SystemExit as exc:
+        logging.getLogger(__name__).warning("%s — the demo will run on the detector-only fallback", exc)
+        return False
+    return True
 
 
 def main() -> None:
@@ -2626,12 +3348,16 @@ def main() -> None:
     metrics, link = Metrics(), Link(online=False)
     escalator = Escalator(Outbox(settings.db_path), link, fetch_forecast,
                           lambda payload: send_dispatch(settings.dispatch_url, payload), metrics)
-    pipeline = Pipeline(towers, YoloDetector(settings.detector_weights),
-                        ContextVLM(settings.vlm_model, settings.vlm_base_url, settings.vlm_timeout_s),
-                        escalator, settings, metrics)
+    vlm = ContextVLM(settings.vlm_model, settings.vlm_base_url, settings.vlm_timeout_s)
+    warn_if_not_served(vlm, settings.vlm_model, settings.vlm_base_url)
+    pipeline = Pipeline(towers, YoloDetector(settings.detector_weights, classes=settings.detector_classes),
+                        vlm, escalator, settings, metrics)
     rt = Runtime(pipeline, escalator, link)
     stop = threading.Event()
-    threading.Thread(target=run_loop, args=(rt, settings, stop), daemon=True).start()
+    streams = {tid: frames(t.source, settings.fps) for tid, t in towers.items()}
+    for stream in streams.values():
+        next(stream)  # generators run lazily: surface bad tower sources at startup, not per tick
+    threading.Thread(target=run_loop, args=(rt, streams, settings, stop), daemon=True).start()
     uvicorn.run(create_app(rt), host="0.0.0.0", port=settings.dashboard_port)
 
 
@@ -2639,10 +3365,148 @@ if __name__ == "__main__":
     main()
 ```
 
+Test the loop and the VLM pre-flight warning without a detector, VLM or network (`tests/test_main.py`):
+
+```python
+import itertools
+import threading
+import time
+from types import SimpleNamespace
+
+import numpy as np
+
+from sentinel.config import Settings
+from sentinel.escalation import Link
+from sentinel.main import run_loop, warn_if_not_served
+
+ZERO_FRAME = np.zeros((10, 10, 3), np.uint8)
+
+
+class FakePipeline:
+    def __init__(self):
+        self.calls, self.called = [], threading.Event()
+
+    def process(self, tower_id, frame, now):
+        self.calls.append((tower_id, now))
+        self.called.set()
+
+
+class FakeEscalator:
+    def __init__(self):
+        self.calls, self.called = [], threading.Event()
+
+    def flush(self, now):
+        self.calls.append(now)
+        self.called.set()
+
+
+def test_run_loop_processes_frames_and_flushes():
+    pipe, esc = FakePipeline(), FakeEscalator()
+    rt = SimpleNamespace(pipeline=pipe, escalator=esc, link=Link())
+    streams = {"t1": itertools.repeat(ZERO_FRAME)}
+    stop = threading.Event()
+    worker = threading.Thread(target=run_loop, args=(rt, streams, Settings(fps=50), stop), daemon=True)
+    worker.start()
+    try:
+        assert pipe.called.wait(5) and esc.called.wait(5)
+    finally:
+        stop.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert pipe.calls[0][0] == "t1" and len(esc.calls) >= 1
+
+
+class FlakyPipeline(FakePipeline):
+    def process(self, tower_id, frame, now):
+        if tower_id == "t1":
+            raise RuntimeError("bad tower")
+        super().process(tower_id, frame, now)
+
+
+def test_failing_tower_does_not_stall_others():
+    pipe, esc = FlakyPipeline(), FakeEscalator()
+    rt = SimpleNamespace(pipeline=pipe, escalator=esc, link=Link())
+    streams = {"t1": itertools.repeat(ZERO_FRAME), "t2": itertools.repeat(ZERO_FRAME)}
+    stop = threading.Event()
+    worker = threading.Thread(target=run_loop, args=(rt, streams, Settings(fps=50), stop), daemon=True)
+    worker.start()
+    try:
+        assert pipe.called.wait(5) and esc.called.wait(5)
+    finally:
+        stop.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert {tid for tid, _ in pipe.calls} == {"t2"} and len(esc.calls) >= 1
+
+
+def test_ended_stream_is_dropped_and_logged_once(caplog):
+    pipe, esc = FakePipeline(), FakeEscalator()
+    rt = SimpleNamespace(pipeline=pipe, escalator=esc, link=Link())
+    dead = iter([ZERO_FRAME])
+    next(dead)  # primed at startup, now exhausted
+    streams = {"t1": dead, "t2": itertools.repeat(ZERO_FRAME)}
+    stop = threading.Event()
+    worker = threading.Thread(target=run_loop, args=(rt, streams, Settings(fps=50), stop), daemon=True)
+    with caplog.at_level("ERROR", logger="sentinel.main"):
+        worker.start()
+        try:
+            assert pipe.called.wait(5) and esc.called.wait(5)
+            deadline = time.monotonic() + 5
+            while len(pipe.calls) < 3:
+                assert time.monotonic() < deadline, "timed out waiting for 3 pipeline calls"
+                time.sleep(0.01)
+        finally:
+            stop.set()
+            worker.join(5)
+    assert not worker.is_alive() and "t1" not in streams
+    assert {tid for tid, _ in pipe.calls} == {"t2"}
+    ended = [r for r in caplog.records if "stream ended" in r.getMessage()]
+    assert len(ended) == 1 and ended[0].exc_info is None
+
+
+class FakeModels:
+    def __init__(self, ids=(), error=None):
+        self.ids, self.error = list(ids), error
+
+    def list(self):
+        if self.error:
+            raise self.error
+        return SimpleNamespace(data=[SimpleNamespace(id=i) for i in self.ids])
+
+
+def fake_vlm(**kw):
+    return SimpleNamespace(client=SimpleNamespace(models=FakeModels(**kw)))
+
+
+def test_warn_if_not_served_is_quiet_when_served(caplog):
+    with caplog.at_level("WARNING", logger="sentinel.main"):
+        assert warn_if_not_served(fake_vlm(ids=["base", "context"]), "context", "http://x/v1") is True
+    assert not caplog.records
+
+
+def test_warn_if_not_served_warns_when_model_missing(caplog):
+    with caplog.at_level("WARNING", logger="sentinel.main"):
+        assert warn_if_not_served(fake_vlm(ids=["base"]), "context", "http://x/v1") is False
+    msg = caplog.records[-1].getMessage()
+    assert "'context' not served" in msg and "detector-only fallback" in msg
+
+
+def test_warn_if_not_served_warns_when_server_unreachable(caplog):
+    with caplog.at_level("WARNING", logger="sentinel.main"):
+        assert warn_if_not_served(fake_vlm(error=ConnectionError("refused")), "m", "http://x/v1") is False
+    msg = caplog.records[-1].getMessage()
+    assert "cannot list models" in msg and "detector-only fallback" in msg
+```
+
+Run: `pytest tests/test_main.py -v`
+Expected: 6 passed (a tower whose `process` always raises must not stop the others or the outbox flush; an exhausted stream is dropped and logged once; an unserved or unreachable VLM model logs a warning instead of exiting, so the demo still starts on the detector-only fallback). Also `python -c "import sentinel.main"` must work without ultralytics installed.
+
 **Step 2: Implement `scripts/dispatch_stub.py`** (the simulated cloud dispatch center)
 
 ```python
 """Simulated cloud dispatch endpoint. Run: python scripts/dispatch_stub.py"""
+import argparse
+
 import uvicorn
 from fastapi import FastAPI
 
@@ -2664,7 +3528,11 @@ def reports():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=9000)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--port", type=int, default=9000)
+    a = ap.parse_args()
+    uvicorn.run(app, host=a.host, port=a.port)
 ```
 
 **Step 3: `scripts/run_all.sh`**
@@ -2675,16 +3543,21 @@ if __name__ == "__main__":
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source .venv/bin/activate
+mkdir -p results
 python scripts/dispatch_stub.py > results/dispatch.log 2>&1 &
+STUB_PID=$!
+trap 'kill "$STUB_PID" 2>/dev/null || true' EXIT   # stop the dispatch stub when the sentinel exits
 python -m sentinel.main
 ```
 
-**Step 4: Prepare demo sources.** Point `config/towers.json` sources at one FIgLib wildfire sequence (t1) and one benign clip or folder (t2), and add a benign zone polygon on t2 if it contains a stack or campground.
+**Step 4: Prepare demo sources.** Point `config/towers.json` sources at one FIgLib wildfire sequence (t1) and one benign clip or folder (t2), and add a benign zone polygon on t2 if it contains a stack or campground. Set `vlm_model` in `config/settings.json` to the exact served id (`context` once the LoRA adapter is served, otherwise the base id from `/v1/models`).
 
 **Step 5: End-to-end run on the Nano**
 ```bash
-chmod +x scripts/*.sh && mkdir -p results && ./scripts/run_all.sh
+rm -f data/outbox.db   # start the recording from an empty outbox
+chmod +x scripts/*.sh && ./scripts/run_all.sh
 ```
+`run_all.sh` traps EXIT and kills only the dispatch stub's pid, so stopping the sentinel (Ctrl-C) also stops the background stub.
 On the laptop, tunnel and open the dashboard:
 ```bash
 ssh -L 8080:localhost:8080 hpX@<nano-ip>    # then open http://localhost:8080
@@ -2699,9 +3572,44 @@ Verify this checklist by hand:
 
 **Step 6: Commit**
 ```bash
-git add sentinel/main.py scripts/dispatch_stub.py scripts/run_all.sh config/towers.json
+git add sentinel/main.py scripts/dispatch_stub.py scripts/run_all.sh tests/test_main.py config/towers.json
 git commit -m "feat: runtime entrypoint, dispatch stub, end-to-end demo"
 ```
+
+---
+
+### Task 23b: Live model economics dashboard
+
+**Purpose:** a second, read-only page that judges can watch while models run. It shows tokens, tok/s,
+latency, TTFT and KV-cache use for every zrt-served vLLM backend, plus GPU utilisation and unified memory,
+and what the same tokens would cost on a cloud API. With the demo running it adds cascade vs
+cloud-per-frame cost, VLM calls avoided, and bytes sent vs streaming video. All prices are user-entered
+assumptions (defaults from `config/cost_inputs.json`, which are 0).
+
+**Files:**
+- Create: `sentinel/live_metrics.py` (pure: Prometheus parser, histogram quantile, per-model snapshot,
+  rates, economics, `vllm-*.json` discovery, host stats), `sentinel/monitor.py` (FastAPI app, `main()`),
+  `sentinel/static/monitor.html` (inline CSS/JS/SVG, polls `/api/live` every 2 s)
+- Modify: `config/cost_inputs.json` (add `usd_per_mtok_in`, `usd_per_mtok_out`; keep `usd_per_mtok` for
+  `scripts/cost_model.py`)
+- Test: `tests/test_live_metrics.py`, `tests/test_monitor.py`
+
+**Endpoints:** `GET /` (page), `GET /api/live` (models, system, pipeline, economics, prices),
+`POST /api/prices` (session-only overrides, non-negative numbers, unknown keys rejected).
+
+**Run (Nano), view from laptop**
+```bash
+python -m sentinel.monitor --pipeline-url http://localhost:8080/api/state   # 127.0.0.1:8090
+ssh -L 8090:localhost:8090 hp11@<nano-ip>                                  # laptop, then open localhost:8090
+```
+Data sources: `/opt/hp/zrt/run/vllm-<label>.json` and `GET http://localhost/metrics` over
+`vllm-<label>.sock`, `nvidia-smi --query-gpu=utilization.gpu`, and `/proc/meminfo` (GB10 unified memory).
+
+**Verify on the Nano**
+- [ ] Every served model shows as `live`, and its token counters match `curl --unix-socket /opt/hp/zrt/run/vllm-<label>.sock http://localhost/metrics`
+- [ ] tok/s rises during `eval_context.py` or `bench.py` and drops to 0 when idle
+- [ ] GPU utilisation and memory fill in (not "—")
+- [ ] Entering prices updates the cost cards live
 
 ---
 
@@ -2709,6 +3617,7 @@ git commit -m "feat: runtime entrypoint, dispatch stub, end-to-end demo"
 
 **Files:**
 - Create: `scripts/eval_context.py`, `scripts/linear_probe.py`
+- Test: `tests/test_eval_context.py`, `tests/test_linear_probe.py`
 
 **Step 1: Re-serve the student with the adapter** (restart the `vlm` tmux session)
 ```bash
@@ -2718,131 +3627,380 @@ zrt serve hf:Qwen/Qwen2.5-VL-7B-Instruct --host 0.0.0.0 --port 8000 --max-model-
 curl -s localhost:8000/v1/models | python -m json.tool   # expect both base id and "context"
 ```
 
-**Step 2: Write `scripts/eval_context.py`**
+**Step 2: Write the failing test** for the pure scoring function (fake classify, fake image reader, fake clock; no server needed)
 
 ```python
-"""Agreement with teacher labels on the held-out split, plus latency and tokens."""
+import pytest
+
+from scripts.eval_context import GROUP, evaluate
+from sentinel.schema import ContextResult
+
+
+def _label(source_type: str) -> dict:
+    return {"source_type": source_type, "smoke_color": "grey", "attended": "no",
+            "near_structures": False, "near_road": False, "size_estimate": "small",
+            "description": "Smoke on a ridge."}
+
+
+def _row(image: str, source_type: str) -> dict:
+    return {"image": image, "label": _label(source_type)}
+
+
+class FakeClock:
+    """Each classify call advances time by the next step (seconds)."""
+
+    def __init__(self, steps):
+        self.t = 0.0
+        self.steps = list(steps)
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        if self.calls % 2 == 0:  # second read of a pair = after classify
+            self.t += self.steps.pop(0)
+        return self.t
+
+
+def _run(rows, answers, steps, tokens=100):
+    """answers: image bytes -> predicted source_type, or None for a parse failure."""
+    seen = []
+
+    def classify(jpeg):
+        seen.append(jpeg)
+        st = answers[jpeg]
+        return (ContextResult(**_label(st)) if st else None), tokens
+
+    out = evaluate(rows, classify, read_bytes=lambda p: p.encode(), clock=FakeClock(steps))
+    return out, seen
+
+
+def test_accuracy_group_parse_fail_and_per_source():
+    rows = [
+        _row("a.jpg", "wildland"),       # exact
+        _row("b.jpg", "structure"),      # wrong type, same danger group
+        _row("c.jpg", "campfire"),       # parse failure
+        _row("d.jpg", "fog_dust_cloud"),  # wrong group
+    ]
+    answers = {b"a.jpg": "wildland", b"b.jpg": "wildland", b"c.jpg": None, b"d.jpg": "campfire"}
+    out, seen = _run(rows, answers, steps=[0.1, 0.2, 0.3, 0.4])
+
+    assert seen == [b"a.jpg", b"b.jpg", b"c.jpg", b"d.jpg"]
+    assert out["n"] == 4
+    assert out["source_type_acc"] == pytest.approx(0.25)
+    assert out["group_acc"] == pytest.approx(0.5)
+    assert out["parse_fail_rate"] == pytest.approx(0.25)
+    assert out["tokens_per_call"] == pytest.approx(100.0)
+    assert out["latency_ms_p50"] == pytest.approx(250.0)
+    assert out["latency_ms_p95"] == pytest.approx(385.0)
+    assert out["per_source"] == {
+        "wildland": {"n": 1, "correct": 1},
+        "structure": {"n": 1, "correct": 0},
+        "campfire": {"n": 1, "correct": 0},
+        "fog_dust_cloud": {"n": 1, "correct": 0},
+    }
+
+
+def test_per_source_aggregates_repeated_classes():
+    rows = [_row("a.jpg", "campfire"), _row("b.jpg", "campfire"), _row("c.jpg", "wildland")]
+    answers = {b"a.jpg": "campfire", b"b.jpg": "bbq_chimney", b"c.jpg": "wildland"}
+    out, _ = _run(rows, answers, steps=[0.01] * 3)
+    assert out["per_source"]["campfire"] == {"n": 2, "correct": 1}
+    assert out["per_source"]["wildland"] == {"n": 1, "correct": 1}
+    assert out["group_acc"] == pytest.approx(1.0)  # bbq_chimney and campfire are both benign
+
+
+def test_empty_split_raises():
+    with pytest.raises(ValueError, match="empty split"):
+        evaluate([], lambda b: (None, 0), read_bytes=lambda p: b"")
+
+
+def test_group_covers_every_source_type():
+    from typing import get_args
+
+    from sentinel.schema import SourceType
+    assert set(GROUP) == set(get_args(SourceType))
+
+
+def test_output_guard_refuses_existing_file_without_force(tmp_path, capsys):
+    from scripts.eval_context import check_output
+
+    out = tmp_path / "context_x.json"
+    check_output(out, force=False)  # missing: fine
+    out.write_text("{}")
+    with pytest.raises(SystemExit) as exc:
+        check_output(out, force=False)
+    assert exc.value.code == 1
+    assert "--force" in capsys.readouterr().err
+    check_output(out, force=True)  # explicit overwrite: fine
+```
+
+Run: `pytest tests/test_eval_context.py -v`
+Expected: FAIL, `ModuleNotFoundError`
+
+**Step 3: Write `scripts/eval_context.py`.** `evaluate()` is pure and unit-tested; `main()` only wires the served model to it. Any JSONL of `{"image", "label"}` rows works as `--split` (teacher held-out, or a hand-checked gold set).
+
+```python
+"""Score a context VLM against a labeled JSONL split and save results/context_<name>.json.
+
+Rows are {"image": <crop path>, "label": <ContextResult dict>} (scripts/teacher_label.py output,
+or a hand-checked gold set in the same format).
+
+BEFORE: --model "<base id from /v1/models>" --name before_base7b
+AFTER:  --model context --name after_lora7b      (vLLM serving the LoRA adapter as "context")
+"""
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
 import numpy as np
 
-from sentinel.vlm_client import ContextVLM
+from sentinel.vlm_client import ContextVLM, ensure_served
 
 GROUP = {"wildland": "danger", "structure": "danger", "vehicle": "danger",
          "controlled_burn": "benign", "campfire": "benign", "bbq_chimney": "benign",
          "industrial_stack": "benign", "fog_dust_cloud": "lookalike", "unknown": "unknown"}
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--model", required=True)
-    ap.add_argument("--name", required=True)
-    ap.add_argument("--base-url", default="http://localhost:8000/v1")
-    ap.add_argument("--split", default="data/teacher/heldout.jsonl")
-    a = ap.parse_args()
+def check_output(path: Path, force: bool) -> None:
+    """Exit 1 instead of silently overwriting an earlier result (e.g. a BEFORE row)."""
+    if path.exists() and not force:
+        print(f"{path} already exists; pass --force to overwrite it",
+              file=sys.stderr)
+        raise SystemExit(1)
 
-    vlm = ContextVLM(a.model, a.base_url, timeout_s=60)
-    rows = [json.loads(line) for line in open(a.split)]
+
+def evaluate(rows, classify, read_bytes=lambda p: Path(p).read_bytes(), clock=time.perf_counter) -> dict:
+    """Run classify(jpeg) -> (ContextResult | None, tokens) over rows and score it against row labels.
+
+    A parse failure (None) counts as wrong for both accuracies.
+    """
+    rows = list(rows)
+    if not rows:
+        raise ValueError("empty split")
     exact = group = fails = 0
     latencies, tokens = [], []
+    per_source: dict[str, dict[str, int]] = {}
     for r in rows:
-        t0 = time.perf_counter()
-        ctx, tok = vlm.classify(Path(r["image"]).read_bytes())
-        latencies.append((time.perf_counter() - t0) * 1000)
+        jpeg = read_bytes(r["image"])
+        t0 = clock()
+        ctx, tok = classify(jpeg)
+        latencies.append((clock() - t0) * 1000)
         tokens.append(tok)
+        want = r["label"]["source_type"]
+        bucket = per_source.setdefault(want, {"n": 0, "correct": 0})
+        bucket["n"] += 1
         if ctx is None:
             fails += 1
             continue
-        want = r["label"]["source_type"]
-        exact += ctx.source_type == want
+        hit = ctx.source_type == want
+        exact += hit
+        bucket["correct"] += hit
         group += GROUP[ctx.source_type] == GROUP[want]
-    out = {"name": a.name, "n": len(rows), "source_type_acc": exact / len(rows),
-           "group_acc": group / len(rows), "parse_fail_rate": fails / len(rows),
-           "latency_ms_p50": float(np.percentile(latencies, 50)),
-           "latency_ms_p95": float(np.percentile(latencies, 95)),
-           "tokens_per_call": float(np.mean(tokens))}
-    Path("results").mkdir(exist_ok=True)
-    Path(f"results/context_{a.name}.json").write_text(json.dumps(out, indent=2))
-    print(json.dumps(out, indent=2))
+    n = len(rows)
+    return {
+        "n": n,
+        "source_type_acc": exact / n,
+        "group_acc": group / n,
+        "parse_fail_rate": fails / n,
+        "latency_ms_p50": float(np.percentile(latencies, 50)),
+        "latency_ms_p95": float(np.percentile(latencies, 95)),
+        "tokens_per_call": float(np.mean(tokens)),
+        "per_source": per_source,
+    }
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--model", required=True, help='served model id, or "context" for the LoRA adapter')
+    ap.add_argument("--name", required=True, help="result tag, e.g. before_base7b / after_lora7b")
+    ap.add_argument("--base-url", default="http://localhost:8000/v1")
+    ap.add_argument("--split", default="data/teacher/heldout.jsonl")
+    ap.add_argument("--timeout", type=float, default=60, help="per-request timeout, seconds")
+    ap.add_argument("--force", action="store_true", help="overwrite an existing results file")
+    a = ap.parse_args()
+    out = Path("results") / f"context_{a.name}.json"
+    check_output(out, a.force)
+
+    vlm = ContextVLM(a.model, a.base_url, timeout_s=a.timeout)
+    ensure_served(vlm.client, a.model, a.base_url)
+    with open(a.split) as f:
+        rows = [json.loads(line) for line in f if line.strip()]
+    result = {"name": a.name, "model": a.model, "split": a.split, **evaluate(rows, vlm.classify)}
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result, indent=2))
+    print(f"wrote {out}")
 
 
 if __name__ == "__main__":
     main()
 ```
 
-**Step 3: Run base vs adapter (and teacher, if it's still served on :8001)**
-```bash
-python scripts/eval_context.py --model "hf:Qwen/Qwen2.5-VL-7B-Instruct" --name base7b
-python scripts/eval_context.py --model context --name lora7b
-# optional: python scripts/eval_context.py --model <teacher id> --base-url http://localhost:8001/v1 --name teacher
-```
-Expected: `lora7b` group_acc > `base7b` group_acc. That's the headline distillation number. If it's not better, report it honestly and keep the base model.
+Run: `pytest tests/test_eval_context.py -v` → 5 passed.
 
-**Step 4: Write `scripts/linear_probe.py`** (cheap baseline; the first thing to cut)
+**Step 4: Write `scripts/linear_probe.py`** (cheap baseline; the first thing to cut). It reuses `GROUP` from `eval_context.py` and writes the same accuracy keys (`name`, `n`, `source_type_acc`, `group_acc`) plus `latency_ms_per_image`. Test first:
 
 ```python
-"""SigLIP embeddings + logistic regression on teacher source_type labels."""
+import pytest
+
+from scripts.linear_probe import group_accuracy
+
+
+def test_group_accuracy_counts_same_group_as_correct():
+    y_true = ["wildland", "campfire", "fog_dust_cloud", "unknown"]
+    y_pred = ["structure", "bbq_chimney", "wildland", "unknown"]
+    assert group_accuracy(y_true, y_pred) == pytest.approx(0.75)
+
+
+def test_group_accuracy_rejects_bad_input():
+    with pytest.raises(ValueError):
+        group_accuracy([], [])
+    with pytest.raises(ValueError):
+        group_accuracy(["wildland"], ["wildland", "campfire"])
+```
+
+```python
+"""Cheap baseline: SigLIP image embeddings + logistic regression on teacher source_type labels.
+
+Writes results/context_linear_probe.json with the same accuracy keys as scripts/eval_context.py.
+Fast, but it only predicts source_type: no attendance, structures, road or description.
+"""
+import argparse
 import json
 import time
 from pathlib import Path
 
-import numpy as np
-import torch
-from PIL import Image
-from sklearn.linear_model import LogisticRegression
-from transformers import AutoModel, AutoProcessor
+try:
+    from scripts.eval_context import GROUP, check_output
+except ModuleNotFoundError as e:  # run as `python scripts/linear_probe.py`: scripts/ is on sys.path, not the repo root
+    if e.name != "scripts":
+        raise
+    from eval_context import GROUP, check_output
 
-MODEL = "google/siglip-base-patch16-224"
+
+def group_accuracy(y_true, y_pred) -> float:
+    """Fraction of predictions in the same danger/benign/lookalike/unknown group as the label."""
+    y_true, y_pred = list(y_true), list(y_pred)
+    if not y_true or len(y_true) != len(y_pred):
+        raise ValueError("need equal-length, non-empty label lists")
+    return sum(GROUP[t] == GROUP[p] for t, p in zip(y_true, y_pred)) / len(y_true)
 
 
 def load(path):
-    rows = [json.loads(line) for line in open(path)]
+    with open(path) as f:
+        rows = [json.loads(line) for line in f if line.strip()]
     return [r["image"] for r in rows], [r["label"]["source_type"] for r in rows]
 
 
-def embed(paths, model, proc):
-    feats = []
-    for i in range(0, len(paths), 64):
-        imgs = [Image.open(p).convert("RGB") for p in paths[i:i + 64]]
-        with torch.no_grad():
-            f = model.get_image_features(**proc(images=imgs, return_tensors="pt").to("cuda"))
-        feats.append(torch.nn.functional.normalize(f, dim=-1).float().cpu().numpy())
-    return np.concatenate(feats)
-
-
 def main() -> None:
-    model = AutoModel.from_pretrained(MODEL).to("cuda").eval()
-    proc = AutoProcessor.from_pretrained(MODEL)
-    xtr, ytr = load("data/teacher/train.jsonl")
-    xte, yte = load("data/teacher/heldout.jsonl")
-    clf = LogisticRegression(max_iter=2000).fit(embed(xtr, model, proc), ytr)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--train", default="data/teacher/train.jsonl")
+    ap.add_argument("--heldout", default="data/teacher/heldout.jsonl")
+    ap.add_argument("--model", default="google/siglip-base-patch16-224")
+    ap.add_argument("--device", default="cuda", help='"cuda" or "cpu"')
+    ap.add_argument("--force", action="store_true", help="overwrite an existing results file")
+    a = ap.parse_args()
+    path = Path("results") / "context_linear_probe.json"
+    check_output(path, a.force)
+
+    # lazy: --help and unit tests work without torch/transformers/sklearn
+    import numpy as np
+    import torch
+    from PIL import Image
+    from sklearn.linear_model import LogisticRegression
+    from transformers import AutoModel, AutoProcessor
+
+    model = AutoModel.from_pretrained(a.model).to(a.device).eval()
+    proc = AutoProcessor.from_pretrained(a.model)
+
+    def embed(paths):
+        feats = []
+        for i in range(0, len(paths), 64):
+            imgs = [Image.open(p).convert("RGB") for p in paths[i:i + 64]]
+            with torch.no_grad():
+                f = model.get_image_features(**proc(images=imgs, return_tensors="pt").to(a.device))
+            f = getattr(f, "pooler_output", f)  # newer transformers return a model output, not a tensor
+            feats.append(torch.nn.functional.normalize(f, dim=-1).float().cpu().numpy())
+        return np.concatenate(feats)
+
+    xtr, ytr = load(a.train)
+    xte, yte = load(a.heldout)
+    if not xte:
+        raise ValueError("empty split")
+    clf = LogisticRegression(max_iter=2000).fit(embed(xtr), ytr)
     t0 = time.perf_counter()
-    acc = clf.score(embed(xte, model, proc), yte)
+    pred = list(clf.predict(embed(xte)))
     ms = (time.perf_counter() - t0) * 1000 / len(xte)
-    out = {"name": "siglip_linear_probe", "source_type_acc": acc, "latency_ms_per_image": ms}
-    Path("results/context_linear_probe.json").write_text(json.dumps(out, indent=2))
-    print(out)
+
+    out = {
+        "name": "siglip_linear_probe",
+        "model": a.model,
+        "split": a.heldout,
+        "n": len(yte),
+        "source_type_acc": sum(t == p for t, p in zip(yte, pred)) / len(yte),
+        "group_acc": group_accuracy(yte, pred),
+        "latency_ms_per_image": ms,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=2) + "\n")
+    print(json.dumps(out, indent=2))
+    print(f"wrote {path}")
 
 
 if __name__ == "__main__":
     main()
 ```
 
-Run: `python scripts/linear_probe.py`
-Expected: accuracy printed. The comparison you want to show is that it's fast but has no reasoning about attendance, structures or description, which is why the VLM earns its cost.
+Run: `pytest tests/test_linear_probe.py -v` → 2 passed; `python scripts/linear_probe.py --help` works without torch/sklearn.
 
-**Step 5: Switch the runtime to the adapter**, if it won:
+**Step 5: Run the before/after comparison** — see Task 24b for the exact sequence. Expected: `after_lora7b` group_acc > `before_base7b` group_acc. That's the headline distillation number. If it's not better, report it honestly and keep the base model. The linear probe is fast but has no reasoning about attendance, structures or description, which is why the VLM earns its cost.
+
+**Step 6: Switch the runtime to the adapter**, if it won:
 ```json
 {"vlm_model": "context"}
 ```
 
-**Step 6: Commit**
+**Step 7: Commit**
 ```bash
-git add scripts/eval_context.py scripts/linear_probe.py config/settings.json results/context_*.json
-git commit -m "feat: distillation eval and linear-probe baseline"
+git add scripts/eval_context.py tests/test_eval_context.py scripts/linear_probe.py tests/test_linear_probe.py
+git commit -m "feat: context VLM evaluation for before/after comparison"
+# after Task 24b, if the adapter won:
+git add config/settings.json && git commit -m "config: serve the distilled context adapter"
+```
+
+---
+
+### Task 24b: Context VLM before/after evaluation (Nano)
+
+Measure the base student, distill, and measure again on the same held-out split (`data/teacher/heldout.jsonl`, never used for training). BEFORE is base `Qwen/Qwen2.5-VL-7B-Instruct` served on :8000 (Task 2); AFTER is the same base plus the LoRA adapter served as model `context` (Task 24 Step 1). Optional reference rows: the 32B teacher on :8001 (upper bound) and the SigLIP linear probe (cheap floor).
+
+**Fairness note:** accuracy on teacher labels measures distillation (agreement with the 32B teacher), not ground truth; the hand-checked gold split measures real accuracy.
+
+**Step 1: Run the sequence**
+```bash
+# BEFORE (base model, served on :8000 per Task 2)
+python scripts/eval_context.py --model "<base id from /v1/models>" --name before_base7b
+# optional upper bound: teacher on :8001 (only while it is still served: run this before Task 16 Step 1 shuts it down, or re-serve it)
+python scripts/eval_context.py --model "<teacher id>" --base-url http://localhost:8001/v1 --name ref_teacher32b
+# TRAIN (done in Task 16; skip if adapters/context/adapter_config.json exists)
+python scripts/train_lora.py
+# AFTER: stop the base-7B `vlm` server on :8000 first
+# AFTER (re-serve with --enable-lora --lora-modules context=$HOME/sentinel/adapters/context per Task 24 Step 1)
+python scripts/eval_context.py --model context --name after_lora7b
+# cheap baseline
+python scripts/linear_probe.py
+# optional gold set: same JSONL format, hand-checked
+python scripts/eval_context.py --model context --split data/gold/gold.jsonl --name after_lora7b_gold
+```
+Expected: `results/context_before_base7b.json`, `results/context_after_lora7b.json` (and the optional rows), each with `n`, `source_type_acc`, `group_acc`, `parse_fail_rate`, `latency_ms_p50`, `latency_ms_p95`, `tokens_per_call`, `per_source`; `results/context_linear_probe.json` with `n`, `source_type_acc`, `group_acc`, `latency_ms_per_image`. For a gold comparison, also run the BEFORE model on the gold split (`--name before_base7b_gold`). Put the rows side by side in `results/context.md`. Both eval scripts refuse to overwrite an existing results file (exit 1); pass `--force` to re-run a row on purpose.
+
+**Step 2: Commit**
+```bash
+git add results/context_*.json results/context.md
+git commit -m "results: context VLM before/after"
 ```
 
 ---
@@ -2853,116 +4011,242 @@ git commit -m "feat: distillation eval and linear-probe baseline"
 
 **Files:**
 - Create: `scripts/bench.py`, `data/bench/clips.csv` (not committed, since `data/` is ignored; copy it into `results/clips.csv`)
+- Test: `tests/test_bench.py`
 
-**Step 1: Build `clips.csv`**, with 20–40 rows: FIgLib and wildfire sequences labeled `alert`, and campfire, fog, stack and BBQ labeled `no_alert`.
+**Step 1: Build `clips.csv`**, with 20–40 rows: FIgLib and wildfire sequences labeled `alert`, and campfire, fog, stack and BBQ labeled `no_alert`. `read_clips` rejects any other label before the (slow) replay starts.
 ```
 path,label
 data/demo/figlib_seq01,alert
 data/demo/benign_campfire01,no_alert
 ```
 
-**Step 2: Write `scripts/bench.py`**
+**Step 2: Tests** (`tests/test_bench.py`, laptop, no GPU): a fake detector returning fixed `Detection`s, fake VLMs returning fixed `ContextResult`s, and tiny image-folder clips written with `cv2.imwrite` into `tmp_path`. They cover `run_clip` (ALERT, nothing detected, a still-provisional MONITOR at clip end), `score` (confusion counts, zero-division, bad labels), `bench` end to end (precision/recall, tokens and frames per VLM call, time-to-decision), the detector-only ablation, `apply_overrides` for the before/after switches, and `read_clips`.
+
+Run: `pytest tests/test_bench.py -v` → 13 passed (including the `--recheck-s` override).
+
+**Step 3: `scripts/bench.py`** (pure `run_clip` / `score` / `summarize` / `bench`; the detector and VLM are built only in `main()`, so `--help` and the tests need no ultralytics)
 
 ```python
-"""Offline benchmark with a simulated clock (deterministic, no sleeps).
-Ablations: --detector-only, --full-frame, --model <base|context>."""
+"""End-to-end benchmark over labeled clips with a simulated clock (deterministic, no sleeps).
+Writes results/bench_<name>.json. Run on the Nano with sentinel.main stopped (frees the GPU).
+
+clips.csv rows are `path,label` where path is a video or a folder of time-ordered images and
+label is `alert` (a fire that should page dispatch) or `no_alert` (campfire, fog, stack, BBQ...).
+
+BEFORE: --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model "<base id>" --recheck-s 5
+AFTER:  --name after  --detector-weights models/smoke_yolo.pt --model context --recheck-s 5
+Use the same --recheck-s for both runs, below the clip length, so a growing fire can escalate in-clip.
+Ablations: --detector-only (any candidate = alert, no VLM), --full-frame (no crop).
+"""
 import argparse
 import csv
 import json
 from dataclasses import replace
 from pathlib import Path
 
-from sentinel.config import Tower, load_settings
-from sentinel.detector import YoloDetector
+from sentinel.config import Settings, Tower, load_settings
 from sentinel.escalation import Escalator, Link
 from sentinel.metrics import Metrics
 from sentinel.outbox import Outbox
 from sentinel.pipeline import Pipeline
 from sentinel.replayer import frames
 from sentinel.schema import Severity
-from sentinel.vlm_client import ContextVLM
+
+try:
+    from scripts.eval_context import check_output
+except ModuleNotFoundError as e:  # run as `python scripts/bench.py`: scripts/ is on sys.path, not the repo root
+    if e.name != "scripts":
+        raise
+    from eval_context import check_output
+
+LABELS = {"alert", "no_alert"}
 
 
 class NullVLM:
+    """Detector-only ablation: no context model; the pipeline falls back to trend rules."""
+
     def classify(self, jpeg):
         return None, 0
 
 
-def run_clip(path: str, settings, detector, vlm, metrics: Metrics) -> list:
+def read_clips(path) -> list[dict]:
+    """Reads clips.csv and checks labels up front, so a typo fails before an hour of replay."""
+    with open(path, newline="") as f:
+        rows = [{"path": r["path"].strip(), "label": (r.get("label") or "").strip()}
+                for r in csv.DictReader(f) if r.get("path") and r["path"].strip()]
+    bad = [r for r in rows if r["label"] not in LABELS]
+    if bad:
+        raise ValueError(f"labels must be one of {sorted(LABELS)}; bad rows: {bad[:3]}")
+    return rows
+
+
+def run_clip(path: str, settings: Settings, detector, vlm, metrics: Metrics) -> list[Severity]:
+    """Replay one clip through a fresh pipeline; returns final severities plus any still-provisional one."""
     tower = Tower(id="bench", name=Path(path).stem, lat=37.0, lon=-121.0, source=path)
     esc = Escalator(Outbox(":memory:"), Link(), lambda *a: {}, lambda p: None, metrics)
     pipe = Pipeline({"bench": tower}, detector, vlm, esc, settings, metrics)
     for i, frame in enumerate(frames(path, settings.fps, loop=False)):
         pipe.process("bench", frame, now=i / settings.fps)
-    return [e.severity for e in pipe.history] + [e.severity for e in pipe.active.values()]
+    return ([e.severity for e in pipe.history]
+            + [e.severity for e in pipe.active.values() if e.severity is not None])
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--clips", default="data/bench/clips.csv")
-    ap.add_argument("--name", required=True)
-    ap.add_argument("--model")
-    ap.add_argument("--full-frame", action="store_true")
-    ap.add_argument("--detector-only", action="store_true")
-    a = ap.parse_args()
-
-    s = load_settings()
-    s = replace(s, full_frame=a.full_frame, vlm_model=a.model or s.vlm_model, vlm_timeout_s=30)
-    detector = YoloDetector(s.detector_weights)
-    vlm = NullVLM() if a.detector_only else ContextVLM(s.vlm_model, s.vlm_base_url, s.vlm_timeout_s)
-
-    total, clips = Metrics(), []
+def score(rows: list[dict], predictions: list[bool]) -> dict:
+    """Clip-level confusion counts. A clip is positive if it produced an ALERT."""
+    if len(rows) != len(predictions):
+        raise ValueError(f"{len(rows)} clips but {len(predictions)} predictions")
     tp = fp = fn = tn = 0
-    for row in csv.DictReader(open(a.clips)):
-        m = Metrics()
-        severities = run_clip(row["path"], s, detector, vlm, m)
-        predicted = m.counters["candidates"] > 0 if a.detector_only else Severity.ALERT in severities
+    for row, predicted in zip(rows, predictions):
+        if row["label"] not in LABELS:
+            raise ValueError(f"label must be one of {sorted(LABELS)}, got {row['label']!r}")
         actual = row["label"] == "alert"
         tp += predicted and actual
         fp += predicted and not actual
         fn += actual and not predicted
         tn += not predicted and not actual
-        clips.append({"path": row["path"], "label": row["label"], "predicted_alert": predicted,
-                      "severities": [x.name for x in severities if x is not None]})
-        total.merge(m)
+    return {"tp": tp, "fp": fp, "fn": fn, "tn": tn,
+            "precision": tp / (tp + fp) if tp + fp else 0.0,
+            "recall": tp / (tp + fn) if tp + fn else 0.0,
+            "false_alarms": fp, "missed": fn}
 
-    summary = total.summary()
-    calls = summary.get("vlm_calls", 0)
-    out = {"name": a.name, "precision": tp / (tp + fp) if tp + fp else 0.0,
-           "recall": tp / (tp + fn) if tp + fn else 0.0, "false_alarms": fp, "missed": fn,
-           "tokens_per_vlm_call": summary.get("vlm_tokens", 0) / calls if calls else 0,
-           "frames_per_vlm_call": summary.get("frames", 0) / calls if calls else None,
-           "metrics": summary, "clips": clips}
-    Path("results").mkdir(exist_ok=True)
-    Path(f"results/bench_{a.name}.json").write_text(json.dumps(out, indent=2))
-    print(json.dumps({k: out[k] for k in ("name", "precision", "recall", "false_alarms",
-                                          "tokens_per_vlm_call", "frames_per_vlm_call")}, indent=2))
+
+def summarize(name: str, scores: dict, metrics: dict, clips: list[dict], detector_only: bool) -> dict:
+    calls = 0 if detector_only else metrics.get("vlm_calls", 0)
+    return {
+        "name": name,
+        "detector_only": detector_only,
+        "n_clips": len(clips),
+        **scores,
+        "tokens_per_vlm_call": metrics.get("vlm_tokens", 0) / calls if calls else 0,
+        "frames_per_vlm_call": metrics.get("frames", 0) / calls if calls else None,
+        "time_to_decision_s_p50": metrics.get("decision_s_p50"),
+        "time_to_decision_s_p95": metrics.get("decision_s_p95"),
+        "metrics": metrics,
+        "clips": clips,
+    }
+
+
+def bench(name: str, rows: list[dict], settings: Settings, detector, vlm,
+          detector_only: bool = False) -> dict:
+    total, clips, predictions = Metrics(), [], []
+    for row in rows:
+        m = Metrics()
+        severities = run_clip(row["path"], settings, detector, vlm, m)
+        predicted = m.counters["candidates"] > 0 if detector_only else Severity.ALERT in severities
+        predictions.append(predicted)
+        clips.append({"path": row["path"], "label": row["label"], "predicted_alert": predicted,
+                      "severities": [s.name for s in severities],
+                      "frames": m.counters["frames"], "vlm_calls": m.counters["vlm_calls"]})
+        total.merge(m)
+    return summarize(name, score(rows, predictions), total.summary(), clips, detector_only)
+
+
+def apply_overrides(s: Settings, a: argparse.Namespace) -> Settings:
+    classes = [c.strip() for c in a.detector_classes.split(",") if c.strip()] if a.detector_classes else None
+    return replace(
+        s,
+        full_frame=a.full_frame,
+        vlm_model=a.model or s.vlm_model,
+        vlm_timeout_s=a.timeout,
+        recheck_s=a.recheck_s if a.recheck_s is not None else s.recheck_s,
+        detector_weights=a.detector_weights or s.detector_weights,
+        # new weights without classes means a fine-tuned checkpoint: drop any YOLO-World prompts
+        detector_classes=classes if (classes or a.detector_weights) else s.detector_classes,
+    )
+
+
+def parse_args(argv=None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--name", required=True, help="result tag, e.g. before / after / detector_only")
+    ap.add_argument("--clips", default="data/bench/clips.csv")
+    ap.add_argument("--settings", default="config/settings.json")
+    ap.add_argument("--model", help='served VLM id (base id, or "context" for the LoRA adapter)')
+    ap.add_argument("--detector-weights", help="override settings.detector_weights")
+    ap.add_argument("--detector-classes", help="comma-separated YOLO-World prompts in class-id order")
+    ap.add_argument("--full-frame", action="store_true", help="send the whole frame, not the crop")
+    ap.add_argument("--detector-only", action="store_true", help="no VLM: any candidate counts as alert")
+    ap.add_argument("--recheck-s", type=float, default=None,
+                    help="override settings.recheck_s in simulated seconds; set below clip length so growth can escalate")
+    ap.add_argument("--timeout", type=float, default=30, help="per-VLM-request timeout, seconds")
+    ap.add_argument("--force", action="store_true", help="overwrite an existing results file")
+    return ap.parse_args(argv)
+
+
+def main() -> None:
+    a = parse_args()
+    out = Path("results") / f"bench_{a.name}.json"
+    check_output(out, a.force)
+    s = apply_overrides(load_settings(a.settings), a)
+    rows = read_clips(a.clips)
+    if not rows:
+        raise SystemExit(f"no clips in {a.clips}")
+
+    from sentinel.detector import YoloDetector  # ultralytics is only needed on the Nano
+    from sentinel.vlm_client import ContextVLM, ensure_served
+
+    if a.detector_only:
+        vlm = NullVLM()
+    else:
+        vlm = ContextVLM(s.vlm_model, s.vlm_base_url, s.vlm_timeout_s)
+        ensure_served(vlm.client, s.vlm_model, s.vlm_base_url)
+    detector = YoloDetector(s.detector_weights, classes=s.detector_classes)
+    result = bench(a.name, rows, s, detector, vlm, a.detector_only)
+    result["config"] = {"detector_weights": s.detector_weights, "detector_classes": s.detector_classes,
+                        "vlm_model": None if a.detector_only else s.vlm_model,
+                        "full_frame": s.full_frame, "recheck_s": s.recheck_s,
+                        "vlm_timeout_s": s.vlm_timeout_s, "clips": a.clips}
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps({k: result[k] for k in (
+        "name", "precision", "recall", "false_alarms", "missed", "tokens_per_vlm_call",
+        "frames_per_vlm_call", "time_to_decision_s_p50", "time_to_decision_s_p95")}, indent=2))
+    print(f"wrote {out}")
 
 
 if __name__ == "__main__":
     main()
 ```
 
-**Step 3: Run the ablation matrix** (stop `sentinel.main` first to free the GPU)
+Output `results/bench_<name>.json`: `precision`, `recall`, `false_alarms`, `missed` (plus `tp/fp/fn/tn`), `tokens_per_vlm_call`, `frames_per_vlm_call`, `time_to_decision_s_p50/p95` (from the `decision_s` metric), the merged `metrics` summary, per-clip rows and the `config` used (including `recheck_s` and `vlm_timeout_s`). Time to decision is in simulated clip seconds (frames/fps) and excludes VLM latency; an event still MONITOR at clip end counts as not alerted. It refuses to overwrite an existing file (exit 1) unless `--force`. Unless `--detector-only`, it exits before replaying anything if the VLM model id is not listed at `/v1/models`.
+
+**Step 4: Optional ablation matrix** (stop `sentinel.main` first to free the GPU; the before/after pair is Task 25b)
 ```bash
-python scripts/bench.py --name detector_only --detector-only
-python scripts/bench.py --name base_crop  --model "hf:Qwen/Qwen2.5-VL-7B-Instruct"
-python scripts/bench.py --name base_full  --model "hf:Qwen/Qwen2.5-VL-7B-Instruct" --full-frame
-python scripts/bench.py --name lora_crop  --model context
+python scripts/bench.py --name detector_only --detector-only --recheck-s 5
+python scripts/bench.py --name base_full  --model "<base id>" --full-frame --recheck-s 5   # needed by the cost model (Task 26)
+python scripts/bench.py --name lora_full  --model context --full-frame --recheck-s 5
 ```
-Expected results table (fill it in from the output):
+Expected: `detector_only` has the most false alarms and 0 tokens; `*_full` rows cost more tokens per call than the cropped before/after rows. `scripts/compare.py` puts every `bench_*.json` in its end-to-end table.
 
-| Run | Precision | Recall | False alarms | Tokens/VLM call | Frames per VLM call |
-|---|---|---|---|---|---|
-| detector_only | | | ← expect highest | 0 | — |
-| base_full | | | | ← expect highest | |
-| base_crop | | | | | |
-| lora_crop | | | ← expect lowest | | |
+**Step 5: Commit**
+```bash
+git add scripts/bench.py tests/test_bench.py
+git commit -m "feat: end-to-end benchmark with before/after switches"
+```
 
-**Step 4: Commit**
+---
+
+### Task 25b: End-to-end before/after (Nano)
+
+BEFORE is the untuned stack (YOLO-World zero-shot + base Qwen2.5-VL-7B); AFTER is the tuned stack (YOLO11s fine-tuned on D-Fire + the LoRA `context` adapter). Same clips, same settings otherwise. Serve the student with `--enable-lora` (Task 24 Step 1) so both the base id and `context` are available, and stop `sentinel.main` first.
+
+**Files (already committed):** `scripts/compare.py`, `tests/test_compare.py`: reads whichever of `results/detector_*.json`, `results/context_*.json`, `results/bench_*.json` exist and writes `results/before_after.md` with three tables (Detector with a Δ column, Context VLM, End-to-end). Missing files drop their row, empty tables are omitted, and one line lists the expected files not yet produced.
+
+**Step 1: Run**
+```bash
+python scripts/bench.py --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model "<base id>" --recheck-s 5
+python scripts/bench.py --name after  --detector-weights models/smoke_yolo.pt --model context --recheck-s 5
+python scripts/compare.py
+```
+`--recheck-s 5` (simulated seconds; default `recheck_s` is 30) must be below the clip length so a growing fire can escalate on the trend re-check inside the clip; keep it identical for both runs.
+
+Expected: `results/bench_before.json`, `results/bench_after.json` and `results/before_after.md`. YOLO-World needs its CLIP text encoder cached (`scripts/setup_nano.sh` warms it while online).
+
+**Step 2: Commit the results**
 ```bash
 cp data/bench/clips.csv results/clips.csv
-git add scripts/bench.py results/ && git commit -m "feat: benchmark harness and results"
+git add results/bench_before.json results/bench_after.json results/before_after.md results/clips.csv
+git commit -m "results: end-to-end before/after"
 ```
 
 ---
@@ -3012,8 +4296,8 @@ Expected: FAIL, `ModuleNotFoundError: No module named 'scripts.cost_model'`
 ```python
 """Per-day cost/feasibility: cloud-every-frame vs local-every-frame vs our cascade.
 Measured inputs come from results/bench_*.json; prices are filled from current published rates."""
+import argparse
 import json
-import sys
 
 DAY_S = 86_400
 
@@ -3039,7 +4323,10 @@ def compare(p: dict) -> list[dict]:
 
 
 if __name__ == "__main__":
-    params = json.load(open(sys.argv[1] if len(sys.argv) > 1 else "config/cost_inputs.json"))
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("inputs", nargs="?", default="config/cost_inputs.json", help="cost inputs JSON")
+    with open(ap.parse_args().inputs) as f:
+        params = json.load(f)
     for row in compare(params):
         print(json.dumps(row))
 ```
@@ -3049,7 +4336,7 @@ if __name__ == "__main__":
 Run: `pytest tests/test_cost_model.py -v`
 Expected: 3 passed
 
-**Step 5: Fill in `config/cost_inputs.json` from measurements.** Tokens and latencies come from `results/bench_base_full.json` and `bench_lora_crop.json`. Look up prices from current published pricing and satellite/cellular plan pages; cite the source and date in the README.
+**Step 5: Fill in `config/cost_inputs.json` from measurements.** Tokens and latencies come from `results/bench_base_full.json` (full-frame tokens) and `results/bench_after.json` (cropped, tuned stack). Look up prices from current published pricing and satellite/cellular plan pages; cite the source and date in the README.
 
 ```json
 {
@@ -3079,7 +4366,7 @@ git commit -m "feat: cost and feasibility model"
 **Files:**
 - Create: `README.md`, `scripts/setup_nano.sh`
 
-**Step 1: `scripts/setup_nano.sh`**
+**Step 1: `scripts/setup_nano.sh`** (committed version; `bash -n` clean)
 
 ```bash
 #!/usr/bin/env bash
@@ -3091,30 +4378,42 @@ python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null || {
 python3 -m venv .venv --system-site-packages
 source .venv/bin/activate
 pip install -U pip && pip install -r requirements.txt -r requirements-train.txt
+pip install -e .
+# pip can silently replace the system CUDA torch with a CPU wheel (e.g. via torchvision). If this
+# fails, install torchvision per the NVIDIA DGX Spark playbook and rerun this script.
+python -c "import torch, torchvision; assert torch.cuda.is_available(), 'pip replaced CUDA torch'; print(torch.__version__, torchvision.__version__)"
+# Warm YOLO-World while online: set_classes() loads the CLIP text encoder and downloads its
+# weights on first use. Caching them now lets the BEFORE (zero-shot) detector run offline in demos.
+python -c "from ultralytics import YOLO; YOLO('yolov8s-worldv2.pt').set_classes(['smoke','fire'])"
 command -v zrt >/dev/null || sudo snap install --classic zrt
+# local-only serving: no proxy auth or TLS in front of the OpenAI-compatible endpoint
+zrt config set proxy.auth.type none && zrt config set proxy.tls.enabled false
 zrt pull Qwen/Qwen2.5-VL-7B-Instruct
+zrt pull Qwen/Qwen2.5-VL-32B-Instruct-AWQ   # teacher for distillation; verify the exact repo id on Hugging Face
 echo "Next: ./scripts/download_data.sh, then see README 'Reproduce'."
 ```
 
-**Step 2: README sections** (write each one briefly):
+**Step 2: README sections** (committed; results stay "pending" until the Nano runs, and no numbers are written by hand):
 1. **Problem & user**: the fire lookout, and why the cloud alone fails (no link, latency, cost).
-2. **Architecture diagram**: copy it from the design doc and export a PNG for the deck.
+2. **Architecture**: mermaid diagram of the cascade (export a PNG for the deck).
 3. **The escalation rule**: one sentence plus the severity/action table.
-4. **Results**: detector mAP, the context distillation table (teacher / base / LoRA / linear probe), the benchmark ablation table, the cost model table, and why each metric was chosen.
-5. **Reproduce**: setup → data → train detector → teacher label → LoRA → serve → run → bench, with exact commands from T2–T26.
-6. **Datasets and licenses**, **models and licenses** (note AGPL for Ultralytics).
-7. **Limitations**: simulated connectivity and sensors, teacher labels aren't ground truth, the VLM call blocks the replay loop.
+4. **Before vs after fine-tuning**: methodology (same held-out splits; YOLO-World zero-shot → YOLO11s fine-tuned; Qwen2.5-VL-7B base → LoRA distilled from the 32B teacher; end-to-end before/after), the fairness note (teacher-label accuracy = distillation agreement, gold split = real accuracy), and a pointer to `results/before_after.md` generated by `python scripts/compare.py`. Why each metric was chosen.
+5. **Reproduce**: setup → data → detector before/train/after → teacher label → context before/LoRA/after → bench before/after → compare → cost model → demo, with exact commands from T2–T26.
+6. **Datasets and models** with licenses to verify (note AGPL for Ultralytics).
+7. **Limitations**: simulated connectivity and sensors, teacher labels aren't ground truth, small clip set, the VLM call blocks the single-threaded replay loop.
+
+After the Nano runs, add the cost-model table (Task 26) and the price sources with dates.
 
 **Step 3: Verify from a clean checkout**
 ```bash
 cd /tmp && git clone <repo> check && cd check && python3 -m venv v && . v/bin/activate \
-  && pip install -r requirements-dev.txt && pytest
+  && pip install -r requirements-dev.txt && pip install -e . && pytest
 ```
 Expected: all tests pass.
 
 **Step 4: Commit**
 ```bash
-git add README.md scripts/setup_nano.sh && git commit -m "docs: README, setup and reproduction" && git push
+git add README.md && git commit -m "docs: README with before/after methodology and reproduction"
 ```
 
 ---

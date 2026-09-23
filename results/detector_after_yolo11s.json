@@ -1,0 +1,15 @@
+{
+  "name": "after_yolo11s",
+  "weights": "models/smoke_yolo.pt",
+  "classes": null,
+  "map50": 0.7869231279488549,
+  "map50_95": 0.4598730602372901,
+  "precision": 0.7757280910460987,
+  "recall": 0.7194614791262958,
+  "per_class_map50": {
+    "smoke": 0.8441818663993826,
+    "fire": 0.729664389498327
+  },
+  "ms_per_image": 3.299223609473894,
+  "n_images": 4306
+}

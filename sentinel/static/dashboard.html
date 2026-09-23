@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wildfire Edge Sentinel</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --fg:#e8e8e8; --muted:#9aa0a6; --line:#2a2e37;
+          --alert:#e5484d; --monitor:#f5a524; --log:#3b82f6; --ignore:#6b7280; --ok:#22c55e; }
+  body { margin:0; font-family:system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); }
+  h1 { font-size:18px; margin:0; } h2 { font-size:15px; margin:0 0 8px; }
+  main { display:grid; grid-template-columns:2fr 1fr; gap:16px; padding:16px; }
+  @media (max-width:900px) { main { grid-template-columns:1fr; } }
+  .card { background:var(--card); border-radius:8px; padding:12px; margin-bottom:16px; }
+  .towers { display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:12px; }
+  .towers img { width:100%; border-radius:6px; background:#000; min-height:120px; }
+  figure { margin:0; } figcaption { color:var(--muted); font-size:13px; }
+  .sev { display:inline-block; padding:2px 8px; border-radius:4px; font-weight:600; font-size:12px; }
+  .ALERT { background:var(--alert); } .MONITOR { background:var(--monitor); color:#000; }
+  .LOG { background:var(--log); } .IGNORE { background:var(--ignore); }
+  .event { display:flex; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .event img { width:96px; height:72px; object-fit:cover; border-radius:4px; flex:none; }
+  button { font:inherit; padding:6px 12px; border-radius:6px; border:0; cursor:pointer; }
+  #link.online { background:var(--ok); } #link.offline { background:var(--alert); color:#fff; }
+  dl { display:grid; grid-template-columns:auto auto; gap:4px 12px; margin:0; font-size:13px; }
+  dt { color:var(--muted); } dd { margin:0; }
+</style>
+</head>
+<body>
+<header><h1>🔥 Wildfire Edge Sentinel</h1><button id="link">…</button></header>
+<main>
+  <section>
+    <div class="card"><h2>Tower feeds</h2><div class="towers" id="towers"></div></div>
+    <div class="card"><h2>Events</h2><div id="events"></div></div>
+  </section>
+  <aside>
+    <div class="card"><h2>Uplink outbox</h2><dl id="outbox"></dl></div>
+    <div class="card"><h2>Metrics</h2><dl id="metrics"></dl></div>
+  </aside>
+</main>
+<script>
+  let online = false;
+  const $ = (id) => document.getElementById(id);
+  const post = (url, body) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  $("link").onclick = async () => { await post("/api/link", { online: !online }); refresh(); };
+  const dl = (el, obj) => el.innerHTML = Object.entries(obj)
+    .map(([k, v]) => `<dt>${k}</dt><dd>${typeof v === "number" ? +v.toFixed(2) : v}</dd>`).join("");
+  window.feedback = (id, label) => post(`/api/feedback/${id}`, { label });
+  const eventRow = (e) => `<div class="event">
+      <img src="data:image/jpeg;base64,${e.thumbnail_b64}" alt="">
+      <div><span class="sev ${e.severity}">${e.severity ?? "…"}</span> ${e.final ? "" : "<em>re-checking trend…</em>"}
+        <div>${e.report_text ?? (e.context ? e.context.source_type : "classifying…")}</div>
+        ${e.final ? `<button onclick="feedback('${e.id}','correct')">✓ Correct</button>
+                     <button onclick="feedback('${e.id}','false_alarm')">✗ False alarm</button>` : ""}
+      </div></div>`;
+  async function refresh() {
+    const s = await (await fetch("/api/state")).json();
+    online = s.online;
+    $("link").textContent = online ? "Link: ONLINE (click to cut)" : "Link: OFFLINE (click to restore)";
+    $("link").className = online ? "online" : "offline";
+    if (!$("towers").children.length) {
+      $("towers").innerHTML = s.towers.map((t) =>
+        `<figure><img id="f-${t.id}" alt="${t.name}"><figcaption>${t.name}</figcaption></figure>`).join("");
+    }
+    const ts = Date.now();
+    s.towers.forEach((t) => { $("f-" + t.id).src = `/api/frame/${t.id}?t=${ts}`; });
+    $("events").innerHTML = [...s.active, ...s.events].map(eventRow).join("") || "<p>No events yet.</p>";
+    dl($("outbox"), s.outbox);
+    dl($("metrics"), s.metrics);
+  }
+  setInterval(refresh, 1000);
+  refresh();
+</script>
+</body>
+</html>

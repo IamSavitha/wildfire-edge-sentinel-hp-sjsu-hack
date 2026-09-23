@@ -1,0 +1,15 @@
+Starting inference backend
+Model:        hf:Qwen/Qwen2.5-VL-32B-Instruct-AWQ@main
+Service Name: teacher32b
+Proxy:        http://127.0.0.1:8000
+[1/4] Starting backend ...
+  Backend started (PID 1918867)
+  Logs: /opt/hp/zrt/run/vllm-teacher32b.log
+[2/4] Waiting for backend to initialize (large models may take several minutes) ...
+......................................................................................................................................................................  Backend ready!
+[3/4] Registering model with proxy on http://127.0.0.1:8000 ...
+  Model registered with proxy
+[4/4] Waiting for proxy to become ready ...
+✓ zrt is serving teacher32b
+  API endpoint: http://127.0.0.1:8000
+  Use 'zrt status' to monitor running processes.

@@ -1,0 +1,4 @@
+-r requirements-dev.txt
+ultralytics
+# YOLO-World set_classes() text encoder (BEFORE baseline); installed here so it is not fetched at runtime
+git+https://github.com/ultralytics/CLIP.git

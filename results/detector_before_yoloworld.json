@@ -1,0 +1,18 @@
+{
+  "name": "before_yoloworld",
+  "weights": "yolov8s-worldv2.pt",
+  "classes": [
+    "smoke",
+    "fire"
+  ],
+  "map50": 0.0017535339177130222,
+  "map50_95": 0.0005507354504866943,
+  "precision": 0.09975429975429975,
+  "recall": 0.007627339943182887,
+  "per_class_map50": {
+    "smoke": 0.00291005291005291,
+    "fire": 0.0005970149253731343
+  },
+  "ms_per_image": 3.7846065681057364,
+  "n_images": 4306
+}

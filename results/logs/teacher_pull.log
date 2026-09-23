@@ -1,0 +1,4 @@
+Pulling hf:Qwen/Qwen2.5-VL-32B-Instruct-AWQ@main into /opt/hp/zrt/models/hf/Qwen/Qwen2.5-VL-32B-Instruct-AWQ/main
+Retrieving remote file manifest...
+✓ Manifest created (19 files)
+✓ hf:Qwen/Qwen2.5-VL-32B-Instruct-AWQ@main downloaded to /opt/hp/zrt/models/hf/Qwen/Qwen2.5-VL-32B-Instruct-AWQ/main
