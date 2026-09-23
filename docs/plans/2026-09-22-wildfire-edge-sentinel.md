@@ -209,14 +209,14 @@ Expected: the device name prints.
 **Files:**
 - Create: `scripts/download_data.sh`
 
-**Step 1: Write the script**
+**Step 1: Write the script** (committed version; `hf` is tried before the older `huggingface-cli`)
 
 ```bash
 #!/usr/bin/env bash
 # Downloads training/eval data onto the Nano. Verify each dataset's license and record it in README.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-mkdir -p data/dfire data/benign data/demo data/bench data/pyro
+mkdir -p data/dfire data/benign data/demo data/bench data/pyro data/gold
 
 # 1) D-Fire (YOLO format; classes 0=smoke, 1=fire). Hosted via link on
 #    https://github.com/gaiasd/DFireDataset. Download on laptop if needed, then:
@@ -225,8 +225,14 @@ if [ ! -d data/dfire/train ]; then
   echo "MANUAL: place D-Fire under data/dfire/{train,test}/{images,labels}"; fi
 
 # 2) PyroNear lookout-tower smoke (optional extra detector data / eval).
-huggingface-cli download pyronear/pyro-sdis --repo-type dataset --local-dir data/pyro || \
-  echo "WARN: pyro-sdis download failed; continuing with D-Fire only"
+#    `hf` is the current Hugging Face CLI; older installs only ship `huggingface-cli`.
+HF=$(command -v hf || command -v huggingface-cli || true)
+if [ -n "$HF" ]; then
+  "$HF" download pyronear/pyro-sdis --repo-type dataset --local-dir data/pyro || \
+    echo "WARN: pyro-sdis download failed; continuing with D-Fire only"
+else
+  echo "WARN: no Hugging Face CLI found (pip install huggingface_hub); skipping pyro-sdis"
+fi
 
 # 3) FIgLib (HPWREN Fire Ignition Library) sequences for demo + trend eval:
 #    browse https://www.hpwren.ucsd.edu/FIgLib/ and download 4-6 sequences into
@@ -236,11 +242,20 @@ echo "MANUAL: FIgLib sequences -> data/demo/<sequence>/*.jpg"
 # 4) Benign look-alikes (campfire, BBQ, chimney, stack, fog, low cloud): 150-300 JPGs
 #    from openly licensed sources -> data/benign/*.jpg ; short clips -> data/demo/benign_*/
 echo "MANUAL: benign images -> data/benign/*.jpg"
+
+# 5) End-to-end benchmark list (scripts/bench.py): 20-40 rows of `path,label`,
+#    label alert (FIgLib/wildfire) or no_alert (campfire, fog, stack, BBQ).
+echo "MANUAL: data/bench/clips.csv with header 'path,label'"
+
+# 6) Optional hand-checked gold split for the context VLM (same JSONL format as teacher labels).
+echo "OPTIONAL: data/gold/gold.jsonl"
 ```
+
+Check it parses: `bash -n scripts/download_data.sh`.
 
 **Step 2: Run it and verify the D-Fire layout and class ids**
 ```bash
-chmod +x scripts/download_data.sh && ./scripts/download_data.sh
+./scripts/download_data.sh
 ls data/dfire/train/images | head -3; ls data/dfire/train/labels | head -3
 cat data/dfire/train/labels/$(ls data/dfire/train/labels | head -1)
 ```
@@ -248,9 +263,10 @@ Expected: YOLO lines `cls cx cy w h`, where cls ∈ {0, 1}. Confirm 0=smoke and 
 
 **Step 3: Inspect pyro-sdis before using it.** `ls data/pyro`. Only merge it into detector training if it's already images + YOLO labels. Otherwise use it just as eval images. Don't spend over 30 minutes here.
 
-**Step 4: Commit**
+**Step 4: Commit** (done together with `scripts/setup_nano.sh`, Task 27)
 ```bash
-git add scripts/download_data.sh && git commit -m "chore: dataset download script"
+git add scripts/download_data.sh scripts/setup_nano.sh
+git commit -m "chore: data download and Nano setup scripts"
 ```
 
 ---
@@ -3769,116 +3785,231 @@ git commit -m "results: context VLM before/after"
 
 **Files:**
 - Create: `scripts/bench.py`, `data/bench/clips.csv` (not committed, since `data/` is ignored; copy it into `results/clips.csv`)
+- Test: `tests/test_bench.py`
 
-**Step 1: Build `clips.csv`**, with 20–40 rows: FIgLib and wildfire sequences labeled `alert`, and campfire, fog, stack and BBQ labeled `no_alert`.
+**Step 1: Build `clips.csv`**, with 20–40 rows: FIgLib and wildfire sequences labeled `alert`, and campfire, fog, stack and BBQ labeled `no_alert`. `read_clips` rejects any other label before the (slow) replay starts.
 ```
 path,label
 data/demo/figlib_seq01,alert
 data/demo/benign_campfire01,no_alert
 ```
 
-**Step 2: Write `scripts/bench.py`**
+**Step 2: Tests** (`tests/test_bench.py`, laptop, no GPU): a fake detector returning fixed `Detection`s, fake VLMs returning fixed `ContextResult`s, and tiny image-folder clips written with `cv2.imwrite` into `tmp_path`. They cover `run_clip` (ALERT, nothing detected, a still-provisional MONITOR at clip end), `score` (confusion counts, zero-division, bad labels), `bench` end to end (precision/recall, tokens and frames per VLM call, time-to-decision), the detector-only ablation, `apply_overrides` for the before/after switches, and `read_clips`.
+
+Run: `pytest tests/test_bench.py -v` → 12 passed.
+
+**Step 3: `scripts/bench.py`** (pure `run_clip` / `score` / `summarize` / `bench`; the detector and VLM are built only in `main()`, so `--help` and the tests need no ultralytics)
 
 ```python
-"""Offline benchmark with a simulated clock (deterministic, no sleeps).
-Ablations: --detector-only, --full-frame, --model <base|context>."""
+"""End-to-end benchmark over labeled clips with a simulated clock (deterministic, no sleeps).
+Writes results/bench_<name>.json. Run on the Nano with sentinel.main stopped (frees the GPU).
+
+clips.csv rows are `path,label` where path is a video or a folder of time-ordered images and
+label is `alert` (a fire that should page dispatch) or `no_alert` (campfire, fog, stack, BBQ...).
+
+BEFORE: --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model "<base id>"
+AFTER:  --name after  --detector-weights models/smoke_yolo.pt --model context
+Ablations: --detector-only (any candidate = alert, no VLM), --full-frame (no crop).
+"""
 import argparse
 import csv
 import json
 from dataclasses import replace
 from pathlib import Path
 
-from sentinel.config import Tower, load_settings
-from sentinel.detector import YoloDetector
+from sentinel.config import Settings, Tower, load_settings
 from sentinel.escalation import Escalator, Link
 from sentinel.metrics import Metrics
 from sentinel.outbox import Outbox
 from sentinel.pipeline import Pipeline
 from sentinel.replayer import frames
 from sentinel.schema import Severity
-from sentinel.vlm_client import ContextVLM
+
+try:
+    from scripts.eval_context import check_output
+except ModuleNotFoundError as e:  # run as `python scripts/bench.py`: scripts/ is on sys.path, not the repo root
+    if e.name != "scripts":
+        raise
+    from eval_context import check_output
+
+LABELS = {"alert", "no_alert"}
 
 
 class NullVLM:
+    """Detector-only ablation: no context model; the pipeline falls back to trend rules."""
+
     def classify(self, jpeg):
         return None, 0
 
 
-def run_clip(path: str, settings, detector, vlm, metrics: Metrics) -> list:
+def read_clips(path) -> list[dict]:
+    """Reads clips.csv and checks labels up front, so a typo fails before an hour of replay."""
+    with open(path, newline="") as f:
+        rows = [{"path": r["path"].strip(), "label": (r.get("label") or "").strip()}
+                for r in csv.DictReader(f) if r.get("path") and r["path"].strip()]
+    bad = [r for r in rows if r["label"] not in LABELS]
+    if bad:
+        raise ValueError(f"labels must be one of {sorted(LABELS)}; bad rows: {bad[:3]}")
+    return rows
+
+
+def run_clip(path: str, settings: Settings, detector, vlm, metrics: Metrics) -> list[Severity]:
+    """Replay one clip through a fresh pipeline; returns final severities plus any still-provisional one."""
     tower = Tower(id="bench", name=Path(path).stem, lat=37.0, lon=-121.0, source=path)
     esc = Escalator(Outbox(":memory:"), Link(), lambda *a: {}, lambda p: None, metrics)
     pipe = Pipeline({"bench": tower}, detector, vlm, esc, settings, metrics)
     for i, frame in enumerate(frames(path, settings.fps, loop=False)):
         pipe.process("bench", frame, now=i / settings.fps)
-    return [e.severity for e in pipe.history] + [e.severity for e in pipe.active.values()]
+    return ([e.severity for e in pipe.history]
+            + [e.severity for e in pipe.active.values() if e.severity is not None])
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--clips", default="data/bench/clips.csv")
-    ap.add_argument("--name", required=True)
-    ap.add_argument("--model")
-    ap.add_argument("--full-frame", action="store_true")
-    ap.add_argument("--detector-only", action="store_true")
-    a = ap.parse_args()
-
-    s = load_settings()
-    s = replace(s, full_frame=a.full_frame, vlm_model=a.model or s.vlm_model, vlm_timeout_s=30)
-    detector = YoloDetector(s.detector_weights)
-    vlm = NullVLM() if a.detector_only else ContextVLM(s.vlm_model, s.vlm_base_url, s.vlm_timeout_s)
-
-    total, clips = Metrics(), []
+def score(rows: list[dict], predictions: list[bool]) -> dict:
+    """Clip-level confusion counts. A clip is positive if it produced an ALERT."""
+    if len(rows) != len(predictions):
+        raise ValueError(f"{len(rows)} clips but {len(predictions)} predictions")
     tp = fp = fn = tn = 0
-    for row in csv.DictReader(open(a.clips)):
-        m = Metrics()
-        severities = run_clip(row["path"], s, detector, vlm, m)
-        predicted = m.counters["candidates"] > 0 if a.detector_only else Severity.ALERT in severities
+    for row, predicted in zip(rows, predictions):
+        if row["label"] not in LABELS:
+            raise ValueError(f"label must be one of {sorted(LABELS)}, got {row['label']!r}")
         actual = row["label"] == "alert"
         tp += predicted and actual
         fp += predicted and not actual
         fn += actual and not predicted
         tn += not predicted and not actual
-        clips.append({"path": row["path"], "label": row["label"], "predicted_alert": predicted,
-                      "severities": [x.name for x in severities if x is not None]})
-        total.merge(m)
+    return {"tp": tp, "fp": fp, "fn": fn, "tn": tn,
+            "precision": tp / (tp + fp) if tp + fp else 0.0,
+            "recall": tp / (tp + fn) if tp + fn else 0.0,
+            "false_alarms": fp, "missed": fn}
 
-    summary = total.summary()
-    calls = summary.get("vlm_calls", 0)
-    out = {"name": a.name, "precision": tp / (tp + fp) if tp + fp else 0.0,
-           "recall": tp / (tp + fn) if tp + fn else 0.0, "false_alarms": fp, "missed": fn,
-           "tokens_per_vlm_call": summary.get("vlm_tokens", 0) / calls if calls else 0,
-           "frames_per_vlm_call": summary.get("frames", 0) / calls if calls else None,
-           "metrics": summary, "clips": clips}
-    Path("results").mkdir(exist_ok=True)
-    Path(f"results/bench_{a.name}.json").write_text(json.dumps(out, indent=2))
-    print(json.dumps({k: out[k] for k in ("name", "precision", "recall", "false_alarms",
-                                          "tokens_per_vlm_call", "frames_per_vlm_call")}, indent=2))
+
+def summarize(name: str, scores: dict, metrics: dict, clips: list[dict], detector_only: bool) -> dict:
+    calls = 0 if detector_only else metrics.get("vlm_calls", 0)
+    return {
+        "name": name,
+        "detector_only": detector_only,
+        "n_clips": len(clips),
+        **scores,
+        "tokens_per_vlm_call": metrics.get("vlm_tokens", 0) / calls if calls else 0,
+        "frames_per_vlm_call": metrics.get("frames", 0) / calls if calls else None,
+        "time_to_decision_s_p50": metrics.get("decision_s_p50"),
+        "time_to_decision_s_p95": metrics.get("decision_s_p95"),
+        "metrics": metrics,
+        "clips": clips,
+    }
+
+
+def bench(name: str, rows: list[dict], settings: Settings, detector, vlm,
+          detector_only: bool = False) -> dict:
+    total, clips, predictions = Metrics(), [], []
+    for row in rows:
+        m = Metrics()
+        severities = run_clip(row["path"], settings, detector, vlm, m)
+        predicted = m.counters["candidates"] > 0 if detector_only else Severity.ALERT in severities
+        predictions.append(predicted)
+        clips.append({"path": row["path"], "label": row["label"], "predicted_alert": predicted,
+                      "severities": [s.name for s in severities],
+                      "frames": m.counters["frames"], "vlm_calls": m.counters["vlm_calls"]})
+        total.merge(m)
+    return summarize(name, score(rows, predictions), total.summary(), clips, detector_only)
+
+
+def apply_overrides(s: Settings, a: argparse.Namespace) -> Settings:
+    classes = [c.strip() for c in a.detector_classes.split(",") if c.strip()] if a.detector_classes else None
+    return replace(
+        s,
+        full_frame=a.full_frame,
+        vlm_model=a.model or s.vlm_model,
+        vlm_timeout_s=a.timeout,
+        detector_weights=a.detector_weights or s.detector_weights,
+        # new weights without classes means a fine-tuned checkpoint: drop any YOLO-World prompts
+        detector_classes=classes if (classes or a.detector_weights) else s.detector_classes,
+    )
+
+
+def parse_args(argv=None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--name", required=True, help="result tag, e.g. before / after / detector_only")
+    ap.add_argument("--clips", default="data/bench/clips.csv")
+    ap.add_argument("--settings", default="config/settings.json")
+    ap.add_argument("--model", help='served VLM id (base id, or "context" for the LoRA adapter)')
+    ap.add_argument("--detector-weights", help="override settings.detector_weights")
+    ap.add_argument("--detector-classes", help="comma-separated YOLO-World prompts in class-id order")
+    ap.add_argument("--full-frame", action="store_true", help="send the whole frame, not the crop")
+    ap.add_argument("--detector-only", action="store_true", help="no VLM: any candidate counts as alert")
+    ap.add_argument("--timeout", type=float, default=30, help="per-VLM-request timeout, seconds")
+    ap.add_argument("--force", action="store_true", help="overwrite an existing results file")
+    return ap.parse_args(argv)
+
+
+def main() -> None:
+    a = parse_args()
+    out = Path("results") / f"bench_{a.name}.json"
+    check_output(out, a.force)
+    s = apply_overrides(load_settings(a.settings), a)
+    rows = read_clips(a.clips)
+    if not rows:
+        raise SystemExit(f"no clips in {a.clips}")
+
+    from sentinel.detector import YoloDetector  # ultralytics is only needed on the Nano
+    from sentinel.vlm_client import ContextVLM
+
+    detector = YoloDetector(s.detector_weights, classes=s.detector_classes)
+    vlm = NullVLM() if a.detector_only else ContextVLM(s.vlm_model, s.vlm_base_url, s.vlm_timeout_s)
+    result = bench(a.name, rows, s, detector, vlm, a.detector_only)
+    result["config"] = {"detector_weights": s.detector_weights, "detector_classes": s.detector_classes,
+                        "vlm_model": None if a.detector_only else s.vlm_model,
+                        "full_frame": s.full_frame, "clips": a.clips}
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps({k: result[k] for k in (
+        "name", "precision", "recall", "false_alarms", "missed", "tokens_per_vlm_call",
+        "frames_per_vlm_call", "time_to_decision_s_p50", "time_to_decision_s_p95")}, indent=2))
+    print(f"wrote {out}")
 
 
 if __name__ == "__main__":
     main()
 ```
 
-**Step 3: Run the ablation matrix** (stop `sentinel.main` first to free the GPU)
+Output `results/bench_<name>.json`: `precision`, `recall`, `false_alarms`, `missed` (plus `tp/fp/fn/tn`), `tokens_per_vlm_call`, `frames_per_vlm_call`, `time_to_decision_s_p50/p95` (from the `decision_s` metric), the merged `metrics` summary, per-clip rows and the `config` used. It refuses to overwrite an existing file (exit 1) unless `--force`.
+
+**Step 4: Optional ablation matrix** (stop `sentinel.main` first to free the GPU; the before/after pair is Task 25b)
 ```bash
 python scripts/bench.py --name detector_only --detector-only
-python scripts/bench.py --name base_crop  --model "hf:Qwen/Qwen2.5-VL-7B-Instruct"
-python scripts/bench.py --name base_full  --model "hf:Qwen/Qwen2.5-VL-7B-Instruct" --full-frame
-python scripts/bench.py --name lora_crop  --model context
+python scripts/bench.py --name base_full  --model "<base id>" --full-frame
+python scripts/bench.py --name lora_full  --model context --full-frame
 ```
-Expected results table (fill it in from the output):
+Expected: `detector_only` has the most false alarms and 0 tokens; `*_full` rows cost more tokens per call than the cropped before/after rows. `scripts/compare.py` puts every `bench_*.json` in its end-to-end table.
 
-| Run | Precision | Recall | False alarms | Tokens/VLM call | Frames per VLM call |
-|---|---|---|---|---|---|
-| detector_only | | | ← expect highest | 0 | — |
-| base_full | | | | ← expect highest | |
-| base_crop | | | | | |
-| lora_crop | | | ← expect lowest | | |
+**Step 5: Commit**
+```bash
+git add scripts/bench.py tests/test_bench.py
+git commit -m "feat: end-to-end benchmark with before/after switches"
+```
 
-**Step 4: Commit**
+---
+
+### Task 25b: End-to-end before/after (Nano)
+
+BEFORE is the untuned stack (YOLO-World zero-shot + base Qwen2.5-VL-7B); AFTER is the tuned stack (YOLO11s fine-tuned on D-Fire + the LoRA `context` adapter). Same clips, same settings otherwise. Serve the student with `--enable-lora` (Task 24 Step 1) so both the base id and `context` are available, and stop `sentinel.main` first.
+
+**Files (already committed):** `scripts/compare.py`, `tests/test_compare.py`: reads whichever of `results/detector_*.json`, `results/context_*.json`, `results/bench_*.json` exist and writes `results/before_after.md` with three tables (Detector with a Δ column, Context VLM, End-to-end). Missing files drop their row, empty tables are omitted, and one line lists the expected files not yet produced.
+
+**Step 1: Run**
+```bash
+python scripts/bench.py --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model "<base id>"
+python scripts/bench.py --name after  --detector-weights models/smoke_yolo.pt --model context
+python scripts/compare.py
+```
+Expected: `results/bench_before.json`, `results/bench_after.json` and `results/before_after.md`. YOLO-World needs its CLIP text encoder cached (`scripts/setup_nano.sh` warms it while online).
+
+**Step 2: Commit the results**
 ```bash
 cp data/bench/clips.csv results/clips.csv
-git add scripts/bench.py results/ && git commit -m "feat: benchmark harness and results"
+git add results/bench_before.json results/bench_after.json results/before_after.md results/clips.csv
+git commit -m "results: end-to-end before/after"
 ```
 
 ---
@@ -3965,7 +4096,7 @@ if __name__ == "__main__":
 Run: `pytest tests/test_cost_model.py -v`
 Expected: 3 passed
 
-**Step 5: Fill in `config/cost_inputs.json` from measurements.** Tokens and latencies come from `results/bench_base_full.json` and `bench_lora_crop.json`. Look up prices from current published pricing and satellite/cellular plan pages; cite the source and date in the README.
+**Step 5: Fill in `config/cost_inputs.json` from measurements.** Tokens and latencies come from `results/bench_base_full.json` (full-frame tokens) and `results/bench_after.json` (cropped, tuned stack). Look up prices from current published pricing and satellite/cellular plan pages; cite the source and date in the README.
 
 ```json
 {
@@ -3995,7 +4126,7 @@ git commit -m "feat: cost and feasibility model"
 **Files:**
 - Create: `README.md`, `scripts/setup_nano.sh`
 
-**Step 1: `scripts/setup_nano.sh`**
+**Step 1: `scripts/setup_nano.sh`** (committed version; `bash -n` clean)
 
 ```bash
 #!/usr/bin/env bash
@@ -4008,30 +4139,35 @@ python3 -m venv .venv --system-site-packages
 source .venv/bin/activate
 pip install -U pip && pip install -r requirements.txt -r requirements-train.txt
 pip install -e .
+# Warm YOLO-World while online: set_classes() loads the CLIP text encoder and downloads its
+# weights on first use. Caching them now lets the BEFORE (zero-shot) detector run offline in demos.
+python -c "from ultralytics import YOLO; YOLO('yolov8s-worldv2.pt').set_classes(['smoke','fire'])"
 command -v zrt >/dev/null || sudo snap install --classic zrt
 zrt pull Qwen/Qwen2.5-VL-7B-Instruct
 echo "Next: ./scripts/download_data.sh, then see README 'Reproduce'."
 ```
 
-**Step 2: README sections** (write each one briefly):
+**Step 2: README sections** (committed; results stay "pending" until the Nano runs, and no numbers are written by hand):
 1. **Problem & user**: the fire lookout, and why the cloud alone fails (no link, latency, cost).
-2. **Architecture diagram**: copy it from the design doc and export a PNG for the deck.
+2. **Architecture**: mermaid diagram of the cascade (export a PNG for the deck).
 3. **The escalation rule**: one sentence plus the severity/action table.
-4. **Results**: detector mAP, the context distillation table (teacher / base / LoRA / linear probe), the benchmark ablation table, the cost model table, and why each metric was chosen.
-5. **Reproduce**: setup → data → train detector → teacher label → LoRA → serve → run → bench, with exact commands from T2–T26.
-6. **Datasets and licenses**, **models and licenses** (note AGPL for Ultralytics).
-7. **Limitations**: simulated connectivity and sensors, teacher labels aren't ground truth, the VLM call blocks the replay loop.
+4. **Before vs after fine-tuning**: methodology (same held-out splits; YOLO-World zero-shot → YOLO11s fine-tuned; Qwen2.5-VL-7B base → LoRA distilled from the 32B teacher; end-to-end before/after), the fairness note (teacher-label accuracy = distillation agreement, gold split = real accuracy), and a pointer to `results/before_after.md` generated by `python scripts/compare.py`. Why each metric was chosen.
+5. **Reproduce**: setup → data → detector before/train/after → teacher label → context before/LoRA/after → bench before/after → compare → cost model → demo, with exact commands from T2–T26.
+6. **Datasets and models** with licenses to verify (note AGPL for Ultralytics).
+7. **Limitations**: simulated connectivity and sensors, teacher labels aren't ground truth, small clip set, the VLM call blocks the single-threaded replay loop.
+
+After the Nano runs, add the cost-model table (Task 26) and the price sources with dates.
 
 **Step 3: Verify from a clean checkout**
 ```bash
 cd /tmp && git clone <repo> check && cd check && python3 -m venv v && . v/bin/activate \
-  && pip install -r requirements-dev.txt && pytest
+  && pip install -r requirements-dev.txt && pip install -e . && pytest
 ```
 Expected: all tests pass.
 
 **Step 4: Commit**
 ```bash
-git add README.md scripts/setup_nano.sh && git commit -m "docs: README, setup and reproduction" && git push
+git add README.md && git commit -m "docs: README with before/after methodology and reproduction"
 ```
 
 ---
