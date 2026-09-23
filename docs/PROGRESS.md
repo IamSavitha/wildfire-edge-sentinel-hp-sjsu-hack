@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 02:00 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 02:50 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -58,8 +58,10 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] **After:** `eval_detector.py --weights models/smoke_yolo.pt --name after_yolo11s` — mAP50 **0.787** (from 0.002), P 0.78, R 0.72, smoke 0.84 / fire 0.73, 3.3 ms/img
 
 - [x] Domain check on lookout-tower smoke (pyro-sdis val, 4,099 images, imgsz 1024): fine-tuned YOLO11s only **mAP50 0.213** (P 0.37, R 0.29) vs 0.787 on D-Fire — small distant plumes are missed (also seen on FIgLib demo frames)
-- [ ] ⏳ **Stage-2 tower fine-tune:** start from `models/smoke_yolo.pt`, train on pyro-sdis (29,537 tower images) at imgsz 960, 12 epochs → `models/tower_yolo.pt` (queued to start when LoRA finishes; ~2 h)
-- [ ] Evaluate stage 2 on tower val and on D-Fire test (check it didn't forget D-Fire); use the better detector in the demo
+- [x] **Stage-2 tower fine-tune:** from `models/smoke_yolo.pt` on pyro-sdis (29,537 tower images), 960 px, 12 epochs → `models/tower_yolo.pt`
+- [x] Evaluate stage 2 on tower val and on D-Fire test — tower smoke mAP50 **0.198 → 0.728**; but D-Fire **0.787 → 0.106** (fire class lost): catastrophic forgetting
+- [ ] ⏳ **Stage-3 joint (replay) training:** from stage 1 on D-Fire train + tower train (46,758 images), 960 px, 6 epochs → `models/joint_yolo.pt` (~24 min/epoch, ETA ~05:15)
+- [ ] Evaluate stage 3 on both tower val and D-Fire test; pick the deployed detector
 
 ## Phase 5 — Context VLM: before → fine-tune → after 🖥️ [T12, T16, T24, T24b]
 
@@ -87,8 +89,8 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 
 ## Phase 6 — End-to-end benchmark and cost 🖥️ [T25, T25b, T26]
 
-- [ ] `data/bench/clips.csv` with 20–40 clips (`alert` / `no_alert`)
-- [ ] `bench.py --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model <base id> --recheck-s 5`
+- [x] `data/bench/clips.csv` with 20–40 clips (`alert` / `no_alert`) — 25 real tower clips via `scripts/make_bench_clips.py`: 15 alert (5 FIgLib post-ignition + 10 pyro smoke windows), 10 no_alert (smoke-free tower footage)
+- [ ] ⏳ `bench.py --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model <base id> --recheck-s 5`
 - [ ] `bench.py --name after --detector-weights models/smoke_yolo.pt --model context --recheck-s 5`
 - [ ] `bench.py --name base_full --model <base id> --full-frame --recheck-s 5` (token ablation for the cost model)
 - [ ] `bench.py --name detector_only --detector-only` (optional ablation)
@@ -144,6 +146,8 @@ Fill these in as runs finish (they also land in `results/*.json`).
 | context `ref_teacher32b` | group accuracy | | |
 | context `before_base7b` | group accuracy | 53.0% (source-type 45.0%) | 2026-09-23 |
 | context `after_lora7b` | group accuracy | **75.6%** (source-type 73.6%) | 2026-09-24 |
+| detector tower smoke (stage 1 → stage 2) | mAP50 | 0.198 → **0.728** | 2026-09-24 |
+| detector D-Fire after stage 2 | mAP50 | 0.787 → 0.106 (forgetting) | 2026-09-24 |
 | context `linear_probe` | group accuracy | | |
 | bench `before` | precision / recall | | |
 | bench `after` | precision / recall | | |
