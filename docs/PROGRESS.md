@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 02:50 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 04:00 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -106,7 +106,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [ ] Fill `config/cost_inputs.json` (measured values + current published prices, with sources) → `cost_model.py`
 - [ ] Commit `results/` (JSON + `before_after.md`)
 
-## Phase 7 — Live demo 🖥️ [T23]
+## Phase 7 — Live demo 🖥️ [T23] — ⏸ PAUSED (2026-09-24, owner's call; resume with `tmux new -s webapp 'python -m sentinel.webapp --port 8095 --vlm-base-url unix:///opt/hp/zrt/run/vllm-base7b.sock'`)
 
 - [ ] `config/towers.json` sources point at real `data/demo/...` folders
 - [ ] `config/settings.json`: `vlm_model` = `context` (or the base id), `detector_weights` = `models/smoke_yolo.pt`
@@ -118,7 +118,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [ ] Benign tower shows LOG/IGNORE and never reaches dispatch
 - [ ] Record a backup screen capture of the full demo
 
-## Phase 7b — Demo UI page 💻🖥️
+## Phase 7b — Demo UI page 💻🖥️ — ⏸ PAUSED (app built, reviewed and stopped on the Nano to free GPU memory)
 
 - [ ] Design the demo page: what judges see in 5 minutes (live tower feeds, event timeline, escalation/outbox, online/offline toggle, metrics)
 - [ ] Before vs after view: same frame through base vs fine-tuned models, side by side (detector boxes + VLM verdict)
