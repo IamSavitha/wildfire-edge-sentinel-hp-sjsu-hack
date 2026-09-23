@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-22
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 13:05 (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -28,7 +28,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 
 ## Phase 2 — Repo housekeeping 💻
 
-- [ ] Decide: push `feat/core-pipeline` to GitHub, and/or merge into `main`
+- [x] Decide: push `feat/core-pipeline` to GitHub, and/or merge into `main` — branch pushed; merge into `main` after results
 - [x] (Optional) Live demo warns when `vlm_model` is not served
 - [x] (Optional) `run_all.sh`: narrow `trap 'kill 0'` to the stub's pid
 - [x] (Optional) `teacher_label.py`: check the server before cutting crops
@@ -37,24 +37,24 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 
 ## Phase 3 — Nano setup 🖥️ [T2, T3]
 
-- [ ] Connect with ZTK; `nvidia-smi` shows GB10
-- [ ] `git clone` the repo into `~/sentinel`
-- [ ] `./scripts/setup_nano.sh` → CUDA torch check prints `True`
-- [ ] `zrt config set proxy.auth.type none && zrt config set proxy.tls.enabled false` (use `sudo` if needed)
-- [ ] Serve base Qwen2.5-VL-7B on :8000 (tmux `vlm`)
+- [x] Connect with ZTK; `nvidia-smi` shows GB10
+- [x] `git clone` the repo into `~/sentinel`
+- [x] `./scripts/setup_nano.sh` → CUDA torch check prints `True`
+- [x] `zrt config set proxy.auth.type none && zrt config set proxy.tls.enabled false` (use `sudo` if needed)
+- [ ] Serve base Qwen2.5-VL-7B on :8000 (tmux `vlm`) — ⏳ starting (restarted at `--gpu-memory-fraction 0.45`)
 - [ ] `curl localhost:8000/v1/models` → put the exact id in `config/settings.json` as `vlm_model`
 - [ ] Smoke test: chat returns "OK"; a `json_schema` request returns valid JSON
-- [ ] D-Fire in `data/dfire/{train,test}/{images,labels}`; confirm 0 = smoke, 1 = fire
-- [ ] PyroNear `pyro-sdis` downloaded (optional)
+- [x] D-Fire in `data/dfire/{train,test}/{images,labels}`; confirm 0 = smoke, 1 = fire — 17,221 train / 4,306 test via HF mirror `badsaarow/d-fire` + `scripts/prepare_dfire.py`
+- [ ] PyroNear `pyro-sdis` downloaded (optional) — ⏳ downloading
 - [ ] 4–6 FIgLib sequences in `data/demo/<name>/`
 - [ ] 150–300 benign images (campfire, BBQ, chimney, stack, fog, cloud) in `data/benign/`
 - [ ] (Optional) ~60 hand-checked crops in `data/gold/gold.jsonl`
 
 ## Phase 4 — Detector: before → fine-tune → after 🖥️ [T4, T4b]
 
-- [ ] **Before:** `eval_detector.py --weights yolov8s-worldv2.pt --classes smoke,fire --name before_yoloworld` (run while online; caches CLIP)
-- [ ] `train_detector.py --epochs 1` → note time per epoch → choose N
-- [ ] `train_detector.py --epochs N` (tmux `train`) → `models/smoke_yolo.pt`
+- [x] **Before:** `eval_detector.py --weights yolov8s-worldv2.pt --classes smoke,fire --name before_yoloworld` (run while online; caches CLIP)
+- [x] `train_detector.py --epochs 1` → note time per epoch → choose N — 2.5 min/epoch, 1 epoch already mAP50 0.085 → N = 50
+- [ ] `train_detector.py --epochs N` (tmux `train`) → `models/smoke_yolo.pt` — ⏳ running, 50 epochs (~2.5 min/epoch)
 - [ ] **After:** `eval_detector.py --weights models/smoke_yolo.pt --name after_yolo11s`
 
 ## Phase 5 — Context VLM: before → fine-tune → after 🖥️ [T12, T16, T24, T24b]
@@ -114,7 +114,7 @@ Fill these in as runs finish (they also land in `results/*.json`).
 
 | Run | Key metric | Value | Date |
 |---|---|---|---|
-| detector `before_yoloworld` | mAP50 | | |
+| detector `before_yoloworld` | mAP50 | 0.002 (P 0.10, R 0.008, 3.8 ms/img) | 2026-09-23 |
 | detector `after_yolo11s` | mAP50 | | |
 | context `ref_teacher32b` | group accuracy | | |
 | context `before_base7b` | group accuracy | | |
@@ -126,4 +126,9 @@ Fill these in as runs finish (they also land in `results/*.json`).
 
 ## Issues / notes
 
-- (add blockers here as they come up)
+- 2026-09-23: A stuck root `trtllm-serve` (Qwen2-VL, 87 GB) was holding memory; stopped with sudo → 114 GB free.
+- 2026-09-23: Nano runs Python 3.12 — fixed a 3.13-only type hint in `sentinel/app.py` (`c8baf53`); 148 tests pass on the Nano.
+- 2026-09-23: CUDA PyTorch 2.14 (cu130) installed in `.venv`; transformers 5.17, trl 1.13, peft 0.21, ultralytics 8.4.160.
+- 2026-09-23: zrt serves ALL models behind ONE proxy (set to port 8000); models are selected by name. The teacher will NOT be on :8001 — use the default base URL with the teacher's model id.
+- 2026-09-23: vLLM at 30% memory failed (no KV cache room while YOLO ran) → use `--gpu-memory-fraction 0.45`.
+- 2026-09-23: YOLO-World zero-shot baseline is near zero (mAP50 0.002). Consider more descriptive prompts (e.g. "wildfire smoke plume") so the baseline isn't seen as a strawman.
