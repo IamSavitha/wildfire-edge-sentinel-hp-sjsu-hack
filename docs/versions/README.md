@@ -7,7 +7,7 @@ Each version of Wildfire Edge Sentinel is a **git tag** plus a **frozen set of m
 | Baseline | `v1.0.0-baseline` | YOLO-World zero-shot (`yolov8s-worldv2.pt`) | Qwen2.5-VL-7B base | D-Fire mAP50 0.002; VLM source-type 45.0%; tower bench recall 0/15 | [v1.0.0-baseline.md](v1.0.0-baseline.md) |
 | Fine-tuned | `v1.1.0-finetuned` | YOLO11s fine-tuned on D-Fire | 7B + LoRA distilled from 32B | D-Fire mAP50 0.787; VLM source-type 73.6% | [v1.1.0-finetuned.md](v1.1.0-finetuned.md) |
 | Tower | `v1.2.0-tower` | YOLO11s + tower fine-tune (stage 2) | same LoRA | Tower mAP50 0.728, but D-Fire 0.106 (forgetting) | [v1.2.0-tower.md](v1.2.0-tower.md) |
-| Joint | `v1.3.0-joint` *(pending)* | YOLO11s joint D-Fire + tower (stage 3) | same LoRA | *training* | — |
+| Joint (**recommended**) | `v1.3.0-joint` | YOLO11s joint D-Fire + tower (stage 3) | same LoRA | Tower 0.718 and D-Fire 0.748 — forgetting fixed | [v1.3.0-joint.md](v1.3.0-joint.md) |
 
 ## How versions are kept safe
 
