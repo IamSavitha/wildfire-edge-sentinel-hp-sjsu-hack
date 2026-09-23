@@ -1,0 +1,15 @@
+{
+  "name": "dfire_stage3",
+  "weights": "models/joint_yolo.pt",
+  "classes": null,
+  "map50": 0.7480300142644489,
+  "map50_95": 0.41980600616398495,
+  "precision": 0.7540849733002346,
+  "recall": 0.6705670507392074,
+  "per_class_map50": {
+    "smoke": 0.8094271852172328,
+    "fire": 0.6866328433116651
+  },
+  "ms_per_image": 3.3510985848583066,
+  "n_images": 4306
+}
