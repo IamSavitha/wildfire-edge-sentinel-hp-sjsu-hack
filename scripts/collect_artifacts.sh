@@ -20,7 +20,8 @@ done
 
 # Teacher label distribution (what the student learns from).
 if [ -f data/teacher/train.jsonl ]; then
-  python - <<'EOF'
+  PY=$([ -x .venv/bin/python ] && echo .venv/bin/python || echo python3)
+  "$PY" - <<'EOF'
 import collections, json
 from pathlib import Path
 out = {}
