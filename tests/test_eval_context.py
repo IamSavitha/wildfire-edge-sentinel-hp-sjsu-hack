@@ -87,3 +87,16 @@ def test_group_covers_every_source_type():
 
     from sentinel.schema import SourceType
     assert set(GROUP) == set(get_args(SourceType))
+
+
+def test_output_guard_refuses_existing_file_without_force(tmp_path, capsys):
+    from scripts.eval_context import check_output
+
+    out = tmp_path / "context_x.json"
+    check_output(out, force=False)  # missing: fine
+    out.write_text("{}")
+    with pytest.raises(SystemExit) as exc:
+        check_output(out, force=False)
+    assert exc.value.code == 1
+    assert "--force" in capsys.readouterr().err
+    check_output(out, force=True)  # explicit overwrite: fine

@@ -16,13 +16,15 @@ def _row(tmp_path):
     return {"image": str(p), "label": LABEL}
 
 
-def test_to_example_messages_match_runtime_prompt(tmp_path):
+def test_to_example_is_prompt_completion_matching_runtime_prompt(tmp_path):
+    # prompt/completion format -> TRL computes loss on the JSON answer only
     ex = to_example(_row(tmp_path))
-    msgs = ex["messages"]
-    assert [m["role"] for m in msgs] == ["system", "user", "assistant"]
-    assert msgs[0]["content"] == [{"type": "text", "text": SYSTEM_PROMPT}]
-    assert msgs[1]["content"] == [{"type": "image"}, {"type": "text", "text": USER_PROMPT}]
-    assert msgs[2]["content"] == [{"type": "text", "text": json.dumps(LABEL)}]
+    assert set(ex) == {"images", "prompt", "completion"}
+    assert [m["role"] for m in ex["prompt"]] == ["system", "user"]
+    assert ex["prompt"][0]["content"] == [{"type": "text", "text": SYSTEM_PROMPT}]
+    assert ex["prompt"][1]["content"] == [{"type": "image"}, {"type": "text", "text": USER_PROMPT}]
+    assert ex["completion"] == [
+        {"role": "assistant", "content": [{"type": "text", "text": json.dumps(LABEL)}]}]
 
 
 def test_to_example_loads_one_rgb_image(tmp_path):

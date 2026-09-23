@@ -8,6 +8,7 @@ AFTER:  --model context --name after_lora7b      (vLLM serving the LoRA adapter 
 """
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -18,6 +19,14 @@ from sentinel.vlm_client import ContextVLM
 GROUP = {"wildland": "danger", "structure": "danger", "vehicle": "danger",
          "controlled_burn": "benign", "campfire": "benign", "bbq_chimney": "benign",
          "industrial_stack": "benign", "fog_dust_cloud": "lookalike", "unknown": "unknown"}
+
+
+def check_output(path: Path, force: bool) -> None:
+    """Exit 1 instead of silently overwriting an earlier result (e.g. a BEFORE row)."""
+    if path.exists() and not force:
+        print(f"{path} already exists; pass --force to overwrite it",
+              file=sys.stderr)
+        raise SystemExit(1)
 
 
 def evaluate(rows, classify, read_bytes=lambda p: Path(p).read_bytes(), clock=time.perf_counter) -> dict:
@@ -67,14 +76,16 @@ def main() -> None:
     ap.add_argument("--base-url", default="http://localhost:8000/v1")
     ap.add_argument("--split", default="data/teacher/heldout.jsonl")
     ap.add_argument("--timeout", type=float, default=60, help="per-request timeout, seconds")
+    ap.add_argument("--force", action="store_true", help="overwrite an existing results file")
     a = ap.parse_args()
+    out = Path("results") / f"context_{a.name}.json"
+    check_output(out, a.force)
 
     vlm = ContextVLM(a.model, a.base_url, timeout_s=a.timeout)
     with open(a.split) as f:
         rows = [json.loads(line) for line in f if line.strip()]
     result = {"name": a.name, "model": a.model, "split": a.split, **evaluate(rows, vlm.classify)}
 
-    out = Path("results") / f"context_{a.name}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))

@@ -1,5 +1,6 @@
 """LoRA-distill teacher context labels (scripts/teacher_label.py) into Qwen2.5-VL-7B. Run on the Nano.
 
+Tested with transformers 5.17, trl 1.13, peft 0.21 (requirements-train.txt).
 Writes a PEFT adapter to --out; serve it with vLLM `--enable-lora --lora-modules context=<out>`
 and score it with scripts/eval_context.py (plan Task 24 / 24b).
 
@@ -13,16 +14,22 @@ from sentinel.vlm_client import SYSTEM_PROMPT, USER_PROMPT  # training prompt ==
 
 
 def to_example(row: dict) -> dict:
-    """One JSONL row -> TRL vision chat example (messages + images, one image placeholder)."""
+    """One JSONL row -> TRL vision prompt/completion example (one image placeholder).
+
+    The prompt/completion split makes TRL compute loss on the JSON answer only, not on the
+    system prompt or the ~250 image tokens.
+    """
     from PIL import Image  # lazy: --help works without pillow
 
     with Image.open(row["image"]) as im:
         image = im.convert("RGB")
     return {
         "images": [image],
-        "messages": [
+        "prompt": [
             {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
             {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": USER_PROMPT}]},
+        ],
+        "completion": [
             {"role": "assistant", "content": [{"type": "text", "text": json.dumps(row["label"])}]},
         ],
     }
@@ -53,7 +60,7 @@ def main() -> None:
     ds = Dataset.from_list([to_example(r) for r in rows])
     print(f"{len(ds)} training examples from {a.train}")
 
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(a.base, torch_dtype=torch.bfloat16)
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(a.base, dtype=torch.bfloat16)
     processor = AutoProcessor.from_pretrained(a.base, max_pixels=a.max_pixels)
     peft_config = LoraConfig(r=a.rank, lora_alpha=2 * a.rank, lora_dropout=0.05, task_type="CAUSAL_LM",
                              target_modules=["q_proj", "k_proj", "v_proj", "o_proj"])  # language model only

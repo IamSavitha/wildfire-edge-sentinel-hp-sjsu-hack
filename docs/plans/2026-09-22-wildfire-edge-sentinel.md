@@ -73,6 +73,7 @@ uvicorn
 httpx
 openai>=1.40
 pytest
+pillow
 ```
 
 `requirements.txt` (Nano runtime):
@@ -83,13 +84,13 @@ ultralytics
 git+https://github.com/ultralytics/CLIP.git
 ```
 
-`requirements-train.txt` (Nano training):
+`requirements-train.txt` (Nano training; minimum versions verified end-to-end with `scripts/train_lora.py`):
 ```
-transformers
-peft
-trl
-accelerate
-datasets
+transformers>=5.17
+peft>=0.21
+trl>=1.13
+accelerate>=1.15
+datasets>=5.0
 pillow
 scikit-learn
 ```
@@ -1874,13 +1875,15 @@ def _row(tmp_path):
     return {"image": str(p), "label": LABEL}
 
 
-def test_to_example_messages_match_runtime_prompt(tmp_path):
+def test_to_example_is_prompt_completion_matching_runtime_prompt(tmp_path):
+    # prompt/completion format -> TRL computes loss on the JSON answer only
     ex = to_example(_row(tmp_path))
-    msgs = ex["messages"]
-    assert [m["role"] for m in msgs] == ["system", "user", "assistant"]
-    assert msgs[0]["content"] == [{"type": "text", "text": SYSTEM_PROMPT}]
-    assert msgs[1]["content"] == [{"type": "image"}, {"type": "text", "text": USER_PROMPT}]
-    assert msgs[2]["content"] == [{"type": "text", "text": json.dumps(LABEL)}]
+    assert set(ex) == {"images", "prompt", "completion"}
+    assert [m["role"] for m in ex["prompt"]] == ["system", "user"]
+    assert ex["prompt"][0]["content"] == [{"type": "text", "text": SYSTEM_PROMPT}]
+    assert ex["prompt"][1]["content"] == [{"type": "image"}, {"type": "text", "text": USER_PROMPT}]
+    assert ex["completion"] == [
+        {"role": "assistant", "content": [{"type": "text", "text": json.dumps(LABEL)}]}]
 
 
 def test_to_example_loads_one_rgb_image(tmp_path):
@@ -1893,11 +1896,12 @@ def test_to_example_loads_one_rgb_image(tmp_path):
 Run: `pytest tests/test_train_lora.py -v`
 Expected: FAIL, `ModuleNotFoundError`
 
-**Step 3: Write the script.** `to_example` imports its prompts from `sentinel.vlm_client`, so the training prompt is the runtime prompt. Heavy imports (torch, datasets, peft, transformers, trl) live inside `main()` so `--help` and the test work on the laptop.
+**Step 3: Write the script.** `to_example` returns TRL's prompt/completion format, so loss covers only the JSON answer (not the system prompt or the ~250 image tokens). It imports its prompts from `sentinel.vlm_client`, so the training prompt is the runtime prompt. Heavy imports (torch, datasets, peft, transformers, trl) live inside `main()` so `--help` and the test work on the laptop.
 
 ```python
 """LoRA-distill teacher context labels (scripts/teacher_label.py) into Qwen2.5-VL-7B. Run on the Nano.
 
+Tested with transformers 5.17, trl 1.13, peft 0.21 (requirements-train.txt).
 Writes a PEFT adapter to --out; serve it with vLLM `--enable-lora --lora-modules context=<out>`
 and score it with scripts/eval_context.py (plan Task 24 / 24b).
 
@@ -1911,16 +1915,22 @@ from sentinel.vlm_client import SYSTEM_PROMPT, USER_PROMPT  # training prompt ==
 
 
 def to_example(row: dict) -> dict:
-    """One JSONL row -> TRL vision chat example (messages + images, one image placeholder)."""
+    """One JSONL row -> TRL vision prompt/completion example (one image placeholder).
+
+    The prompt/completion split makes TRL compute loss on the JSON answer only, not on the
+    system prompt or the ~250 image tokens.
+    """
     from PIL import Image  # lazy: --help works without pillow
 
     with Image.open(row["image"]) as im:
         image = im.convert("RGB")
     return {
         "images": [image],
-        "messages": [
+        "prompt": [
             {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
             {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": USER_PROMPT}]},
+        ],
+        "completion": [
             {"role": "assistant", "content": [{"type": "text", "text": json.dumps(row["label"])}]},
         ],
     }
@@ -1951,7 +1961,7 @@ def main() -> None:
     ds = Dataset.from_list([to_example(r) for r in rows])
     print(f"{len(ds)} training examples from {a.train}")
 
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(a.base, torch_dtype=torch.bfloat16)
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(a.base, dtype=torch.bfloat16)
     processor = AutoProcessor.from_pretrained(a.base, max_pixels=a.max_pixels)
     peft_config = LoraConfig(r=a.rank, lora_alpha=2 * a.rank, lora_dropout=0.05, task_type="CAUSAL_LM",
                              target_modules=["q_proj", "k_proj", "v_proj", "o_proj"])  # language model only
@@ -3470,6 +3480,19 @@ def test_group_covers_every_source_type():
 
     from sentinel.schema import SourceType
     assert set(GROUP) == set(get_args(SourceType))
+
+
+def test_output_guard_refuses_existing_file_without_force(tmp_path, capsys):
+    from scripts.eval_context import check_output
+
+    out = tmp_path / "context_x.json"
+    check_output(out, force=False)  # missing: fine
+    out.write_text("{}")
+    with pytest.raises(SystemExit) as exc:
+        check_output(out, force=False)
+    assert exc.value.code == 1
+    assert "--force" in capsys.readouterr().err
+    check_output(out, force=True)  # explicit overwrite: fine
 ```
 
 Run: `pytest tests/test_eval_context.py -v`
@@ -3488,6 +3511,7 @@ AFTER:  --model context --name after_lora7b      (vLLM serving the LoRA adapter 
 """
 import argparse
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -3498,6 +3522,14 @@ from sentinel.vlm_client import ContextVLM
 GROUP = {"wildland": "danger", "structure": "danger", "vehicle": "danger",
          "controlled_burn": "benign", "campfire": "benign", "bbq_chimney": "benign",
          "industrial_stack": "benign", "fog_dust_cloud": "lookalike", "unknown": "unknown"}
+
+
+def check_output(path: Path, force: bool) -> None:
+    """Exit 1 instead of silently overwriting an earlier result (e.g. a BEFORE row)."""
+    if path.exists() and not force:
+        print(f"{path} already exists; pass --force to overwrite it",
+              file=sys.stderr)
+        raise SystemExit(1)
 
 
 def evaluate(rows, classify, read_bytes=lambda p: Path(p).read_bytes(), clock=time.perf_counter) -> dict:
@@ -3547,14 +3579,16 @@ def main() -> None:
     ap.add_argument("--base-url", default="http://localhost:8000/v1")
     ap.add_argument("--split", default="data/teacher/heldout.jsonl")
     ap.add_argument("--timeout", type=float, default=60, help="per-request timeout, seconds")
+    ap.add_argument("--force", action="store_true", help="overwrite an existing results file")
     a = ap.parse_args()
+    out = Path("results") / f"context_{a.name}.json"
+    check_output(out, a.force)
 
     vlm = ContextVLM(a.model, a.base_url, timeout_s=a.timeout)
     with open(a.split) as f:
         rows = [json.loads(line) for line in f if line.strip()]
     result = {"name": a.name, "model": a.model, "split": a.split, **evaluate(rows, vlm.classify)}
 
-    out = Path("results") / f"context_{a.name}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
@@ -3565,7 +3599,7 @@ if __name__ == "__main__":
     main()
 ```
 
-Run: `pytest tests/test_eval_context.py -v` → 4 passed.
+Run: `pytest tests/test_eval_context.py -v` → 5 passed.
 
 **Step 4: Write `scripts/linear_probe.py`** (cheap baseline; the first thing to cut). It reuses `GROUP` from `eval_context.py` and writes the same accuracy keys (`name`, `n`, `source_type_acc`, `group_acc`) plus `latency_ms_per_image`. Test first:
 
@@ -3600,9 +3634,11 @@ import time
 from pathlib import Path
 
 try:
-    from scripts.eval_context import GROUP
-except ModuleNotFoundError:  # run as `python scripts/linear_probe.py`: scripts/ is on sys.path, not the repo root
-    from eval_context import GROUP
+    from scripts.eval_context import GROUP, check_output
+except ModuleNotFoundError as e:  # run as `python scripts/linear_probe.py`: scripts/ is on sys.path, not the repo root
+    if e.name != "scripts":
+        raise
+    from eval_context import GROUP, check_output
 
 
 def group_accuracy(y_true, y_pred) -> float:
@@ -3625,7 +3661,10 @@ def main() -> None:
     ap.add_argument("--heldout", default="data/teacher/heldout.jsonl")
     ap.add_argument("--model", default="google/siglip-base-patch16-224")
     ap.add_argument("--device", default="cuda", help='"cuda" or "cpu"')
+    ap.add_argument("--force", action="store_true", help="overwrite an existing results file")
     a = ap.parse_args()
+    path = Path("results") / "context_linear_probe.json"
+    check_output(path, a.force)
 
     # lazy: --help and unit tests work without torch/transformers/sklearn
     import numpy as np
@@ -3664,7 +3703,6 @@ def main() -> None:
         "group_acc": group_accuracy(yte, pred),
         "latency_ms_per_image": ms,
     }
-    path = Path("results") / "context_linear_probe.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(out, indent=2) + "\n")
     print(json.dumps(out, indent=2))
@@ -3704,9 +3742,9 @@ Measure the base student, distill, and measure again on the same held-out split 
 ```bash
 # BEFORE (base model, served on :8000 per Task 2)
 python scripts/eval_context.py --model "<base id from /v1/models>" --name before_base7b
-# optional upper bound: teacher on :8001
+# optional upper bound: teacher on :8001 (only while it is still served: run this before Task 16 Step 1 shuts it down, or re-serve it)
 python scripts/eval_context.py --model "<teacher id>" --base-url http://localhost:8001/v1 --name ref_teacher32b
-# TRAIN
+# TRAIN (done in Task 16; skip if adapters/context/adapter_config.json exists)
 python scripts/train_lora.py
 # AFTER (re-serve with --enable-lora --lora-modules context=$HOME/sentinel/adapters/context per Task 24 Step 1)
 python scripts/eval_context.py --model context --name after_lora7b
@@ -3715,7 +3753,7 @@ python scripts/linear_probe.py
 # optional gold set: same JSONL format, hand-checked
 python scripts/eval_context.py --model context --split data/gold/gold.jsonl --name after_lora7b_gold
 ```
-Expected: `results/context_before_base7b.json`, `results/context_after_lora7b.json` (and the optional rows), each with `n`, `source_type_acc`, `group_acc`, `parse_fail_rate`, `latency_ms_p50`, `latency_ms_p95`, `tokens_per_call`, `per_source`; `results/context_linear_probe.json` with `n`, `source_type_acc`, `group_acc`, `latency_ms_per_image`. For a gold comparison, also run the BEFORE model on the gold split (`--name before_base7b_gold`). Put the rows side by side in `results/context.md`.
+Expected: `results/context_before_base7b.json`, `results/context_after_lora7b.json` (and the optional rows), each with `n`, `source_type_acc`, `group_acc`, `parse_fail_rate`, `latency_ms_p50`, `latency_ms_p95`, `tokens_per_call`, `per_source`; `results/context_linear_probe.json` with `n`, `source_type_acc`, `group_acc`, `latency_ms_per_image`. For a gold comparison, also run the BEFORE model on the gold split (`--name before_base7b_gold`). Put the rows side by side in `results/context.md`. Both eval scripts refuse to overwrite an existing results file (exit 1); pass `--force` to re-run a row on purpose.
 
 **Step 2: Commit**
 ```bash

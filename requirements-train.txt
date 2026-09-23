@@ -1,7 +1,7 @@
-transformers
-peft
-trl
-accelerate
-datasets
+transformers>=5.17
+peft>=0.21
+trl>=1.13
+accelerate>=1.15
+datasets>=5.0
 pillow
 scikit-learn

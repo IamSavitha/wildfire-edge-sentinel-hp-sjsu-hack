@@ -9,9 +9,11 @@ import time
 from pathlib import Path
 
 try:
-    from scripts.eval_context import GROUP
-except ModuleNotFoundError:  # run as `python scripts/linear_probe.py`: scripts/ is on sys.path, not the repo root
-    from eval_context import GROUP
+    from scripts.eval_context import GROUP, check_output
+except ModuleNotFoundError as e:  # run as `python scripts/linear_probe.py`: scripts/ is on sys.path, not the repo root
+    if e.name != "scripts":
+        raise
+    from eval_context import GROUP, check_output
 
 
 def group_accuracy(y_true, y_pred) -> float:
@@ -34,7 +36,10 @@ def main() -> None:
     ap.add_argument("--heldout", default="data/teacher/heldout.jsonl")
     ap.add_argument("--model", default="google/siglip-base-patch16-224")
     ap.add_argument("--device", default="cuda", help='"cuda" or "cpu"')
+    ap.add_argument("--force", action="store_true", help="overwrite an existing results file")
     a = ap.parse_args()
+    path = Path("results") / "context_linear_probe.json"
+    check_output(path, a.force)
 
     # lazy: --help and unit tests work without torch/transformers/sklearn
     import numpy as np
@@ -73,7 +78,6 @@ def main() -> None:
         "group_acc": group_accuracy(yte, pred),
         "latency_ms_per_image": ms,
     }
-    path = Path("results") / "context_linear_probe.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(out, indent=2) + "\n")
     print(json.dumps(out, indent=2))
