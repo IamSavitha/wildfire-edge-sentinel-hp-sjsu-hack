@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 23:13 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 00:30 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -67,12 +67,12 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] `teacher_label.py --n 200` → check progress, several `source_type`s, note seconds per image — 500 crops in 6m50s (~0.8 s/crop, 32 workers); D-Fire smoke/fire crops → wildland/controlled burn/stack, only 6.6% called fog; no-fire crops → mostly fog/cloud ✔
 - [x] `teacher_label.py --n 2000` (overnight) → `data/teacher/train.jsonl`, `heldout.jsonl` — 3,100 crops labeled (2,000 D-Fire + 300 benign + 800 pyro-sdis tower smoke)
 - [ ] ⏸ (optional, deferred — 32B at ~7.5 s/call ≈ 1 h for 500 crops) **Reference:** `eval_context.py --model <teacher id> --base-url http://localhost:8001/v1 --name ref_teacher32b`
-- [ ] ⏳ **Before:** `eval_context.py --model <base id> --name before_base7b` — ⏳ running: 318/500 held-out crops
+- [x] **Before:** `eval_context.py --model <base id> --name before_base7b` — source-type 45.0%, group 53.0%, 304 tokens/call (never says "unknown": 0/138; controlled burn 1/53)
 - [ ] Set `vlm_timeout_s` in `config/settings.json` to ~2× the measured `latency_ms_p95`
-- [ ] ⏳ Stop the teacher; `train_lora.py` (tmux `lora`) — step 262/326, ETA ~23:35; epoch 1: loss 1.21 → 0.149, answer-token accuracy 70% → 94.7%; → `adapters/context/adapter_config.json`
-- [ ] Stop the base `vlm` server; re-serve with `--enable-lora --max-lora-rank 16 --lora-modules context=$HOME/sentinel/adapters/context`
-- [ ] `/v1/models` lists both the base id and `context`
-- [ ] **After:** `eval_context.py --model context --name after_lora7b`
+- [x] Stop the teacher; `train_lora.py` (tmux `lora`) — done: 326 steps in 1h31m; loss 1.21 → 0.137, answer-token accuracy 70% → 95.1% (`results/lora_training/`); → `adapters/context/adapter_config.json`
+- [x] Stop the base `vlm` server; re-serve with `--enable-lora --max-lora-rank 16 --lora-modules context=$HOME/sentinel/adapters/context`
+- [x] `/v1/models` lists both the base id and `context` — but the zrt proxy only routes `base7b`; use the backend socket `unix:///opt/hp/zrt/run/vllm-base7b.sock` (fix `ec8358a`). Spot check: LoRA fixes controlled-burn and unknown cases the base model got wrong
+- [ ] ⏳ **After:** `eval_context.py --model context --base-url unix:///opt/hp/zrt/run/vllm-base7b.sock --name after_lora7b` (running)
 - [ ] Baseline: `linear_probe.py`
 - [ ] (Optional) Gold set: `--split data/gold/gold.jsonl` for `before_base7b_gold` and `after_lora7b_gold`
 
@@ -116,7 +116,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] **Live comparative metrics dashboard** — live on the Nano (tmux `monitor`, port 8090): `ssh -N -L 8090:localhost:8090 hp11@100.109.162.35` → http://localhost:8090. Reviewed (202 tests). First reading: teacher32b 839k input / 299k output tokens — while any model runs (detector, base VLM, LoRA VLM, teacher), show live per-model: requests, tokens in/out, tokens/s, latency p50/p95, GPU memory, calls avoided by the cascade, bytes sent upstream, and a running cost comparison (edge vs cloud-per-frame at configurable $/token and $/GB) to summarise the economics
 - [ ] Architecture + "why edge" panel (escalation rule, bytes sent vs video, tokens per event)
 - [x] **Two-pane demo app** (`python -m sentinel.webapp`, port 8095) — built and reviewed (278 tests; token math verified exact; fair ≤1280 px cloud baseline; honest $0-marginal label): LEFT = pick/upload an image (+ ground truth) and run BEFORE (YOLO-World + base7b) vs AFTER (YOLO11s + LoRA) side by side with boxes, verdict, severity, report, tokens, timings; RIGHT = live usage & economics (tokens actual vs full-frame, calls avoided, bytes, $ edge vs cloud, online vs offline alerts sent/queued, served-model telemetry, benchmark table)
-- [ ] ⏳ Deploy the demo app on the Nano after LoRA is served (base7b with `--enable-lora`) — app live on :8095 (tmux `webapp`), BEFORE pipeline works end to end (~0.85 s/image with warm detectors); AFTER VLM pending LoRA
+- [x] Deploy the demo app on the Nano after LoRA is served (base7b with `--enable-lora`) — live on :8095 via the backend socket; BEFORE and AFTER both served; first session: AFTER used 191 VLM tokens vs ~4,149 cloud-every-frame estimate (−95%), 0 bytes vs 377 KB uploads
 - [ ] Implement, test, and serve it from the Nano dashboard (port 8080, via SSH tunnel)
 - [ ] Rehearse the demo flow on the page end to end
 
@@ -142,7 +142,7 @@ Fill these in as runs finish (they also land in `results/*.json`).
 | detector `before_yoloworld` | mAP50 | 0.002 (P 0.10, R 0.008, 3.8 ms/img) | 2026-09-23 |
 | detector `after_yolo11s` | mAP50 | **0.787** (mAP50-95 0.460, P 0.78, R 0.72, 3.3 ms/img) | 2026-09-23 |
 | context `ref_teacher32b` | group accuracy | | |
-| context `before_base7b` | group accuracy | | |
+| context `before_base7b` | group accuracy | 53.0% (source-type 45.0%) | 2026-09-23 |
 | context `after_lora7b` | group accuracy | | |
 | context `linear_probe` | group accuracy | | |
 | bench `before` | precision / recall | | |

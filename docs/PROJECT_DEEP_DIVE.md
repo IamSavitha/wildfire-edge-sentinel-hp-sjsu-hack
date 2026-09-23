@@ -296,6 +296,7 @@ Running a FIgLib tower frame (21 minutes after ignition) through the demo showed
 | 14 | zsh mangled `$sha:refs/...` | `:r` is a zsh modifier | `${sha}:refs/...` | Brace variables in refspecs |
 | 15 | Detector misses tower smoke | Domain gap (close-range training data) | Measured it; stage-2 tower fine-tune at 960 px | Test on the deployment domain |
 | 16 | Review-caught logic bugs | — | Scheduled burn hid house fires; one missed frame faked growth; one fire re-alerted every 2 min; dashboard froze during VLM calls; outbox backoff overflowed after 62 retries; replayer hung on bad paths; totals doubled under a race; cloud baseline was unfairly large | Two-stage review after every batch pays for itself |
+| 17 | LoRA model returned 404 through the proxy | zrt's proxy routes only the served label (`base7b`), even though `/v1/models` lists the adapter | Call the backend's own unix socket (`unix:///opt/hp/zrt/run/vllm-base7b.sock`); added socket support to the VLM client and demo app | Verify a served model with a real request, not just a listing |
 
 ---
 
