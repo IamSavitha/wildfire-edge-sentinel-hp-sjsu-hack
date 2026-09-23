@@ -87,6 +87,7 @@ class _Model:
         self.windowed: dict | None = None   # last windowed quantiles (held while idle)
         self.offsets: dict = {}             # counter-reset offsets so totals never decrease
         self.last_good: dict | None = None  # last adjusted snapshot (for economics when unreachable)
+        self.rates: dict = {}               # rates computed at ts
 
 
 class Monitor:
@@ -98,40 +99,59 @@ class Monitor:
         self.run_dir, self.prices, self.pipeline_url = run_dir, prices, pipeline_url
         self.fetch, self.clock, self.fetch_pipeline, self.system = fetch, clock, fetch_pipeline, system
         self.interval_s, self.fetch_timeout_s = interval_s, fetch_timeout_s
-        self.lock = threading.Lock()
+        self.lock = threading.Lock()          # guards stored state (payload, models, prices)
+        self._poll_lock = threading.Lock()    # serializes polls: counters must be applied in order
         self.models: dict[str, _Model] = {}
         self.payload: dict | None = None
         self.last_system: dict = {}
-        self.pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="monitor-fetch")
+        self._sys_f = None                    # a system() call still running from an earlier poll
+        self.pool = self._new_pool()
+        self._pool_closed = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-    # ---- polling (network I/O outside the lock) ----
+    @staticmethod
+    def _new_pool() -> ThreadPoolExecutor:
+        return ThreadPoolExecutor(max_workers=16, thread_name_prefix="monitor-fetch")
+
+    # ---- polling (network I/O outside self.lock, but one poll at a time) ----
     def poll_once(self) -> dict:
-        now = self.clock()
-        metas = discover_models(self.run_dir)
-        futures = {m["label"]: self.pool.submit(self.fetch, m["sock"]) for m in metas if m.get("sock")}
-        pipe_f = self.pool.submit(self.fetch_pipeline, self.pipeline_url) if self.pipeline_url else None
-        sys_f = self.pool.submit(self.system)
-        pending = list(futures.values()) + [f for f in (pipe_f, sys_f) if f]
-        wait(pending, timeout=self.fetch_timeout_s)
+        # Two overlapping polls could finish out of order; the older one would then look like a
+        # counter reset and double the totals. Serializing the whole poll rules that out.
+        with self._poll_lock:
+            now = self.clock()
+            metas = discover_models(self.run_dir)
+            futures = {m["label"]: self.pool.submit(self.fetch, m["sock"])
+                       for m in metas if m.get("sock")}
+            pipe_f = (self.pool.submit(self.fetch_pipeline, self.pipeline_url)
+                      if self.pipeline_url else None)
+            # a slow nvidia-smi is not restarted every cycle: keep waiting on the pending call
+            if self._sys_f is None:
+                self._sys_f = self.pool.submit(self.system)
+            sys_f = self._sys_f
+            pending = list(futures.values()) + [f for f in (pipe_f, sys_f) if f]
+            wait(pending, timeout=self.fetch_timeout_s)
 
-        timeout = TimeoutError(f"no response in {self.fetch_timeout_s:g} s")
-        texts = {label: _outcome(f, timeout) for label, f in futures.items()}
-        pipeline = None
-        state = _outcome(pipe_f, timeout) if pipe_f is not None else None
-        if isinstance(state, dict):
-            metrics = state.get("metrics", state)
-            pipeline = metrics if isinstance(metrics, dict) else None
-        system = _outcome(sys_f, timeout)
+            timeout = TimeoutError(f"no response in {self.fetch_timeout_s:g} s")
+            texts = {label: _outcome(f, timeout) for label, f in futures.items()}
+            pipeline = None
+            state = _outcome(pipe_f, timeout) if pipe_f is not None else None
+            if isinstance(state, dict):
+                metrics = state.get("metrics", state)
+                pipeline = metrics if isinstance(metrics, dict) else None
+            system = None
+            if sys_f.done():
+                self._sys_f = None
+                if not sys_f.cancelled() and sys_f.exception() is None:
+                    system = sys_f.result()
 
-        with self.lock:
-            if isinstance(system, dict):
-                self.last_system = system     # a slow nvidia-smi keeps the previous reading
-            system = self.last_system
-            rows = [self._update(m, texts.get(m["label"]), now) for m in metas]
-            self.payload = {"ts": now, "models": rows, "system": system, "pipeline": pipeline}
-            return self._with_economics()
+            with self.lock:
+                if isinstance(system, dict):
+                    self.last_system = system     # otherwise keep the previous reading
+                system = self.last_system
+                rows = [self._update(m, texts.get(m["label"]), now) for m in metas]
+                self.payload = {"ts": now, "models": rows, "system": system, "pipeline": pipeline}
+                return self._with_economics()
 
     def _update(self, meta: dict, text, now: float) -> dict:
         label = meta["label"]
@@ -141,6 +161,13 @@ class Monitor:
             err = text if isinstance(text, BaseException) else FileNotFoundError("no socket in run dir")
             row.update({k: None for k in SNAPSHOT_KEYS + RATE_KEYS})
             row.update(status="unreachable", error=_err(err))
+            return row
+        if st.ts is not None and now <= st.ts:
+            # not newer than what we already applied: report it, but leave offsets/counters alone
+            row.update({k: None for k in SNAPSHOT_KEYS + RATE_KEYS})
+            row.update(st.last_good or {})
+            row.update(st.rates)
+            row["status"] = "ok"
             return row
         samples = parse_prometheus(text)
         names = {lab.get("model_name") for _, lab, _ in samples}
@@ -153,7 +180,7 @@ class Monitor:
         r = rates(st.raw, raw, now - st.ts if st.ts is not None else 0.0)
         windowed = windowed_quantiles(st.hists, hists, st.windowed)
         adjusted, st.offsets = accumulate_totals(st.raw, raw, st.offsets)
-        st.ts, st.raw, st.hists, st.windowed = now, raw, hists, windowed
+        st.ts, st.raw, st.hists, st.windowed, st.rates = now, raw, hists, windowed, r
 
         snap.update(windowed)
         snap.update(adjusted)
@@ -171,6 +198,11 @@ class Monitor:
                 "prices": effective_prices(self.prices)}
 
     def latest(self) -> dict:
+        with self.lock:
+            if self.payload is not None:
+                return self._with_economics()
+        with self._poll_lock:     # wait for an in-flight (first) poll rather than racing it
+            pass
         with self.lock:
             if self.payload is not None:
                 return self._with_economics()
@@ -192,6 +224,8 @@ class Monitor:
 
     def start(self):
         if self._thread is None or not self._thread.is_alive():
+            if self._pool_closed:           # restarting after stop(): the old pool is shut down
+                self.pool, self._pool_closed = self._new_pool(), False
             self._stop.clear()
             self._thread = threading.Thread(target=self._run, name="monitor-poller", daemon=True)
             self._thread.start()
@@ -201,6 +235,8 @@ class Monitor:
         if self._thread is not None:
             self._thread.join(timeout=5)
         self.pool.shutdown(wait=False, cancel_futures=True)
+        self._pool_closed = True
+        self._sys_f = None
 
 
 def create_monitor_app(run_dir, prices_path, pipeline_url: str | None = None,

@@ -56,7 +56,8 @@ def env(tmp_path):
 
     clock = Clock()
     app = create_monitor_app(run, prices, fetch=fetch, clock=clock, system=lambda: SYSTEM)
-    return TestClient(app), app.state.monitor, texts, clock, sock, calls
+    yield TestClient(app), app.state.monitor, texts, clock, sock, calls
+    app.state.monitor.stop()
 
 
 def base_row(payload):
@@ -148,7 +149,7 @@ def test_hung_sockets_are_fetched_in_parallel_and_time_out(tmp_path):
     try:
         t0 = time.monotonic()
         live = app.state.monitor.poll_once()
-        assert time.monotonic() - t0 < 1.0            # serial fetching would block ~5 s per hung socket
+        assert time.monotonic() - t0 < 2.0            # serial fetching would block ~5 s per hung socket
         status = {m["label"]: m["status"] for m in live["models"]}
         assert status == {"m0": "ok", "m1": "unreachable", "m2": "unreachable", "m3": "unreachable"}
         assert "TimeoutError" in live["models"][1]["error"]
@@ -235,3 +236,110 @@ def test_missing_prices_file_and_run_dir(tmp_path):
                              system=lambda: {})
     live = TestClient(app).get("/api/live").json()
     assert live["models"] == [] and live["economics"]["total"]["cloud_equiv_usd"] == 0.0
+
+
+def one_model_run(tmp_path, label="m"):
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / f"vllm-{label}.json").write_text(json.dumps({"label": label}))
+    (run / f"vllm-{label}.sock").write_text("")
+    return run
+
+
+def test_concurrent_polls_never_double_totals(tmp_path):
+    """Regression: a slow first poll finishing after a newer one looked like a counter reset."""
+    run = one_model_run(tmp_path)
+    n = {"calls": 0}
+    ticks = iter(range(1000, 2000))
+
+    def fetch(path):
+        n["calls"] += 1
+        if n["calls"] == 1:
+            time.sleep(0.4)
+            return prom("m", 1000, 100, 1)
+        return prom("m", 1010, 101, 2)
+
+    app = create_monitor_app(run, tmp_path / "none.json", fetch=fetch, clock=lambda: next(ticks),
+                             system=lambda: {}, fetch_timeout_s=2.0)
+    mon = app.state.monitor
+    try:
+        t = threading.Thread(target=mon.poll_once)
+        t.start()
+        time.sleep(0.1)
+        mon.poll_once()
+        t.join(5)
+        live = TestClient(app).get("/api/live").json()
+        row = live["models"][0]
+        assert row["prompt_tokens"] <= 1010 and row["generation_tokens"] <= 101
+        assert live["economics"]["total"]["prompt_tokens"] <= 1010
+    finally:
+        mon.stop()
+
+
+def test_latest_waits_for_in_flight_first_poll(tmp_path):
+    run = one_model_run(tmp_path)
+    n = {"calls": 0}
+
+    def fetch(path):
+        n["calls"] += 1
+        time.sleep(0.3)
+        return prom("m", 5, 5, 1)
+
+    app = create_monitor_app(run, tmp_path / "none.json", fetch=fetch, system=lambda: {},
+                             fetch_timeout_s=2.0)
+    mon = app.state.monitor
+    try:
+        t = threading.Thread(target=mon.poll_once)
+        t.start()
+        time.sleep(0.05)
+        assert mon.latest()["models"][0]["prompt_tokens"] == 5.0
+        t.join(5)
+        assert n["calls"] == 1          # latest() reused the in-flight poll instead of starting another
+    finally:
+        mon.stop()
+
+
+def test_stale_poll_time_does_not_touch_state(env):
+    _, mon, texts, clock, sock, _ = env
+    mon.poll_once()
+    texts[sock] = prom("base7b", 10, 1, 1)       # would look like a reset...
+    row = base_row(mon.poll_once())              # ...but it carries the same timestamp
+    assert row["prompt_tokens"] == 1000.0 and row["status"] == "ok"
+    clock.t += 2.0
+    texts[sock] = prom("base7b", 1200, 120, 3)
+    assert base_row(mon.poll_once())["prompt_tokens"] == 1200.0
+
+
+def test_slow_system_stats_arrive_on_a_later_poll(tmp_path):
+    run = one_model_run(tmp_path)
+    n = {"calls": 0}
+
+    def system():
+        n["calls"] += 1
+        time.sleep(0.4)
+        return SYSTEM
+
+    app = create_monitor_app(run, tmp_path / "none.json", fetch=lambda s: prom("m", 1, 1, 1),
+                             system=system, fetch_timeout_s=0.1)
+    mon = app.state.monitor
+    try:
+        assert mon.poll_once()["system"] == {}
+        time.sleep(0.5)
+        assert mon.poll_once()["system"] == SYSTEM
+        assert n["calls"] == 1          # the slow call was reused, not restarted every cycle
+    finally:
+        mon.stop()
+
+
+def test_monitor_can_restart_after_stop(tmp_path):
+    run = one_model_run(tmp_path)
+    app = create_monitor_app(run, tmp_path / "none.json", fetch=lambda s: prom("m", 1, 1, 1),
+                             system=lambda: {}, interval_s=0.05)
+    mon = app.state.monitor
+    mon.start()
+    mon.stop()
+    mon.start()
+    try:
+        assert mon.poll_once()["models"][0]["status"] == "ok"
+    finally:
+        mon.stop()

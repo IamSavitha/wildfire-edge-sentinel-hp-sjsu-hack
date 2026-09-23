@@ -184,6 +184,8 @@ def windowed_quantiles(prev: dict | None, cur: dict, last: dict | None) -> dict:
     last = last or {}
     out: dict = {}
     basis = {}
+    # a held value keeps the basis it was computed on (a since-start value stays "since_start")
+    held = "since_start" if last.get("latency_window") == "since_start" else "held"
     for key in HISTOGRAMS:
         cur_b = cur.get(key) or []
         if prev is None:
@@ -191,7 +193,7 @@ def windowed_quantiles(prev: dict | None, cur: dict, last: dict | None) -> dict:
         else:
             d = bucket_delta(prev.get(key) or [], cur_b)
             new = max((c for _, c in d), default=0.0) if d is not None else 0.0
-            basis[key], b = ("window", d) if new > 0 else ("held", None)
+            basis[key], b = ("window", d) if new > 0 else (held, None)
         for out_key, hist, q in QUANTILES:
             if hist == key:
                 out[out_key] = histogram_quantile(b, q) if b is not None else last.get(out_key)

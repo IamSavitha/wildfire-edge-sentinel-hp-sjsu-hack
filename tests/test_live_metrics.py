@@ -276,3 +276,10 @@ def test_discover_models_skips_duplicate_labels(tmp_path):
     (tmp_path / "vllm-b.json").write_text(json.dumps({"label": "same", "model_uri": "second"}))
     models = discover_models(tmp_path)
     assert [(m["label"], m["model_uri"]) for m in models] == [("same", "first")]
+
+
+def test_windowed_quantiles_hold_keeps_since_start_basis():
+    first = hists([(1.0, 3.0), (INF, 3.0)])
+    w0 = windowed_quantiles(None, first, None)
+    w1 = windowed_quantiles(first, first, w0)       # idle right after start
+    assert w1["latency_window"] == "since_start" and w1["latency_p50_s"] == w0["latency_p50_s"]
