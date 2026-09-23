@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from sentinel.detector import YoloDetector
 from sentinel.schema import Detection
@@ -43,3 +44,12 @@ def test_set_classes_only_when_given():
     world = FakeModel()
     YoloDetector("yolov8s-worldv2.pt", classes=["smoke", "fire"], model=world)
     assert world.classes == ["smoke", "fire"]
+
+
+def test_classes_require_yolo_world_model():
+    class PlainModel:
+        def predict(self, frame, **kwargs):
+            return []
+
+    with pytest.raises(ValueError, match="YOLO-World"):
+        YoloDetector("models/smoke_yolo.pt", classes=["smoke", "fire"], model=PlainModel())

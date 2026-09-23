@@ -1,5 +1,6 @@
 import itertools
 import threading
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -66,3 +67,26 @@ def test_failing_tower_does_not_stall_others():
         worker.join(5)
     assert not worker.is_alive()
     assert {tid for tid, _ in pipe.calls} == {"t2"} and len(esc.calls) >= 1
+
+
+def test_ended_stream_is_dropped_and_logged_once(caplog):
+    pipe, esc = FakePipeline(), FakeEscalator()
+    rt = SimpleNamespace(pipeline=pipe, escalator=esc, link=Link())
+    dead = iter([ZERO_FRAME])
+    next(dead)  # primed at startup, now exhausted
+    streams = {"t1": dead, "t2": itertools.repeat(ZERO_FRAME)}
+    stop = threading.Event()
+    worker = threading.Thread(target=run_loop, args=(rt, streams, Settings(fps=50), stop), daemon=True)
+    with caplog.at_level("ERROR", logger="sentinel.main"):
+        worker.start()
+        try:
+            assert pipe.called.wait(5) and esc.called.wait(5)
+            while len(pipe.calls) < 3:
+                time.sleep(0.01)
+        finally:
+            stop.set()
+            worker.join(5)
+    assert not worker.is_alive() and "t1" not in streams
+    assert {tid for tid, _ in pipe.calls} == {"t2"}
+    ended = [r for r in caplog.records if "stream ended" in r.getMessage()]
+    assert len(ended) == 1 and ended[0].exc_info is None

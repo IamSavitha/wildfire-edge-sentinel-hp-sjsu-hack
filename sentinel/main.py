@@ -26,10 +26,13 @@ def run_loop(rt: Runtime, streams: dict, settings: Settings, stop: threading.Eve
     last_flush = 0.0
     while not stop.is_set():
         tick = time.time()
-        for tid, stream in streams.items():
+        for tid, stream in list(streams.items()):
             try:  # isolate per tower: one bad source or frame must not skip the others
                 frame = next(stream)
                 rt.pipeline.process(tid, frame, tick)  # takes pipeline.lock itself; released during the VLM call
+            except StopIteration:  # a non-looping source ran out: drop it instead of logging every tick
+                log.error("tower %s stream ended", tid)
+                streams.pop(tid)
             except Exception:
                 log.exception("tower %s failed", tid)
         if tick - last_flush >= FLUSH_EVERY_S:

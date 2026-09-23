@@ -79,6 +79,8 @@ pytest
 ```
 -r requirements-dev.txt
 ultralytics
+# YOLO-World set_classes() text encoder (BEFORE baseline); installed here so it is not fetched at runtime
+git+https://github.com/ultralytics/CLIP.git
 ```
 
 `requirements-train.txt` (Nano training):
@@ -308,19 +310,21 @@ def main() -> None:
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--batch", type=int, default=32)
+    ap.add_argument("--device", default="0", help='CUDA device index, or "cpu"')
     a = ap.parse_args()
 
     from ultralytics import YOLO  # lazy: --help works without torch
 
     data_yaml = write_dfire_yaml(a.root, "runs/dfire.yaml")
     model = YOLO(a.model)
-    model.train(data=str(data_yaml), epochs=a.epochs, imgsz=a.imgsz, batch=a.batch,
-                device=0, project="runs", name="smoke", exist_ok=True)
-    metrics = model.val(data=str(data_yaml), imgsz=a.imgsz, device=0, split="val")
+    # absolute project dir: a relative one gets nested under runs/detect/
+    model.train(data=str(data_yaml), epochs=a.epochs, imgsz=a.imgsz, batch=a.batch, device=a.device,
+                project=str(Path("runs").resolve()), name="smoke", exist_ok=True)
+    metrics = model.val(data=str(data_yaml), imgsz=a.imgsz, device=a.device, split="val")
     print(f"mAP50={metrics.box.map50:.3f} mAP50-95={metrics.box.map:.3f}")
 
     Path("models").mkdir(exist_ok=True)
-    shutil.copy(model.trainer.best, "models/smoke_yolo.pt")  # runs/smoke/weights/best.pt
+    shutil.copy(model.trainer.best, "models/smoke_yolo.pt")  # runs/smoke/weights/best.pt under the cwd
     print("saved models/smoke_yolo.pt")
 
 
@@ -445,6 +449,7 @@ def main() -> None:
                     help="comma-separated text prompts for YOLO-World, in class-id order (e.g. smoke,fire)")
     ap.add_argument("--root", default="data/dfire")
     ap.add_argument("--imgsz", type=int, default=640)
+    ap.add_argument("--device", default="0", help='CUDA device index, or "cpu"')
     a = ap.parse_args()
     classes = [c.strip() for c in a.classes.split(",")] if a.classes else None
 
@@ -454,7 +459,7 @@ def main() -> None:
     model = YOLO(a.weights)
     if classes:
         model.set_classes(classes)  # must match data yaml ids: 0=smoke, 1=fire
-    m = model.val(data=str(data_yaml), imgsz=a.imgsz, device=0, split="val", plots=False)
+    m = model.val(data=str(data_yaml), imgsz=a.imgsz, device=a.device, split="val", plots=False)
 
     test_images = Path(a.root) / "test" / "images"
     n_images = sum(1 for p in test_images.iterdir() if p.suffix.lower() in IMAGE_EXTS) if test_images.is_dir() else None
@@ -480,6 +485,8 @@ python scripts/train_detector.py --epochs <N>
 python scripts/eval_detector.py --weights models/smoke_yolo.pt --name after_yolo11s
 ```
 Expected: `results/detector_before_yoloworld.json` and `results/detector_after_yolo11s.json`, each with `map50`, `map50_95`, `precision`, `recall`, `per_class_map50`, `ms_per_image`, `n_images`. Put both rows side by side in `results/detector.md`.
+
+**CLIP / offline note:** YOLO-World's first `set_classes()` needs the CLIP package (in `requirements.txt`, installed from git) and downloads the text-encoder weights. Run the BEFORE eval above once while online so those weights are cached; the BEFORE runtime config below depends on that cache for offline demos. Both scripts take `--device` (default `0`; `cpu` also works).
 
 **Step 4: Run the pipeline with either detector**
 
@@ -2315,6 +2322,7 @@ def frames(source: str, fps: float, loop: bool = True) -> Iterator[np.ndarray]:
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from sentinel.detector import YoloDetector
 from sentinel.schema import Detection
@@ -2357,6 +2365,15 @@ def test_set_classes_only_when_given():
     world = FakeModel()
     YoloDetector("yolov8s-worldv2.pt", classes=["smoke", "fire"], model=world)
     assert world.classes == ["smoke", "fire"]
+
+
+def test_classes_require_yolo_world_model():
+    class PlainModel:
+        def predict(self, frame, **kwargs):
+            return []
+
+    with pytest.raises(ValueError, match="YOLO-World"):
+        YoloDetector("models/smoke_yolo.pt", classes=["smoke", "fire"], model=PlainModel())
 ```
 
 ```python
@@ -2373,6 +2390,8 @@ class YoloDetector:
             from ultralytics import YOLO  # imported lazily so laptop tests don't need torch
             model = YOLO(weights)
         self.model = model
+        if classes and not hasattr(self.model, "set_classes"):
+            raise ValueError("detector_classes requires a YOLO-World checkpoint")
         if classes:
             self.model.set_classes(classes)  # YOLO-World: prompt order defines class ids
         self.conf = conf
@@ -2387,7 +2406,7 @@ class YoloDetector:
 **Step 5: Run tests, then a Nano smoke test**
 
 Run: `pytest tests/test_replayer.py tests/test_detector.py -v`
-Expected: 6 passed
+Expected: 7 passed
 
 On the Nano:
 ```bash
@@ -3066,10 +3085,13 @@ def run_loop(rt: Runtime, streams: dict, settings: Settings, stop: threading.Eve
     last_flush = 0.0
     while not stop.is_set():
         tick = time.time()
-        for tid, stream in streams.items():
+        for tid, stream in list(streams.items()):
             try:  # isolate per tower: one bad source or frame must not skip the others
                 frame = next(stream)
                 rt.pipeline.process(tid, frame, tick)  # takes pipeline.lock itself; released during the VLM call
+            except StopIteration:  # a non-looping source ran out: drop it instead of logging every tick
+                log.error("tower %s stream ended", tid)
+                streams.pop(tid)
             except Exception:
                 log.exception("tower %s failed", tid)
         if tick - last_flush >= FLUSH_EVERY_S:
@@ -3110,6 +3132,7 @@ Test the loop without a detector, VLM or network (`tests/test_main.py`):
 ```python
 import itertools
 import threading
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -3176,10 +3199,33 @@ def test_failing_tower_does_not_stall_others():
         worker.join(5)
     assert not worker.is_alive()
     assert {tid for tid, _ in pipe.calls} == {"t2"} and len(esc.calls) >= 1
+
+
+def test_ended_stream_is_dropped_and_logged_once(caplog):
+    pipe, esc = FakePipeline(), FakeEscalator()
+    rt = SimpleNamespace(pipeline=pipe, escalator=esc, link=Link())
+    dead = iter([ZERO_FRAME])
+    next(dead)  # primed at startup, now exhausted
+    streams = {"t1": dead, "t2": itertools.repeat(ZERO_FRAME)}
+    stop = threading.Event()
+    worker = threading.Thread(target=run_loop, args=(rt, streams, Settings(fps=50), stop), daemon=True)
+    with caplog.at_level("ERROR", logger="sentinel.main"):
+        worker.start()
+        try:
+            assert pipe.called.wait(5) and esc.called.wait(5)
+            while len(pipe.calls) < 3:
+                time.sleep(0.01)
+        finally:
+            stop.set()
+            worker.join(5)
+    assert not worker.is_alive() and "t1" not in streams
+    assert {tid for tid, _ in pipe.calls} == {"t2"}
+    ended = [r for r in caplog.records if "stream ended" in r.getMessage()]
+    assert len(ended) == 1 and ended[0].exc_info is None
 ```
 
 Run: `pytest tests/test_main.py -v`
-Expected: 2 passed (a tower whose `process` always raises must not stop the others or the outbox flush). Also `python -c "import sentinel.main"` must work without ultralytics installed.
+Expected: 3 passed (a tower whose `process` always raises must not stop the others or the outbox flush; an exhausted stream is dropped and logged once). Also `python -c "import sentinel.main"` must work without ultralytics installed.
 
 **Step 2: Implement `scripts/dispatch_stub.py`** (the simulated cloud dispatch center)
 

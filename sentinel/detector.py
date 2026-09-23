@@ -11,6 +11,8 @@ class YoloDetector:
             from ultralytics import YOLO  # imported lazily so laptop tests don't need torch
             model = YOLO(weights)
         self.model = model
+        if classes and not hasattr(self.model, "set_classes"):
+            raise ValueError("detector_classes requires a YOLO-World checkpoint")
         if classes:
             self.model.set_classes(classes)  # YOLO-World: prompt order defines class ids
         self.conf = conf

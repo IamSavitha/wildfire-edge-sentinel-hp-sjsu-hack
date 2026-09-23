@@ -42,6 +42,7 @@ def main() -> None:
                     help="comma-separated text prompts for YOLO-World, in class-id order (e.g. smoke,fire)")
     ap.add_argument("--root", default="data/dfire")
     ap.add_argument("--imgsz", type=int, default=640)
+    ap.add_argument("--device", default="0", help='CUDA device index, or "cpu"')
     a = ap.parse_args()
     classes = [c.strip() for c in a.classes.split(",")] if a.classes else None
 
@@ -51,7 +52,7 @@ def main() -> None:
     model = YOLO(a.weights)
     if classes:
         model.set_classes(classes)  # must match data yaml ids: 0=smoke, 1=fire
-    m = model.val(data=str(data_yaml), imgsz=a.imgsz, device=0, split="val", plots=False)
+    m = model.val(data=str(data_yaml), imgsz=a.imgsz, device=a.device, split="val", plots=False)
 
     test_images = Path(a.root) / "test" / "images"
     n_images = sum(1 for p in test_images.iterdir() if p.suffix.lower() in IMAGE_EXTS) if test_images.is_dir() else None
