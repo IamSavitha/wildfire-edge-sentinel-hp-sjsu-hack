@@ -2789,6 +2789,7 @@ git commit -m "feat: demo dashboard"
 
 **Files:**
 - Create: `sentinel/main.py`, `scripts/dispatch_stub.py`, `scripts/run_all.sh`
+- Test: `tests/test_main.py`
 
 **Step 1: Implement `sentinel/main.py`**
 
@@ -2814,8 +2815,8 @@ from sentinel.vlm_client import ContextVLM
 FLUSH_EVERY_S = 2.0
 
 
-def run_loop(rt: Runtime, settings: Settings, stop: threading.Event) -> None:
-    streams = {tid: frames(t.source, settings.fps) for tid, t in rt.pipeline.towers.items()}
+def run_loop(rt: Runtime, streams: dict, settings: Settings, stop: threading.Event) -> None:
+    # flush runs on this thread; Metrics has a single writer.
     period = 1.0 / settings.fps
     last_flush = 0.0
     while not stop.is_set():
@@ -2845,13 +2846,69 @@ def main() -> None:
                         escalator, settings, metrics)
     rt = Runtime(pipeline, escalator, link)
     stop = threading.Event()
-    threading.Thread(target=run_loop, args=(rt, settings, stop), daemon=True).start()
+    streams = {tid: frames(t.source, settings.fps) for tid, t in towers.items()}
+    for stream in streams.values():
+        next(stream)  # generators run lazily: surface bad tower sources at startup, not per tick
+    threading.Thread(target=run_loop, args=(rt, streams, settings, stop), daemon=True).start()
     uvicorn.run(create_app(rt), host="0.0.0.0", port=settings.dashboard_port)
 
 
 if __name__ == "__main__":
     main()
 ```
+
+Test the loop without a detector, VLM or network (`tests/test_main.py`):
+
+```python
+import itertools
+import threading
+from types import SimpleNamespace
+
+import numpy as np
+
+from sentinel.config import Settings
+from sentinel.escalation import Link
+from sentinel.main import run_loop
+
+ZERO_FRAME = np.zeros((10, 10, 3), np.uint8)
+
+
+class FakePipeline:
+    def __init__(self):
+        self.calls, self.called = [], threading.Event()
+
+    def process(self, tower_id, frame, now):
+        self.calls.append((tower_id, now))
+        self.called.set()
+
+
+class FakeEscalator:
+    def __init__(self):
+        self.calls, self.called = [], threading.Event()
+
+    def flush(self, now):
+        self.calls.append(now)
+        self.called.set()
+
+
+def test_run_loop_processes_frames_and_flushes():
+    pipe, esc = FakePipeline(), FakeEscalator()
+    rt = SimpleNamespace(pipeline=pipe, escalator=esc, link=Link())
+    streams = {"t1": itertools.repeat(ZERO_FRAME)}
+    stop = threading.Event()
+    worker = threading.Thread(target=run_loop, args=(rt, streams, Settings(fps=50), stop), daemon=True)
+    worker.start()
+    try:
+        assert pipe.called.wait(5) and esc.called.wait(5)
+    finally:
+        stop.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert pipe.calls[0][0] == "t1" and len(esc.calls) >= 1
+```
+
+Run: `pytest tests/test_main.py -v`
+Expected: 1 passed. Also `python -c "import sentinel.main"` must work without ultralytics installed.
 
 **Step 2: Implement `scripts/dispatch_stub.py`** (the simulated cloud dispatch center)
 
@@ -2889,6 +2946,7 @@ if __name__ == "__main__":
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source .venv/bin/activate
+mkdir -p results
 python scripts/dispatch_stub.py > results/dispatch.log 2>&1 &
 python -m sentinel.main
 ```
@@ -2897,7 +2955,7 @@ python -m sentinel.main
 
 **Step 5: End-to-end run on the Nano**
 ```bash
-chmod +x scripts/*.sh && mkdir -p results && ./scripts/run_all.sh
+chmod +x scripts/*.sh && ./scripts/run_all.sh
 ```
 On the laptop, tunnel and open the dashboard:
 ```bash
@@ -2913,7 +2971,7 @@ Verify this checklist by hand:
 
 **Step 6: Commit**
 ```bash
-git add sentinel/main.py scripts/dispatch_stub.py scripts/run_all.sh config/towers.json
+git add sentinel/main.py scripts/dispatch_stub.py scripts/run_all.sh tests/test_main.py config/towers.json
 git commit -m "feat: runtime entrypoint, dispatch stub, end-to-end demo"
 ```
 
