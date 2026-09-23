@@ -23,7 +23,7 @@ class Runtime:
     escalator: Escalator
     link: Link
     feedback_path: Path = Path("data/feedback.jsonl")
-    lock: threading.Lock | None = None
+    lock: "threading.Lock | None" = None  # quoted: threading.Lock is a function on Python 3.12
 
     def __post_init__(self):
         self.lock = self.lock or self.pipeline.lock
