@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 13:20 (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 13:45 (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -45,9 +45,9 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] `curl localhost:8000/v1/models` → put the exact id in `config/settings.json` as `vlm_model` — `base7b`
 - [x] Smoke test: chat returns "OK"; a `json_schema` request returns valid JSON — 7–26 s/call while YOLO trains; base model calls smoke crops "fog/cloud"
 - [x] D-Fire in `data/dfire/{train,test}/{images,labels}`; confirm 0 = smoke, 1 = fire — 17,221 train / 4,306 test via HF mirror `badsaarow/d-fire` + `scripts/prepare_dfire.py`
-- [ ] PyroNear `pyro-sdis` downloaded (optional) — ⏳ downloading
+- [x] PyroNear `pyro-sdis` downloaded (optional) — 29,537 train / 4,099 val tower images → `data/pyro_yolo/` via `scripts/prepare_pyro.py`
 - [ ] 4–6 FIgLib sequences in `data/demo/<name>/`
-- [ ] 150–300 benign images (campfire, BBQ, chimney, stack, fog, cloud) in `data/benign/`
+- [x] 150–300 benign images (campfire, BBQ, chimney, stack, fog, cloud) in `data/benign/` — 300 real smoke-free lookout-tower images from pyro-sdis (sky/cloud/haze); campfire/BBQ/stack still optional
 - [ ] (Optional) ~60 hand-checked crops in `data/gold/gold.jsonl`
 
 ## Phase 4 — Detector: before → fine-tune → after 🖥️ [T4, T4b]
@@ -100,6 +100,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [ ] Design the demo page: what judges see in 5 minutes (live tower feeds, event timeline, escalation/outbox, online/offline toggle, metrics)
 - [ ] Before vs after view: same frame through base vs fine-tuned models, side by side (detector boxes + VLM verdict)
 - [ ] Results panel that reads `results/*.json` (detector mAP, VLM accuracy, end-to-end precision/recall, cost model)
+- [ ] **Live comparative metrics dashboard** — while any model runs (detector, base VLM, LoRA VLM, teacher), show live per-model: requests, tokens in/out, tokens/s, latency p50/p95, GPU memory, calls avoided by the cascade, bytes sent upstream, and a running cost comparison (edge vs cloud-per-frame at configurable $/token and $/GB) to summarise the economics
 - [ ] Architecture + "why edge" panel (escalation rule, bytes sent vs video, tokens per event)
 - [ ] Implement, test, and serve it from the Nano dashboard (port 8080, via SSH tunnel)
 - [ ] Rehearse the demo flow on the page end to end
