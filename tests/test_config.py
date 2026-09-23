@@ -35,3 +35,8 @@ def test_detector_classes_setting(tmp_path):
     p = tmp_path / "s.json"
     p.write_text(json.dumps({"detector_weights": "yolov8s-worldv2.pt", "detector_classes": ["smoke", "fire"]}))
     assert load_settings(p).detector_classes == ["smoke", "fire"]
+
+
+def test_vlm_timeout_default_allows_a_7b_call_on_the_nano():
+    # ~2x a measured p95 of a few seconds; tune per eval_context latency_ms_p95
+    assert Settings().vlm_timeout_s == 15.0

@@ -8,7 +8,7 @@ from pathlib import Path
 class Settings:
     vlm_base_url: str = "http://localhost:8000/v1"
     vlm_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
-    vlm_timeout_s: float = 5.0
+    vlm_timeout_s: float = 15.0
     detector_weights: str = "models/smoke_yolo.pt"
     detector_classes: list[str] | None = None  # set for YOLO-World zero-shot, e.g. ["smoke", "fire"]
     fps: float = 2.0

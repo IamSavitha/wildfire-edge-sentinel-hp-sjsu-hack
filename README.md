@@ -90,6 +90,7 @@ Everything runs on the Nano except the unit tests (`pytest`, laptop-friendly, no
 ```bash
 # 0. Setup (CUDA PyTorch for GB10 first, per the NVIDIA DGX Spark playbook)
 ./scripts/setup_nano.sh && source .venv/bin/activate
+zrt config set proxy.auth.type none && zrt config set proxy.tls.enabled false   # setup_nano.sh does this too
 zrt serve hf:Qwen/Qwen2.5-VL-7B-Instruct --host 0.0.0.0 --port 8000 \
   --max-model-len 8192 --gpu-memory-utilization 0.30 --enable-prefix-caching   # tmux: vlm
 # put the id from `curl -s localhost:8000/v1/models` into config/settings.json as vlm_model
@@ -128,8 +129,18 @@ python scripts/compare.py                               # -> results/before_afte
 python scripts/cost_model.py > results/cost_model.jsonl # fill config/cost_inputs.json from bench results first
 
 # 6. Demo: dispatch stub + sentinel + dashboard on :8080
+#  - point each `source` in config/towers.json at a real data/demo/<sequence> folder
+#    (a FIgLib wildfire sequence for t1, a benign clip/folder for t2; plan Task 23 Step 4)
+#  - set "vlm_model" in config/settings.json to the exact served id: "context" once the LoRA
+#    adapter is served, otherwise the base id from `curl -s localhost:8000/v1/models`
+#  - start from an empty outbox before recording
+rm -f data/outbox.db
 ./scripts/run_all.sh
 ```
+
+The runtime VLM timeout (`vlm_timeout_s`, default 15 s) bounds how long one context call can stall the
+replay loop. Set it in `config/settings.json` to about 2× the `latency_ms_p95` measured by
+`eval_context.py` (in seconds).
 
 `--recheck-s 5` shortens the trend re-check (default 30 s) so growth can escalate within a clip; use the
 same value for both runs. Optional ablations: `bench.py --detector-only` (no VLM) and `--full-frame` (no crop: token cost of

@@ -198,9 +198,9 @@ If this prints `False` or `ModuleNotFoundError`, install CUDA PyTorch for GB10 (
 ```bash
 python3 -m venv .venv --system-site-packages && source .venv/bin/activate
 pip install -r requirements.txt -r requirements-train.txt && pip install -e .
-python -c "import torch; assert torch.cuda.is_available(); print(torch.cuda.get_device_name(0))"
+python -c "import torch, torchvision; assert torch.cuda.is_available(), 'pip replaced CUDA torch'; print(torch.__version__, torchvision.__version__, torch.cuda.get_device_name(0))"
 ```
-Expected: the device name prints.
+Expected: the versions and device name print. If the assert fails, pip pulled a CPU torch (usually via torchvision): install torchvision per the DGX Spark playbook and rerun.
 
 ---
 
@@ -1602,6 +1602,11 @@ def test_detector_classes_setting(tmp_path):
     p = tmp_path / "s.json"
     p.write_text(json.dumps({"detector_weights": "yolov8s-worldv2.pt", "detector_classes": ["smoke", "fire"]}))
     assert load_settings(p).detector_classes == ["smoke", "fire"]
+
+
+def test_vlm_timeout_default_allows_a_7b_call_on_the_nano():
+    # ~2x a measured p95 of a few seconds; tune per eval_context latency_ms_p95
+    assert Settings().vlm_timeout_s == 15.0
 ```
 
 **Step 2: Run to verify it fails**
@@ -1622,7 +1627,7 @@ from pathlib import Path
 class Settings:
     vlm_base_url: str = "http://localhost:8000/v1"
     vlm_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
-    vlm_timeout_s: float = 5.0
+    vlm_timeout_s: float = 15.0
     detector_weights: str = "models/smoke_yolo.pt"
     detector_classes: list[str] | None = None  # set for YOLO-World zero-shot, e.g. ["smoke", "fire"]
     fps: float = 2.0
@@ -1667,7 +1672,9 @@ def load_towers(path: str | Path = "config/towers.json") -> dict[str, Tower]:
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_config.py -v`
-Expected: 5 passed
+Expected: 6 passed
+
+**VLM timeout:** the default `vlm_timeout_s` is 15 s. After Task 24b, set it in `config/settings.json` to about 2× the measured `latency_ms_p95` from `results/context_after_lora7b.json` (in seconds). Too low turns every slow call into a fallback MONITOR; too high stalls the single replay loop for all towers.
 
 **Step 5: Commit**
 ```bash
@@ -3471,16 +3478,19 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source .venv/bin/activate
 mkdir -p results
+trap 'kill 0' EXIT   # stop the background dispatch stub when the sentinel exits
 python scripts/dispatch_stub.py > results/dispatch.log 2>&1 &
 python -m sentinel.main
 ```
 
-**Step 4: Prepare demo sources.** Point `config/towers.json` sources at one FIgLib wildfire sequence (t1) and one benign clip or folder (t2), and add a benign zone polygon on t2 if it contains a stack or campground.
+**Step 4: Prepare demo sources.** Point `config/towers.json` sources at one FIgLib wildfire sequence (t1) and one benign clip or folder (t2), and add a benign zone polygon on t2 if it contains a stack or campground. Set `vlm_model` in `config/settings.json` to the exact served id (`context` once the LoRA adapter is served, otherwise the base id from `/v1/models`).
 
 **Step 5: End-to-end run on the Nano**
 ```bash
+rm -f data/outbox.db   # start the recording from an empty outbox
 chmod +x scripts/*.sh && ./scripts/run_all.sh
 ```
+`run_all.sh` traps EXIT, so stopping the sentinel (Ctrl-C) also stops the background dispatch stub.
 On the laptop, tunnel and open the dashboard:
 ```bash
 ssh -L 8080:localhost:8080 hpX@<nano-ip>    # then open http://localhost:8080
@@ -4263,10 +4273,15 @@ python3 -m venv .venv --system-site-packages
 source .venv/bin/activate
 pip install -U pip && pip install -r requirements.txt -r requirements-train.txt
 pip install -e .
+# pip can silently replace the system CUDA torch with a CPU wheel (e.g. via torchvision). If this
+# fails, install torchvision per the NVIDIA DGX Spark playbook and rerun this script.
+python -c "import torch, torchvision; assert torch.cuda.is_available(), 'pip replaced CUDA torch'; print(torch.__version__, torchvision.__version__)"
 # Warm YOLO-World while online: set_classes() loads the CLIP text encoder and downloads its
 # weights on first use. Caching them now lets the BEFORE (zero-shot) detector run offline in demos.
 python -c "from ultralytics import YOLO; YOLO('yolov8s-worldv2.pt').set_classes(['smoke','fire'])"
 command -v zrt >/dev/null || sudo snap install --classic zrt
+# local-only serving: no proxy auth or TLS in front of the OpenAI-compatible endpoint
+zrt config set proxy.auth.type none && zrt config set proxy.tls.enabled false
 zrt pull Qwen/Qwen2.5-VL-7B-Instruct
 zrt pull Qwen/Qwen2.5-VL-32B-Instruct-AWQ   # teacher for distillation; verify the exact repo id on Hugging Face
 echo "Next: ./scripts/download_data.sh, then see README 'Reproduce'."
