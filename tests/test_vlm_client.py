@@ -99,3 +99,9 @@ def test_last_usage_keeps_the_prompt_completion_split():
     v2, _ = vlm([TimeoutError("slow")])
     v2.classify(b"\xff\xd8fake")
     assert v2.last_usage == {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
+
+
+def test_unix_socket_base_url_targets_the_socket():
+    vlm = ContextVLM("context", base_url="unix:///opt/hp/zrt/run/vllm-base7b.sock")
+    assert str(vlm.client.base_url) == "http://localhost/v1/"
+    assert vlm.client._client._transport._pool._uds == "/opt/hp/zrt/run/vllm-base7b.sock"

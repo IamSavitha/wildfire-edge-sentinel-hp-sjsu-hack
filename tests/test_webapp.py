@@ -384,3 +384,16 @@ def test_pass_card_fields_include_native_full_frame(tmp_path):
     r = client.post("/api/analyze", files={"image": ("x.jpg", jpeg(1920, 1080), "image/jpeg")},
                     data={"pipelines": "after"}).json()["results"][0]
     assert r["full_frame_image_tokens"] == 26 * 46 and r["full_frame_image_tokens_native"] == 39 * 69
+
+
+def test_list_served_models_over_a_unix_socket_url():
+    import httpx
+    from sentinel.webapp import list_served_models
+    seen = {}
+
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"data": [{"id": "base7b"}, {"id": "context"}]})
+
+    ids = list_served_models("unix:///opt/hp/zrt/run/vllm-base7b.sock", transport=httpx.MockTransport(handler))
+    assert ids == ["base7b", "context"] and seen["url"] == "http://localhost/v1/models"

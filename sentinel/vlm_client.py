@@ -2,6 +2,7 @@
 import base64
 import logging
 
+import httpx
 from openai import OpenAI
 from pydantic import ValidationError
 
@@ -18,14 +19,26 @@ SYSTEM_PROMPT = (
 USER_PROMPT = "Classify this scene."
 
 
+def _openai_client(base_url: str, timeout_s: float) -> OpenAI:
+    """HTTP URL, or unix:///path/to.sock for a zrt backend socket.
+
+    The zrt proxy routes only by the served label, so a LoRA adapter name (e.g. "context")
+    must be requested on the backend's own socket: unix:///opt/hp/zrt/run/vllm-<label>.sock
+    """
+    if base_url.startswith("unix://"):
+        transport = httpx.HTTPTransport(uds=base_url[len("unix://"):])
+        return OpenAI(base_url="http://localhost/v1", api_key="EMPTY", max_retries=0,
+                      http_client=httpx.Client(transport=transport, timeout=timeout_s))
+    return OpenAI(base_url=base_url, api_key="EMPTY", timeout=timeout_s, max_retries=0)
+
+
 class ContextVLM:
     def __init__(self, model: str, base_url: str = "http://localhost:8000/v1",
                  timeout_s: float = 5.0, max_tokens: int = 160, client=None):
         self.model = model
         self.max_tokens = max_tokens
         self.last_usage: dict = {}  # prompt/completion split of the latest classify() call
-        self.client = client or OpenAI(base_url=base_url, api_key="EMPTY",
-                                       timeout=timeout_s, max_retries=0)
+        self.client = client or _openai_client(base_url, timeout_s)
 
     def _messages(self, jpeg: bytes) -> list[dict]:
         url = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()

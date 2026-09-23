@@ -170,8 +170,13 @@ def scan_samples(dirs, cap: int = SAMPLE_CAP) -> list[dict]:
 
 # ---------------------------------------------------------------- defaults for the Nano
 
-def list_served_models(base_url: str, timeout_s: float = 2.0) -> list[str]:
-    r = httpx.get(base_url.rstrip("/") + "/models", timeout=timeout_s)
+def list_served_models(base_url: str, timeout_s: float = 2.0, transport=None) -> list[str]:
+    """Model ids from an OpenAI-compatible server; base_url may be unix:///path/to.sock."""
+    if base_url.startswith("unix://"):
+        transport = transport or httpx.HTTPTransport(uds=base_url[len("unix://"):])
+        base_url = "http://localhost/v1"
+    with httpx.Client(transport=transport, timeout=timeout_s) as c:
+        r = c.get(base_url.rstrip("/") + "/models")
     r.raise_for_status()
     return [m["id"] for m in r.json().get("data", [])]
 
@@ -469,7 +474,9 @@ def main(argv=None):
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8095)
     ap.add_argument("--vlm-base-url", default="http://localhost:8000/v1",
-                    help="OpenAI-compatible endpoint (zrt proxy); models are chosen by name")
+                    help="OpenAI-compatible endpoint; models are chosen by name. For LoRA adapters use the "
+                         "backend socket: unix:///opt/hp/zrt/run/vllm-base7b.sock (the zrt proxy only "
+                         "routes the served label)")
     ap.add_argument("--vlm-timeout", type=float, default=60.0, help="per VLM request, seconds")
     ap.add_argument("--run-dir", default="/opt/hp/zrt/run", help="zrt run dir with vllm-*.json/.sock")
     ap.add_argument("--prices", default="config/cost_inputs.json", help="price/cost inputs JSON")
