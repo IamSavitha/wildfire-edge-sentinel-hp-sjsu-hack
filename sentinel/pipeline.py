@@ -1,5 +1,6 @@
 """Stage orchestration: detect → gate → context VLM → trend → severity → escalate."""
 import base64
+import logging
 import time
 import threading
 import uuid
@@ -66,6 +67,7 @@ class Pipeline:
         self.latched: dict[str, float] = {}  # tower -> last time smoke was seen after an ALERT
         self.lock = threading.Lock()  # guards state read by the dashboard; released during the VLM call
 
+    # Single writer: only run_loop's thread may call process().
     def process(self, tower_id: str, frame: np.ndarray, now: float) -> None:
         t0 = time.perf_counter()
         dets = self.detector(frame)
@@ -83,11 +85,12 @@ class Pipeline:
             ev = self.active.get(tower_id)
             if ev is None:
                 if tower_id in self.latched:  # same fire already alerted: wait for it to clear
-                    if best is not None:
-                        self.latched[tower_id] = now
-                    elif now - self.latched[tower_id] >= self.s.cooldown_s:
-                        del self.latched[tower_id]
-                    return
+                    if now - self.latched[tower_id] >= self.s.cooldown_s:
+                        del self.latched[tower_id]  # then fall through to the gate
+                    else:
+                        if best is not None:
+                            self.latched[tower_id] = now
+                        return
                 candidate = self.gate.update(tower_id, dets, now)
                 if candidate is not None:
                     self._open(tower_id, frame, candidate, now)
@@ -112,6 +115,9 @@ class Pipeline:
         self.lock.release()
         try:
             ctx, tokens = self.vlm.classify(to_jpeg(crop))
+        except Exception:
+            logging.getLogger(__name__).exception("VLM classify raised")
+            ctx, tokens = None, 0
         finally:
             self.lock.acquire()
         ev.ctx = ctx

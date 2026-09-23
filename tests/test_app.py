@@ -73,5 +73,6 @@ def test_state_served_while_vlm_classifies(tmp_path):
     assert len(state["active"]) == 1 and state["active"][0]["severity"] is None
     release.set()
     worker.join(5)
+    assert not worker.is_alive()
     state = client.get("/api/state").json()
     assert state["active"] == [] and state["events"][0]["severity"] == "ALERT"

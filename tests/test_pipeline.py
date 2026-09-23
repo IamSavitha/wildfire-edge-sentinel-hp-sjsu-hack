@@ -107,3 +107,33 @@ def test_persistent_fire_alerts_once_until_smoke_clears():
     for t in range(361, 364):
         p.process("t1", FRAME, now=t)
     assert [s for s, _ in esc.handled] == [Severity.ALERT, Severity.ALERT]
+
+
+def test_vlm_exception_uses_fallback_path():
+    class RaisingVLM:
+        def classify(self, jpeg):
+            raise RuntimeError("boom")
+
+    esc = RecordingEscalator()
+    schedule = steady() + [(32, [BIG])]
+    dets = iter([d for _, d in schedule])
+    p = Pipeline({"t1": TOWER}, lambda frame: next(dets), RaisingVLM(), esc,
+                 Settings(min_frames=3, recheck_s=30, max_rechecks=2, cooldown_s=0))
+    for t, _ in schedule:
+        p.process("t1", FRAME, now=t)
+    severity, report = esc.handled[0]
+    assert severity == Severity.ALERT and report["source_type"] == "unknown"
+    assert p.metrics.counters["vlm_failures"] == 1
+
+
+def test_latch_expires_cooldown_after_last_smoke_even_if_smoke_returns():
+    feed = {"dets": [SMALL]}
+    esc = RecordingEscalator()
+    p = Pipeline({"t1": TOWER}, lambda f: feed["dets"], FakeVLM(ctx(near_structures=True)), esc,
+                 Settings(min_frames=3, cooldown_s=60))
+    for t in range(300):
+        p.process("t1", FRAME, now=t)
+    assert [s for s, _ in esc.handled] == [Severity.ALERT]
+    for t in range(400, 403):  # no frames processed in between; smoke is back
+        p.process("t1", FRAME, now=t)
+    assert [s for s, _ in esc.handled] == [Severity.ALERT, Severity.ALERT]

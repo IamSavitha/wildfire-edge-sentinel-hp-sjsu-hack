@@ -2279,6 +2279,36 @@ def test_persistent_fire_alerts_once_until_smoke_clears():
     for t in range(361, 364):
         p.process("t1", FRAME, now=t)
     assert [s for s, _ in esc.handled] == [Severity.ALERT, Severity.ALERT]
+
+
+def test_vlm_exception_uses_fallback_path():
+    class RaisingVLM:
+        def classify(self, jpeg):
+            raise RuntimeError("boom")
+
+    esc = RecordingEscalator()
+    schedule = steady() + [(32, [BIG])]
+    dets = iter([d for _, d in schedule])
+    p = Pipeline({"t1": TOWER}, lambda frame: next(dets), RaisingVLM(), esc,
+                 Settings(min_frames=3, recheck_s=30, max_rechecks=2, cooldown_s=0))
+    for t, _ in schedule:
+        p.process("t1", FRAME, now=t)
+    severity, report = esc.handled[0]
+    assert severity == Severity.ALERT and report["source_type"] == "unknown"
+    assert p.metrics.counters["vlm_failures"] == 1
+
+
+def test_latch_expires_cooldown_after_last_smoke_even_if_smoke_returns():
+    feed = {"dets": [SMALL]}
+    esc = RecordingEscalator()
+    p = Pipeline({"t1": TOWER}, lambda f: feed["dets"], FakeVLM(ctx(near_structures=True)), esc,
+                 Settings(min_frames=3, cooldown_s=60))
+    for t in range(300):
+        p.process("t1", FRAME, now=t)
+    assert [s for s, _ in esc.handled] == [Severity.ALERT]
+    for t in range(400, 403):  # no frames processed in between; smoke is back
+        p.process("t1", FRAME, now=t)
+    assert [s for s, _ in esc.handled] == [Severity.ALERT, Severity.ALERT]
 ```
 
 **Step 2: Run to verify it fails**
@@ -2291,6 +2321,7 @@ Expected: FAIL, `ModuleNotFoundError`
 ```python
 """Stage orchestration: detect → gate → context VLM → trend → severity → escalate."""
 import base64
+import logging
 import time
 import threading
 import uuid
@@ -2357,6 +2388,7 @@ class Pipeline:
         self.latched: dict[str, float] = {}  # tower -> last time smoke was seen after an ALERT
         self.lock = threading.Lock()  # guards state read by the dashboard; released during the VLM call
 
+    # Single writer: only run_loop's thread may call process().
     def process(self, tower_id: str, frame: np.ndarray, now: float) -> None:
         t0 = time.perf_counter()
         dets = self.detector(frame)
@@ -2374,11 +2406,12 @@ class Pipeline:
             ev = self.active.get(tower_id)
             if ev is None:
                 if tower_id in self.latched:  # same fire already alerted: wait for it to clear
-                    if best is not None:
-                        self.latched[tower_id] = now
-                    elif now - self.latched[tower_id] >= self.s.cooldown_s:
-                        del self.latched[tower_id]
-                    return
+                    if now - self.latched[tower_id] >= self.s.cooldown_s:
+                        del self.latched[tower_id]  # then fall through to the gate
+                    else:
+                        if best is not None:
+                            self.latched[tower_id] = now
+                        return
                 candidate = self.gate.update(tower_id, dets, now)
                 if candidate is not None:
                     self._open(tower_id, frame, candidate, now)
@@ -2403,6 +2436,9 @@ class Pipeline:
         self.lock.release()
         try:
             ctx, tokens = self.vlm.classify(to_jpeg(crop))
+        except Exception:
+            logging.getLogger(__name__).exception("VLM classify raised")
+            ctx, tokens = None, 0
         finally:
             self.lock.acquire()
         ev.ctx = ctx
@@ -2454,7 +2490,7 @@ class Pipeline:
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_pipeline.py -v`
-Expected: 9 passed
+Expected: 11 passed
 
 **Step 5: Commit**
 ```bash
@@ -2547,6 +2583,7 @@ def test_state_served_while_vlm_classifies(tmp_path):
     assert len(state["active"]) == 1 and state["active"][0]["severity"] is None
     release.set()
     worker.join(5)
+    assert not worker.is_alive()
     state = client.get("/api/state").json()
     assert state["active"] == [] and state["events"][0]["severity"] == "ALERT"
 ```
