@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wildfire Edge Sentinel Demo</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:#f9f9f7; --surface:#fcfcfb; --sunken:#f0efec; --fg:#0b0b0b; --fg2:#52514e; --muted:#6f6d68;
+    --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,0.10);
+    --s-edge:#2a78d6; --s-cloud:#eb6834;
+    --good:#0ca30c; --warning:#fab219; --critical:#d03b3b;
+    --accent:#2a78d6; --accent-fg:#fff; --box:#e5484d; --box-weak:#8a887f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page:#0d0d0d; --surface:#1a1a19; --sunken:#232322; --fg:#ffffff; --fg2:#c3c2b7; --muted:#9a9890;
+      --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,0.10);
+      --s-edge:#3987e5; --s-cloud:#d95926; --accent:#3987e5; --box:#ff6369; --box-weak:#a8a69c;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:#0d0d0d; --surface:#1a1a19; --sunken:#232322; --fg:#ffffff; --fg2:#c3c2b7; --muted:#9a9890;
+    --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,0.10);
+    --s-edge:#3987e5; --s-cloud:#d95926; --accent:#3987e5; --box:#ff6369; --box-weak:#a8a69c;
+  }
+  * { box-sizing:border-box; }
+  html, body { overflow-x:hidden; }
+  body { margin:0; background:var(--page); color:var(--fg); font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header.top { display:flex; flex-wrap:wrap; gap:8px 20px; justify-content:space-between; align-items:center;
+               padding:14px 16px; border-bottom:1px solid var(--ring); }
+  h1 { font-size:20px; margin:0; }
+  .sub { color:var(--fg2); font-size:13px; margin:2px 0 0; }
+  main { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:20px; padding:16px; max-width:1600px; margin:0 auto; }
+  @media (max-width:900px) { main { grid-template-columns:minmax(0,1fr); } }
+  .pane { min-width:0; display:flex; flex-direction:column; gap:14px; }
+  .pane-head { display:flex; flex-wrap:wrap; gap:6px 16px; justify-content:space-between; align-items:flex-end; }
+  h2 { font-size:17px; margin:0; }
+  h3 { font-size:14px; margin:0 0 10px; display:flex; align-items:center; gap:8px; }
+  h4 { font-size:12px; margin:12px 0 4px; color:var(--fg2); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+  .num { font-variant-numeric:tabular-nums; font-size:12px; font-weight:700; color:var(--accent);
+         border:1px solid var(--accent); border-radius:999px; padding:1px 7px; }
+  .card { background:var(--surface); border:1px solid var(--ring); border-radius:10px; padding:14px; min-width:0; }
+  .hint { color:var(--muted); font-size:12.5px; }
+  .note { color:var(--fg2); font-size:12.5px; margin:8px 0 0; }
+  code { font-size:12px; background:var(--sunken); padding:0 4px; border-radius:4px; overflow-wrap:anywhere; }
+  button, select, input { font:inherit; color:var(--fg); }
+  button { cursor:pointer; border-radius:6px; }
+  button:focus-visible, input:focus-visible, select:focus-visible, label.drop:focus-within { outline:2px solid var(--accent); outline-offset:2px; }
+  .btn { font-weight:600; padding:8px 16px; border:0; background:var(--accent); color:var(--accent-fg); }
+  .btn:disabled { opacity:.55; cursor:progress; }
+  .btn.ghost { background:transparent; color:var(--fg); border:1px solid var(--axis); font-weight:500; padding:5px 10px; font-size:13px; }
+  select, input[type=number] { background:var(--page); border:1px solid var(--axis); border-radius:6px; padding:6px 8px; max-width:100%; }
+
+  /* network switch */
+  .net { display:inline-flex; align-items:center; gap:10px; border:1px solid var(--axis); background:var(--surface);
+         padding:6px 12px 6px 6px; border-radius:999px; font-weight:600; }
+  .net .knob { width:38px; height:22px; border-radius:999px; background:var(--critical); position:relative; flex:none; transition:background .15s; }
+  .net .knob::after { content:""; position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:#fff; transition:left .15s; }
+  .net[aria-checked="true"] .knob { background:var(--good); }
+  .net[aria-checked="true"] .knob::after { left:19px; }
+  .net small { display:block; font-weight:400; color:var(--fg2); font-size:12px; }
+
+  /* image picker */
+  .picker { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; align-items:stretch; }
+  @media (max-width:520px) { .picker { grid-template-columns:minmax(0,1fr); } }
+  label.drop { display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; gap:4px;
+               border:1.5px dashed var(--axis); border-radius:8px; padding:16px; min-height:120px; cursor:pointer; color:var(--fg2); }
+  label.drop.over { border-color:var(--accent); background:var(--sunken); }
+  label.drop strong { color:var(--fg); }
+  label.drop input { position:absolute; width:1px; height:1px; opacity:0; }
+  .preview { margin:0; border-radius:8px; background:var(--sunken); min-height:120px; display:flex; flex-direction:column; overflow:hidden; }
+  .preview img { width:100%; max-height:200px; object-fit:contain; background:#000; display:block; }
+  .preview figcaption { padding:6px 8px; font-size:12.5px; color:var(--fg2); overflow-wrap:anywhere; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0 8px; }
+  .chip { border:1px solid var(--axis); background:transparent; padding:3px 10px; border-radius:999px; font-size:12.5px; }
+  .chip[aria-pressed="true"] { background:var(--fg); color:var(--page); border-color:var(--fg); }
+  .gallery { display:grid; grid-template-columns:repeat(auto-fill, minmax(76px, 1fr)); gap:6px; max-height:236px; overflow-y:auto; padding:2px; }
+  .gallery button { padding:0; border:2px solid transparent; background:var(--sunken); aspect-ratio:4/3; overflow:hidden; }
+  .gallery button[aria-pressed="true"] { border-color:var(--accent); }
+  .gallery img { width:100%; height:100%; object-fit:cover; display:block; }
+  .row { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; margin-top:12px; }
+  .row label { display:flex; align-items:center; gap:8px; font-size:13px; }
+
+  /* passes */
+  .pass { display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-bottom:1px solid var(--grid); }
+  .pass:last-of-type { border-bottom:0; }
+  .pass input { margin-top:3px; flex:none; width:16px; height:16px; }
+  .pass .what { font-size:12.5px; color:var(--fg2); overflow-wrap:anywhere; }
+  .tag { display:inline-block; font-size:11.5px; padding:0 6px; border-radius:4px; border:1px solid var(--axis); color:var(--fg2); margin:2px 4px 0 0; }
+  .tag.ok { border-color:var(--good); } .tag.bad { border-color:var(--critical); }
+  .tag.ok::before { content:"✓ "; color:var(--good); } .tag.bad::before { content:"✗ "; color:var(--critical); }
+  .runbar { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; justify-content:space-between; }
+  #run-status { font-size:13px; color:var(--fg2); }
+  #run-status.err { color:var(--critical); }
+
+  /* results */
+  .results { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap:12px; }
+  .result header { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; margin-bottom:8px; }
+  .result header small { display:block; color:var(--fg2); font-size:12px; overflow-wrap:anywhere; }
+  .imgwrap { position:relative; border-radius:6px; overflow:hidden; background:#000; }
+  .imgwrap img { display:block; width:100%; height:auto; }
+  .imgwrap svg { position:absolute; inset:0; width:100%; height:100%; }
+  .imgwrap rect { fill:none; vector-effect:non-scaling-stroke; stroke-width:2.5; }
+  .imgwrap rect.strong { stroke:var(--box); } .imgwrap rect.weak { stroke:var(--box-weak); stroke-dasharray:5 4; }
+  .imgwrap text { fill:#fff; paint-order:stroke; stroke:#000; stroke-width:3px; stroke-linejoin:round; font-weight:600; }
+  .sev { display:inline-block; padding:2px 8px; border-radius:4px; font-weight:700; font-size:12px; white-space:nowrap; letter-spacing:.02em; }
+  .sev.ALERT { background:var(--critical); color:#fff; }
+  .sev.MONITOR { background:var(--warning); color:#000; }
+  .sev.LOG { border:1px solid var(--accent); color:var(--fg); }
+  .sev.IGNORE { border:1px solid var(--axis); color:var(--fg2); }
+  .score { font-size:13px; font-weight:600; margin:8px 0 0; }
+  .score.good { color:var(--good); } .score.bad { color:var(--critical); } .score.none { color:var(--muted); font-weight:400; }
+  .cascade { font-size:12.5px; color:var(--fg2); margin:6px 0 0; padding:6px 8px; background:var(--sunken); border-radius:6px; }
+  .cascade b { color:var(--fg); }
+  ul.dets { list-style:none; margin:0; padding:0; display:flex; flex-wrap:wrap; gap:4px; }
+  ul.dets li { font-size:12px; border:1px solid var(--axis); border-radius:4px; padding:0 6px; font-variant-numeric:tabular-nums; }
+  ul.dets li.strong { border-color:var(--box); }
+  ul.dets li.weak { color:var(--muted); border-style:dashed; }
+  dl.kv { display:grid; grid-template-columns:auto minmax(0,1fr); gap:3px 12px; margin:0; font-size:12.5px; }
+  dl.kv dt { color:var(--fg2); } dl.kv dd { margin:0; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+  .report { font-size:12.5px; background:var(--sunken); border-radius:6px; padding:8px; margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .decision { display:inline-block; font-weight:700; font-size:12px; padding:1px 7px; border-radius:4px; border:1px solid var(--axis); }
+  .decision.sent { background:var(--accent); color:var(--accent-fg); border-color:var(--accent); }
+  .decision.queued { border-color:var(--warning); }
+  .esc { display:flex; gap:10px; align-items:flex-start; }
+  .esc img { width:72px; flex:none; border-radius:4px; }
+  .err-card { border-color:var(--critical); }
+  .placeholder { color:var(--muted); font-size:13px; padding:12px; text-align:center; border:1px dashed var(--axis); border-radius:10px; }
+
+  /* right pane */
+  .hstats { display:flex; flex-wrap:wrap; gap:4px 16px; margin:0; font-size:12.5px; }
+  .hstats div { display:flex; flex-direction:column; }
+  .hstats dt { color:var(--muted); font-size:11.5px; } .hstats dd { margin:0; font-weight:600; font-variant-numeric:tabular-nums; }
+  .tablewrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; font-size:13px; }
+  th, td { padding:6px 8px; text-align:right; border-bottom:1px solid var(--grid); }
+  th { color:var(--fg2); font-weight:600; font-size:12px; vertical-align:bottom; }
+  th:first-child, td:first-child { text-align:left; }
+  td:first-child { color:var(--fg2); }
+  tr:last-child td { border-bottom:0; }
+  td small { color:var(--muted); display:block; font-size:11.5px; }
+  .card-head { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; flex-wrap:wrap; }
+  .econ { border-top:1px solid var(--grid); padding-top:12px; margin-top:12px; }
+  .econ:first-of-type { border-top:0; padding-top:0; margin-top:0; }
+  .vs { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px; }
+  .side { border:1px solid var(--ring); border-radius:8px; padding:10px; min-width:0; }
+  .side h5 { margin:0 0 2px; font-size:12.5px; font-weight:600; display:flex; align-items:center; gap:6px; }
+  .side h5 i { width:10px; height:10px; border-radius:2px; display:inline-block; flex:none; }
+  .big { font-size:24px; font-weight:650; line-height:1.2; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+  .big.hint { font-size:15px; font-weight:500; font-style:italic; }
+  .side small { display:block; color:var(--fg2); font-size:12px; }
+  .bars { margin-top:10px; display:grid; gap:8px; }
+  .bar-row { display:grid; grid-template-columns:62px minmax(0,1fr); gap:8px; align-items:center; font-size:12px; }
+  .bar-row > span { color:var(--fg2); }
+  .track { display:grid; gap:3px; }
+  .bar { display:flex; align-items:center; gap:6px; min-width:0; }
+  .bar b { height:10px; border-radius:0 4px 4px 0; display:block; min-width:2px; flex:none; }
+  .bar em { font-style:normal; color:var(--fg2); white-space:nowrap; font-variant-numeric:tabular-nums; font-size:11.5px; }
+  .legend { display:flex; gap:14px; font-size:12px; color:var(--fg2); margin-top:8px; flex-wrap:wrap; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+  .savings { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 110px), 1fr)); gap:8px; margin-top:10px; }
+  .savings div { background:var(--sunken); border-radius:6px; padding:6px 8px; }
+  .savings small { display:block; color:var(--fg2); font-size:11.5px; }
+  .savings strong { font-size:16px; font-variant-numeric:tabular-nums; }
+  .netgrid { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 130px), 1fr)); gap:8px; }
+  .netgrid div { background:var(--sunken); border-radius:6px; padding:8px; }
+  .netgrid small { display:block; color:var(--fg2); font-size:12px; }
+  .netgrid strong { font-size:20px; font-variant-numeric:tabular-nums; }
+  .status { display:inline-flex; align-items:center; gap:5px; font-weight:600; }
+  .status::before { content:""; width:8px; height:8px; border-radius:50%; background:currentColor; }
+  .status.ok { color:var(--good); } .status.bad { color:var(--critical); }
+  .better { color:var(--good); font-weight:600; }
+  form.prices { display:grid; gap:10px; grid-template-columns:repeat(auto-fit, minmax(min(100%, 150px), 1fr)); align-items:end; }
+  form.prices label { display:flex; flex-direction:column; gap:4px; font-size:12.5px; color:var(--fg2); }
+  form.prices input { width:100%; }
+  @media (max-width:520px) { .big { font-size:20px; } main { padding:12px 16px; } .vs { grid-template-columns:minmax(0,1fr); } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>Wildfire Edge Sentinel</h1>
+    <p class="sub">Run the cascade before and after fine-tuning on any image, on the HP ZGX Nano, and see what it costs.</p>
+  </div>
+  <button class="net" id="net-top" role="switch" aria-checked="true" aria-label="Uplink to the cloud" title="Toggle the simulated uplink">
+    <span class="knob" aria-hidden="true"></span><span><span class="net-text">Link: ONLINE</span><small>simulated tower uplink</small></span>
+  </button>
+</header>
+<main>
+  <!-- ============ LEFT: try the models ============ -->
+  <section class="pane" aria-labelledby="left-h">
+    <div class="pane-head"><h2 id="left-h">Try the models</h2><span class="hint" id="served-note"></span></div>
+
+    <div class="card">
+      <h3><span class="num">01</span> Select an image</h3>
+      <div class="picker">
+        <label class="drop" id="drop">
+          <strong>Upload an image</strong>
+          <span>or drop it here · JPEG, PNG, WebP · up to 15 MB</span>
+          <input type="file" id="file" accept="image/jpeg,image/png,image/webp,image/bmp" aria-label="Upload an image">
+        </label>
+        <figure class="preview">
+          <img id="preview" alt="Selected image" hidden>
+          <figcaption id="preview-cap">No image selected yet. Upload one or pick a sample below.</figcaption>
+        </figure>
+      </div>
+      <div class="chips" id="groups" role="group" aria-label="Filter samples"></div>
+      <div class="gallery" id="gallery" role="group" aria-label="Sample images"><p class="hint">Loading samples…</p></div>
+      <div class="row">
+        <label for="truth">Ground truth
+          <select id="truth">
+            <option value="unknown">Unknown / do not score</option>
+            <option value="wildfire">Wildfire</option>
+            <option value="no_wildfire">No wildfire</option>
+          </select>
+        </label>
+        <span class="hint" id="truth-hint"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3><span class="num">02</span> Choose passes</h3>
+      <div id="passes"><p class="hint">Loading…</p></div>
+      <div class="row">
+        <label><input type="checkbox" id="force"> Force the VLM even when nothing is detected (it then sees the whole frame)</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3><span class="num">03</span> Network and run</h3>
+      <div class="runbar">
+        <button class="net" id="net" role="switch" aria-checked="true" aria-label="Uplink to the cloud">
+          <span class="knob" aria-hidden="true"></span>
+          <span><span class="net-text">Link: ONLINE</span><small id="net-help">ALERTs are sent with a forecast</small></span>
+        </button>
+        <button class="btn" id="run" type="button">Run comparison</button>
+      </div>
+      <p id="run-status" role="status" aria-live="polite"></p>
+    </div>
+
+    <div id="results" class="results" aria-live="polite">
+      <div class="placeholder">Results appear here: one card per pass, side by side.</div>
+    </div>
+  </section>
+
+  <!-- ============ RIGHT: usage & economics ============ -->
+  <section class="pane" aria-labelledby="right-h">
+    <div class="pane-head">
+      <h2 id="right-h">Usage &amp; economics</h2>
+      <dl class="hstats" aria-live="off">
+        <div><dt>Updated</dt><dd id="h-ts">—</dd></div>
+        <div><dt>GPU</dt><dd id="h-gpu">—</dd></div>
+        <div><dt>Unified memory</dt><dd id="h-mem">—</dd></div>
+      </dl>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h3>This session, per pipeline</h3>
+        <button class="btn ghost" id="reset" type="button">Reset session</button></div>
+      <div class="tablewrap" id="kpis"><p class="hint">Run an image to start counting.</p></div>
+    </div>
+
+    <div class="card">
+      <h3>Edge cascade vs cloud: every image to a VLM</h3>
+      <div id="econ"><p class="hint">No images yet.</p></div>
+      <p class="note">Edge: the detector runs on every image, the local VLM only on detections (on a ≤448 px crop), and only
+        ALERT reports leave the device. Inference on the Nano costs $0 per call; the edge pays uplink only.
+        Cloud: every image uploaded and sent whole to a Qwen2.5-VL-class model. Its image tokens are
+        <em>estimated</em> with Qwen's resize rule at vLLM's default max_pixels (12.8 MP); prompt and output tokens
+        per call are the ones measured here.</p>
+    </div>
+
+    <div class="card">
+      <h3>Network</h3>
+      <div class="netgrid" id="network"></div>
+      <p class="note">While the link is down the edge still runs every model and holds ALERTs in the outbox.
+        A cloud-only design has no model to run for those images.</p>
+    </div>
+
+    <div class="card">
+      <h3>Served models (live vLLM metrics)</h3>
+      <div class="tablewrap" id="models"><p class="hint">Waiting for the first poll…</p></div>
+    </div>
+
+    <div class="card">
+      <h3>Benchmarks: before vs after fine-tuning</h3>
+      <div class="tablewrap" id="bench"><p class="hint">Loading…</p></div>
+      <p class="note">From <code>results/*.json</code> (held-out data, same scripts before and after). Context accuracy is
+        agreement with the 32B teacher's labels, not hand-checked ground truth.</p>
+    </div>
+
+    <div class="card">
+      <h3>Price assumptions</h3>
+      <form class="prices" id="prices">
+        <label>$ per 1M input tokens<input name="usd_per_mtok_in" type="number" min="0" step="any" inputmode="decimal" required></label>
+        <label>$ per 1M output tokens<input name="usd_per_mtok_out" type="number" min="0" step="any" inputmode="decimal" required></label>
+        <label>$ per GB uplink<input name="usd_per_gb" type="number" min="0" step="any" inputmode="decimal" required></label>
+        <button class="btn" type="submit">Apply</button>
+      </form>
+      <p class="note">User-supplied assumptions, not measurements: enter current published cloud API and data rates.
+        Defaults come from <code>config/cost_inputs.json</code> (zeros). They apply to this session only.
+        Token counts, bytes and latency on this page are measured.</p>
+      <p class="note" id="price-msg" role="status"></p>
+    </div>
+  </section>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const isNum = (v) => typeof v === "number" && isFinite(v);
+  const DASH = "—";
+  const timeout = (ms) => (window.AbortSignal && AbortSignal.timeout) ? AbortSignal.timeout(ms) : undefined;
+  function num(v, d = 1) {
+    if (!isNum(v)) return DASH;
+    const a = Math.abs(v);
+    if (a >= 1e9) return (v / 1e9).toFixed(d) + "B";
+    if (a >= 1e6) return (v / 1e6).toFixed(d) + "M";
+    if (a >= 1e4) return (v / 1e3).toFixed(d) + "k";
+    return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(d);
+  }
+  const int = (v) => isNum(v) ? Math.round(v).toLocaleString() : DASH;
+  const ms = (v) => !isNum(v) ? DASH : v >= 1000 ? (v / 1000).toFixed(2) + " s" : (v >= 10 ? Math.round(v) : v.toFixed(1)) + " ms";
+  const pct = (v, d = 0) => isNum(v) ? v.toFixed(d) + "%" : DASH;
+  const frac = (v, d = 1) => isNum(v) ? (100 * v).toFixed(d) + "%" : DASH;
+  function bytes(v) {
+    if (!isNum(v)) return DASH;
+    const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
+    while (Math.abs(v) >= 1000 && i < u.length - 1) { v /= 1000; i++; }
+    return (i ? v.toFixed(1) : Math.round(v)) + " " + u[i];
+  }
+  function usd(v) {
+    if (!isNum(v)) return DASH;
+    if (v === 0) return "$0";
+    const a = Math.abs(v), s = v < 0 ? "−$" : "$";
+    if (a < 0.0001) return (v < 0 ? "−" : "") + "<$0.0001";
+    if (a < 0.01) return s + a.toPrecision(2);
+    return s + a.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  const pretty = (s) => String(s ?? "").replace(/_/g, " ");
+
+  let config = null, samples = [], group = "all", current = null, online = true, pricesLoaded = false, tick = 0;
+  const GROUP_LABEL = { dfire_test: "D-Fire test", tower_fire_sequence: "Tower fire sequence", benign_tower: "Benign look-alikes" };
+  const TRUTH_LABEL = { unknown: "Unknown", wildfire: "Wildfire", no_wildfire: "No wildfire" };
+
+  async function getJSON(url, opts = {}) {
+    const r = await fetch(url, { cache: "no-store", signal: timeout(opts.timeoutMs || 8000), ...opts });
+    if (!r.ok) {
+      let msg = "HTTP " + r.status;
+      try { const j = await r.json(); if (j.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch (e) {}
+      throw new Error(msg);
+    }
+    return r.json();
+  }
+  const postJSON = (url, body) => getJSON(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+  // ---------------- network ----------------
+  function paintNet() {
+    for (const el of [$("net"), $("net-top")]) {
+      el.setAttribute("aria-checked", String(online));
+      el.querySelector(".net-text").textContent = online ? "Link: ONLINE" : "Link: OFFLINE";
+    }
+    $("net-help").textContent = online ? "ALERTs are sent with a forecast" : "ALERTs wait in the outbox";
+  }
+  async function toggleNet() {
+    try { online = (await postJSON("/api/network", { online: !online })).online; paintNet(); refresh(); }
+    catch (e) { setStatus("Could not change the link: " + e.message, true); }
+  }
+  $("net").addEventListener("click", toggleNet);
+  $("net-top").addEventListener("click", toggleNet);
+
+  // ---------------- image selection ----------------
+  function setStatus(msg, err = false) { $("run-status").textContent = msg; $("run-status").className = err ? "err" : ""; }
+  function select(img) {
+    if (current && current.kind === "upload" && current.url) URL.revokeObjectURL(current.url);
+    current = img;
+    $("preview").src = img.url; $("preview").hidden = false;
+    $("preview-cap").textContent = img.kind === "upload"
+      ? `Uploaded: ${img.name} (${bytes(img.size)})` : `Sample: ${img.name} · ${img.hint}`;
+    if (img.kind === "sample" && img.truth) {
+      $("truth").value = img.truth;
+      $("truth-hint").textContent = img.truth === "unknown" ? "" : "Suggested from the dataset label. Change it if you disagree.";
+    } else { $("truth-hint").textContent = "Set this to score the passes."; }
+    document.querySelectorAll("#gallery button").forEach((b) => b.setAttribute("aria-pressed", String(img.kind === "sample" && b.dataset.id === img.id)));
+  }
+  function useFile(f) {
+    if (!f) return;
+    if (!/^image\//.test(f.type)) { setStatus("That file is not an image.", true); return; }
+    if (f.size > 15 * 1024 * 1024) { setStatus("Image is larger than 15 MB.", true); return; }
+    select({ kind: "upload", file: f, name: f.name, size: f.size, url: URL.createObjectURL(f) });
+    setStatus("");
+  }
+  $("file").addEventListener("change", (ev) => useFile(ev.target.files[0]));
+  const drop = $("drop");
+  ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (ev) => { ev.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, () => drop.classList.remove("over")));
+  drop.addEventListener("drop", (ev) => { ev.preventDefault(); useFile(ev.dataTransfer.files[0]); });
+
+  function renderGallery() {
+    const groups = [...new Set(samples.map((s) => s.group))];
+    $("groups").innerHTML = ["all", ...groups].map((g) =>
+      `<button type="button" class="chip" data-g="${esc(g)}" aria-pressed="${g === group}">${esc(g === "all" ? "All" : GROUP_LABEL[g] || g)}</button>`).join("");
+    $("groups").querySelectorAll("button").forEach((b) => b.onclick = () => { group = b.dataset.g; renderGallery(); });
+    const shown = samples.filter((s) => group === "all" || s.group === group);
+    $("gallery").innerHTML = shown.length ? shown.map((s) =>
+      `<button type="button" data-id="${esc(s.id)}" aria-pressed="${!!(current && current.id === s.id)}" title="${esc(s.name + " · " + s.hint)}" aria-label="${esc(s.name + ", " + s.hint)}">
+        <img loading="lazy" src="/api/sample/${encodeURIComponent(s.id)}?thumb=1" alt=""></button>`).join("")
+      : `<p class="hint">No sample images found. Start the app with <code>--samples DIR</code>, or upload one.</p>`;
+    $("gallery").querySelectorAll("button").forEach((b) => b.onclick = () => {
+      const s = samples.find((x) => x.id === b.dataset.id);
+      select({ kind: "sample", id: s.id, name: s.name, hint: s.hint, truth: s.truth, url: `/api/sample/${encodeURIComponent(s.id)}` });
+    });
+  }
+
+  // ---------------- passes ----------------
+  function renderPasses() {
+    const prev = new Map([...document.querySelectorAll("#passes input")].map((i) => [i.value, i.checked]));
+    $("passes").innerHTML = config.pipelines.map((p) => {
+      const checked = prev.has(p.name) ? prev.get(p.name) && p.available : p.available && !p.optional;
+      return `<label class="pass"><input type="checkbox" value="${esc(p.name)}" ${checked ? "checked" : ""} ${p.available ? "" : "disabled"}>
+        <span><strong>${esc(p.label)}</strong>
+          <span class="what">${esc(p.detector_label)} → ${esc(p.vlm_label)} <code>${esc(p.vlm)}</code></span><br>
+          <span class="tag ${p.detector_available ? "ok" : "bad"}">detector ${p.detector_available ? "ready" : "weights missing"}</span><span
+            class="tag ${p.vlm_served ? "ok" : "bad"}">VLM ${p.vlm_served ? "served" : "not served"}</span>
+          ${!p.vlm_served && p.available ? `<span class="hint">runs detector-only until <code>${esc(p.vlm)}</code> is served</span>` : ""}
+        </span></label>`;
+    }).join("");
+    $("served-note").textContent = config.models_error ? "VLM server unreachable" :
+      `Served: ${config.served_models.join(", ") || "none"}`;
+  }
+
+  // ---------------- results ----------------
+  function boxesSvg(r) {
+    const W = r.width, H = r.height, fs = Math.max(10, Math.round(Math.max(W, H) / 36));
+    const rects = (r.detections || []).slice(0, 30).map((d) => {
+      const [x1, y1, x2, y2] = d.box, cls = d.above_gate ? "strong" : "weak";
+      const ty = y1 - fs * 0.3 > fs ? y1 - fs * 0.3 : y1 + fs * 1.1;
+      return `<rect class="${cls}" x="${x1}" y="${y1}" width="${Math.max(1, x2 - x1)}" height="${Math.max(1, y2 - y1)}"><title>${esc(d.cls)} ${d.conf.toFixed(2)}</title></rect>
+        <text x="${x1 + 2}" y="${ty}" font-size="${fs}">${esc(d.cls)} ${d.conf.toFixed(2)}</text>`;
+    }).join("");
+    return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${(r.detections || []).length} detector boxes">${rects}</svg>`;
+  }
+  function cascadeLine(r) {
+    const gate = (config ? config.min_conf : 0.4).toFixed(2);
+    const s1 = r.best ? `Stage 1 found <b>${esc(r.best.cls)} ${r.best.conf.toFixed(2)}</b> ≥ ${gate}.`
+      : `Stage 1: no detection ≥ ${gate}.`;
+    const size = r.sent_size ? `${r.sent_size[0]}×${r.sent_size[1]} ${r.vlm_input === "crop" ? "crop" : "full frame"}` : "";
+    const s2 = {
+      skipped_no_detection: "VLM <b>not called</b> (call avoided).",
+      ok: `VLM classified the ${esc(size)}.`,
+      failed: `VLM call on the ${esc(size)} failed; detector-only fallback.`,
+      unavailable: `VLM <code>${esc(r.vlm)}</code> is not served; detector-only fallback.`,
+    }[r.vlm_status] || "";
+    return `${s1} ${s2}`;
+  }
+  function resultCard(r, imgUrl, truth) {
+    if (r.error) {
+      return `<article class="card result err-card"><header><div><strong>${esc(r.label)}</strong>
+        <small>${esc(r.detector_label)} → ${esc(r.vlm_label)}</small></div></header>
+        <p class="report">${esc(r.error)}</p></article>`;
+    }
+    const c = r.context, e = r.escalation || {};
+    const score = r.correct === true ? `<p class="score good">✓ Correct vs ground truth (${esc(TRUTH_LABEL[truth])})</p>`
+      : r.correct === false ? `<p class="score bad">✗ Wrong vs ground truth (${esc(TRUTH_LABEL[truth])})</p>`
+      : `<p class="score none">Not scored (ground truth unknown)</p>`;
+    const dets = (r.detections || []).length ? `<ul class="dets">${r.detections.slice(0, 12).map((d) =>
+      `<li class="${d.above_gate ? "strong" : "weak"}" title="${d.above_gate ? "passes" : "below"} the ${config.min_conf} gate">${esc(d.cls)} ${d.conf.toFixed(2)}</li>`).join("")}</ul>`
+      : `<p class="hint">No boxes.</p>`;
+    const ctx = c ? `<dl class="kv">
+        <dt>Source</dt><dd><strong>${esc(pretty(c.source_type))}</strong></dd>
+        <dt>Smoke colour</dt><dd>${esc(c.smoke_color)}</dd>
+        <dt>Attended</dt><dd>${esc(c.attended)}</dd>
+        <dt>Near structures</dt><dd>${c.near_structures ? "yes" : "no"}</dd>
+        <dt>Near road</dt><dd>${c.near_road ? "yes" : "no"}</dd>
+        <dt>Size</dt><dd>${esc(c.size_estimate)}</dd></dl>
+        <p class="note">“${esc(c.description)}”</p>`
+      : `<p class="hint">${r.vlm_status === "skipped_no_detection" ? "Not needed: nothing passed the detector gate." : "No context from the VLM."}</p>`;
+    const escBlock = `<div class="esc">
+        ${(e.decision === "sent" || e.decision === "queued") ? `<img src="data:image/jpeg;base64,${esc(r.thumbnail_b64)}" alt="Thumbnail sent with the alert">` : ""}
+        <div><span class="decision ${esc(e.decision)}">${esc((e.decision || "").toUpperCase())}</span>
+          ${e.decision === "sent" ? ` ${bytes(e.bytes_up)} up` : e.decision === "queued" ? ` ${bytes(e.payload_bytes)} waiting` : " 0 B up"}
+          <p class="note">${esc(e.note)}</p></div></div>`;
+    const tokIO = isNum(r.tokens_in) ? ` <small>${int(r.tokens_in)} in · ${int(r.tokens_out)} out</small>` : "";
+    return `<article class="card result">
+      <header><div><strong>${esc(r.label)}</strong><small>${esc(r.detector_label)} → ${esc(r.vlm_label)} <code>${esc(r.vlm)}</code></small></div>
+        <span class="sev ${esc(r.severity)}">${esc(r.severity)}</span></header>
+      <div class="imgwrap"><img src="${esc(imgUrl)}" alt="Analysed image with detector boxes">${boxesSvg(r)}</div>
+      ${score}
+      <p class="cascade">${cascadeLine(r)}</p>
+      <h4>Detections</h4>${dets}
+      <h4>Context verdict</h4>${ctx}
+      <h4>Dispatch report</h4>${e.report_text || r.report_text ? `<p class="report">${esc(e.report_text || r.report_text)}</p>` : `<p class="hint">No report: nothing to report.</p>`}
+      <h4>Escalation</h4>${escBlock}
+      <h4>Cost of this pass</h4><dl class="kv">
+        <dt>Detector</dt><dd>${ms(r.detect_ms)}</dd>
+        <dt>VLM</dt><dd>${r.vlm_called ? ms(r.vlm_ms) : "not called"}</dd>
+        <dt>Tokens used</dt><dd>${int(r.tokens)}${tokIO}</dd>
+        <dt>Image tokens sent</dt><dd>${r.vlm_called ? int(r.crop_image_tokens) + " <small>est.</small>" : "0"}</dd>
+        <dt>Full frame to cloud</dt><dd>${int(r.full_frame_image_tokens)} image tokens <small>est.</small></dd></dl>
+    </article>`;
+  }
+
+  $("run").addEventListener("click", async () => {
+    if (!current) { setStatus("Pick a sample or upload an image first.", true); return; }
+    const chosen = [...document.querySelectorAll("#passes input:checked")].map((i) => i.value);
+    if (!chosen.length) { setStatus("Choose at least one pass.", true); return; }
+    const fd = new FormData();
+    if (current.kind === "upload") fd.append("image", current.file, current.name); else fd.append("sample_id", current.id);
+    fd.append("truth", $("truth").value);
+    chosen.forEach((p) => fd.append("pipelines", p));
+    fd.append("force_vlm", $("force").checked ? "true" : "false");
+    const imgUrl = current.url, truth = $("truth").value;
+    $("run").disabled = true;
+    setStatus(`Running ${chosen.length} pass${chosen.length > 1 ? "es" : ""} on the GPU (first run loads the detectors)…`);
+    const t0 = performance.now();
+    try {
+      const d = await getJSON("/api/analyze", { method: "POST", body: fd, timeoutMs: 300000 });
+      $("results").innerHTML = d.results.map((r) => resultCard(r, imgUrl, truth)).join("");
+      setStatus(`Done in ${ms(performance.now() - t0)} · ${d.image.width}×${d.image.height} px · link ${d.online ? "online" : "offline"}.`);
+      renderSession(d);
+    } catch (e) {
+      setStatus("Run failed: " + e.message, true);
+    } finally { $("run").disabled = false; }
+  });
+
+  // ---------------- right pane ----------------
+  const pipeLabel = (name) => (config && config.pipelines.find((p) => p.name === name) || {}).label || name;
+
+  function renderKpis(sess) {
+    const names = Object.keys(sess.pipelines);
+    if (!names.length) { $("kpis").innerHTML = `<p class="hint">Run an image to start counting.</p>`; return; }
+    const P = names.map((n) => sess.pipelines[n]);
+    const row = (label, f) => `<tr><td>${label}</td>${P.map((p) => `<td>${f(p)}</td>`).join("")}</tr>`;
+    $("kpis").innerHTML = `<table><thead><tr><th scope="col">Metric</th>${names.map((n) => `<th scope="col">${esc(pipeLabel(n))}</th>`).join("")}</tr></thead><tbody>
+      ${row("Images analysed", (p) => int(p.images))}
+      ${row("VLM calls", (p) => int(p.vlm_calls))}
+      ${row("Calls avoided by the cascade", (p) => int(p.calls_avoided))}
+      ${row("Tokens used (actual)", (p) => `${num(p.tokens_actual)}${isNum(p.tokens_in) ? `<small>${num(p.tokens_in)} in · ${num(p.tokens_out)} out</small>` : ""}`)}
+      ${row("Tokens, every image full-frame <small>estimate</small>", (p) => `${num(p.full_frame_tokens_est)}${p.overhead_observed ? "" : "<small>image tokens only so far</small>"}`)}
+      ${row("Latency p50 (detect + VLM)", (p) => ms(p.latency_ms_p50))}
+      ${row("Detector p50 · VLM p50", (p) => `${ms(p.detect_ms_p50)}<small>VLM ${ms(p.vlm_ms_p50)}</small>`)}
+      ${row("Accuracy vs ground truth", (p) => p.gt_total ? `${frac(p.accuracy, 0)}<small>${p.gt_correct}/${p.gt_total} scored</small>` : `${DASH}<small>none scored</small>`)}
+      ${row("Alerts sent · queued", (p) => `${int(p.alerts_sent)} · ${int(p.alerts_queued)}`)}
+    </tbody></table>`;
+  }
+
+  function bars(label, edge, cloud, fmt) {
+    const max = Math.max(edge || 0, cloud || 0, 1);
+    const w = (v) => `${Math.max(0.5, 100 * (v || 0) / max)}%`;
+    return `<div class="bar-row"><span>${label}</span><div class="track">
+      <div class="bar" title="Edge cascade: ${fmt(edge)}"><b style="width:calc(${w(edge)} - 60px);background:var(--s-edge)"></b><em>${fmt(edge)}</em></div>
+      <div class="bar" title="Cloud, every image: ${fmt(cloud)}"><b style="width:calc(${w(cloud)} - 60px);background:var(--s-cloud)"></b><em>${fmt(cloud)}</em></div>
+    </div></div>`;
+  }
+
+  function renderEcon(d) {
+    const e = d.economics, names = Object.keys(e.pipelines), priced = e.priced;
+    if (!names.length) { $("econ").innerHTML = `<p class="hint">No images yet.</p>`; return; }
+    $("econ").innerHTML = names.map((n) => {
+      const x = e.pipelines[n], s = d.session.pipelines[n];
+      const money = (v) => priced ? `<div class="big">${usd(v)}</div>` : `<div class="big hint">set prices to see $</div>`;
+      const per1k = (v) => priced && s.images ? `<small>≈ ${usd(v / s.images * 1000)} per 1,000 images</small>` : "";
+      return `<div class="econ">
+        <h4>${esc(pipeLabel(n))} · ${int(s.images)} image${s.images === 1 ? "" : "s"}</h4>
+        <div class="vs">
+          <div class="side"><h5><i style="background:var(--s-edge)"></i>Edge cascade</h5>${money(x.edge_usd)}${per1k(x.edge_usd)}
+            <small>${num(x.edge_tokens)} tokens, all local · ${bytes(x.edge_bytes_up)} up</small></div>
+          <div class="side"><h5><i style="background:var(--s-cloud)"></i>Cloud: every image to a VLM</h5>${money(x.cloud_usd)}${per1k(x.cloud_usd)}
+            <small>${num(x.cloud_tokens_est)} tokens (est.) · ${bytes(x.cloud_bytes_up)} up</small></div>
+        </div>
+        <div class="bars">${bars("Tokens", x.edge_tokens, x.cloud_tokens_est, num)}${bars("Bytes up", x.edge_bytes_up, x.cloud_bytes_up, bytes)}</div>
+        <div class="legend"><span><i style="background:var(--s-edge)"></i>Edge cascade</span><span><i style="background:var(--s-cloud)"></i>Cloud, every image</span></div>
+        <div class="savings">
+          <div><small>Saved</small><strong>${priced ? usd(x.savings_usd) : DASH}</strong></div>
+          <div><small>Cost saved</small><strong>${priced ? pct(x.savings_pct, 1) : DASH}</strong></div>
+          <div><small>Tokens saved</small><strong>${pct(x.token_savings_pct, 1)}</strong></div>
+          <div><small>Bytes saved</small><strong>${pct(x.bytes_savings_pct, 1)}</strong></div>
+        </div></div>`;
+    }).join("") + (priced ? "" : `<p class="note">All prices are 0, so dollar figures are hidden. Set them below to see $.</p>`);
+  }
+
+  function renderNetwork(d) {
+    const n = d.session.network;
+    const up = Object.values(d.session.pipelines).reduce((a, p) => a + p.bytes_up, 0);
+    $("network").innerHTML = `
+      <div><small>Link now</small><strong><span class="status ${d.online ? "ok" : "bad"}">${d.online ? "online" : "offline"}</span></strong></div>
+      <div><small>Images while online · offline</small><strong>${int(n.online_requests)} · ${int(n.offline_requests)}</strong></div>
+      <div><small>Alerts sent</small><strong>${int(n.alerts_sent)}</strong></div>
+      <div><small>Alerts queued in outbox</small><strong>${int(n.alerts_queued)}</strong></div>
+      <div><small>Bytes sent upstream</small><strong>${bytes(up)}</strong></div>
+      <div><small>Images a cloud-only system could not process</small><strong>${int(n.cloud_only_blind)}</strong></div>`;
+  }
+
+  function renderLive(live) {
+    if (!live) { $("models").innerHTML = `<p class="hint">Live metrics are off (started with <code>--no-monitor</code>).</p>`; return; }
+    const s = live.system || {};
+    $("h-gpu").textContent = pct(s.gpu_util_pct);
+    $("h-mem").textContent = isNum(s.mem_used_gb) && isNum(s.mem_total_gb) ? `${s.mem_used_gb.toFixed(1)} / ${s.mem_total_gb.toFixed(1)} GB` : DASH;
+    if (!live.models.length) { $("models").innerHTML = `<p class="hint">No zrt-served models found in the run dir (normal off the Nano).</p>`; return; }
+    $("models").innerHTML = `<table><thead><tr><th scope="col">Model</th><th scope="col">Status</th><th scope="col">Requests</th>
+        <th scope="col">Tok/s in</th><th scope="col">Tok/s out</th><th scope="col">Latency p50</th><th scope="col">KV cache</th></tr></thead><tbody>
+      ${live.models.map((m) => `<tr><td><strong>${esc(m.label)}</strong></td>
+        <td><span class="status ${m.status === "ok" ? "ok" : "bad"}" title="${esc(m.error)}">${m.status === "ok" ? "live" : "unreachable"}</span></td>
+        <td>${num(m.requests)}</td><td>${isNum(m.prompt_tok_per_s) ? m.prompt_tok_per_s.toFixed(1) : DASH}</td>
+        <td>${isNum(m.gen_tok_per_s) ? m.gen_tok_per_s.toFixed(1) : DASH}</td>
+        <td>${isNum(m.latency_p50_s) ? ms(m.latency_p50_s * 1000) : DASH}</td><td>${pct(m.kv_cache_pct, 1)}</td></tr>`).join("")}
+      </tbody></table>`;
+  }
+
+  function renderBench() {
+    const b = config.benchmarks;
+    const cell = (v, f) => v === undefined || v === null ? `<span class="hint">pending</span>` : f(v);
+    const line = (label, stage, key, f, higherBetter) => {
+      const bv = (b[stage].before || {})[key], av = (b[stage].after || {})[key];
+      const better = isNum(bv) && isNum(av) && (higherBetter ? av > bv : av < bv);
+      return `<tr><td>${label}</td><td>${cell(bv, f)}</td><td class="${better ? "better" : ""}">${cell(av, f)}</td></tr>`;
+    };
+    const f3 = (v) => v.toFixed(3);
+    $("bench").innerHTML = `<table><thead><tr><th scope="col">Metric</th><th scope="col">Before</th><th scope="col">After</th></tr></thead><tbody>
+      <tr><td colspan="3"><strong>Detector</strong> <small>YOLO-World zero-shot → YOLO11s fine-tuned · D-Fire test</small></td></tr>
+      ${line("mAP50", "detector", "map50", f3, true)}
+      ${line("Precision", "detector", "precision", f3, true)}
+      ${line("Recall", "detector", "recall", f3, true)}
+      ${line("ms / image", "detector", "ms_per_image", (v) => v.toFixed(1), false)}
+      <tr><td colspan="3"><strong>Context VLM</strong> <small>Qwen2.5-VL-7B base → + LoRA · held-out crops</small></td></tr>
+      ${line("Source-type accuracy", "context", "source_type_acc", (v) => frac(v), true)}
+      ${line("Group accuracy", "context", "group_acc", (v) => frac(v), true)}
+      ${line("Latency p50", "context", "latency_ms_p50", ms, false)}
+      ${line("Tokens / call", "context", "tokens_per_call", (v) => Math.round(v).toLocaleString(), false)}
+    </tbody></table>`;
+  }
+
+  function fillPrices(p) {
+    const f = $("prices");
+    for (const k of ["usd_per_mtok_in", "usd_per_mtok_out", "usd_per_gb"]) f.elements[k].value = p[k];
+  }
+  $("prices").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const body = {};
+    for (const el of ev.target.elements) if (el.name) body[el.name] = parseFloat(el.value);
+    try {
+      fillPrices(await postJSON("/api/prices", body));
+      $("price-msg").textContent = "Applied for this session (not saved to disk).";
+      refresh();
+    } catch (e) { $("price-msg").textContent = "Could not apply prices: " + e.message; }
+  });
+  $("reset").addEventListener("click", async () => {
+    try { renderSession(await postJSON("/api/session/reset", {})); } catch (e) { setStatus("Reset failed: " + e.message, true); }
+  });
+
+  function renderSession(d) {
+    if (!pricesLoaded && d.prices) { fillPrices(d.prices); pricesLoaded = true; }
+    if (typeof d.online === "boolean" && d.online !== online) { online = d.online; paintNet(); }
+    renderKpis(d.session); renderEcon(d); renderNetwork(d);
+    if ("live" in d) renderLive(d.live);
+    $("h-ts").textContent = new Date().toLocaleTimeString();
+  }
+
+  async function loadConfig() {
+    config = await getJSON("/api/config");
+    online = config.online; paintNet(); renderPasses(); renderBench();
+  }
+  async function refresh() {
+    try { renderSession(await getJSON("/api/session", { timeoutMs: 5000 })); }
+    catch (e) { $("h-ts").textContent = "server unreachable"; }
+  }
+  // self-scheduling: never more than one poll in flight, even when the server is slow
+  async function loop() {
+    if (++tick % 8 === 0) { try { await loadConfig(); } catch (e) {} }
+    await refresh();
+    setTimeout(loop, 2000);
+  }
+
+  (async () => {
+    try { await loadConfig(); } catch (e) { setStatus("Could not load config: " + e.message, true); }
+    try { samples = (await getJSON("/api/samples")).samples; } catch (e) { samples = []; }
+    renderGallery();
+    loop();
+  })();
+})();
+</script>
+</body>
+</html>
