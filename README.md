@@ -259,8 +259,9 @@ Ultralytics enterprise license.
 
 The same model, Qwen2.5-VL-7B-Instruct (base weights: a hosted provider cannot run our LoRA), behind any
 OpenAI-compatible provider, with **every frame sent to the cloud**. It is scored on the same 500 held-out
-crops and the same tower clips as the edge. Configuration comes only from environment variables; never
-put the key in a file, a command line you save, or a commit:
+crops (same crop prompt as the edge) and the same tower clips (whole frames, with a full-frame prompt that
+lets the model answer "no smoke"). Configuration comes only from environment variables; never put the key
+in a file, a command line you save, or a commit:
 
 - `CLOUD_VLM_BASE_URL`: the provider's OpenAI-compatible `/v1` URL
 - `CLOUD_VLM_MODEL`: the provider's id for Qwen2.5-VL-7B-Instruct
@@ -276,29 +277,66 @@ python scripts/eval_context.py --cloud                       # -> results/contex
 python scripts/bench_cloud.py --limit 2 --frame-stride 10 --name dryrun     # ~8 calls
 rm results/context_dryrun.json results/bench_cloud_dryrun.json            # dry runs are not results
 python scripts/bench_cloud.py                                 # -> results/bench_cloud_cloud_qwen7b.json
-# C. edge side: the step-4 bench.py run (`--name after`) records first_alert_s and alert_payload_bytes
-#    per clip; result files written before this change lack them (outage_scenario.py says so)
-# D. outage: link down for the first 10 min of every clip, edge vs cloud (drop and buffer)
+# C. edge side: step 4's bench.py runs record first_alert_s and alert_payload_bytes per clip; also
+#    time the deployed trend re-check (recheck_s = 30 s) next to the --recheck-s 5 runs
+python scripts/bench.py --name after_recheck30 --detector-weights models/smoke_yolo.pt --model context --recheck-s 30
+# D. outage: link down for the first 10 min of every clip, edge vs cloud
 python scripts/outage_scenario.py --edge after --cloud cloud_qwen7b --outage-min 10
 python scripts/outage_scenario.py --edge after --cloud cloud_qwen7b --outage-min 10 --outage-lead-min 5  # link was already down 5 min before the fire
 python scripts/compare.py                                     # adds the "Edge vs cloud-only" section
 ```
 
-**Measured:** cloud answers and accuracy, provider-reported tokens (billed), and the cloud latency: the
-real HTTPS round trip from the machine that ran the script, over fresh calls only (answers served from
-the cache are counted separately, with the latency measured when they were first fetched). Edge latency,
-decisions and alert sizes come from the on-device runs. **Modelled:** the tower's uplink.
-`sentinel/netprofile.py` has fixed profiles (`fiber`, `lte`, `rural_cellular`, `satellite_geo`, `outage`) and
-outage windows, layered on top of the measured latency. We do not throttle the Nano's real network,
-because that would cut the SSH/Tailscale link. Cloud-only has no local detector, gate or trend, so each
-frame is judged alone with `assess(ctx, trend=None)`.
+**What the comparison shows, honestly.** The edge analyses every frame during an outage, so it can act
+locally at once. When the link returns it sends a few KB (the alert with its thumbnail), not megabytes of
+backlog. It also does not need the fire to still be visible then. It wins clearly on slow links (rural
+cellular, GEO satellite), where full frames queue on the uplink. After a clean outage on a good link, the
+difference in when dispatch knows is seconds, not minutes: a cloud-only camera that resumes streaming sees
+the fire again quickly, as long as it is still visible.
+
+**Fairness rules built into the scripts.**
+- **Decision rules:** the cloud gets a per-frame rule and a temporal rule. The temporal rule uses K
+  consecutive positive frames plus a size trend over the same re-check window, matching the edge's gate
+  and re-check.
+- **Cadence:** a cheaper cadence (one frame per 10 s) is derived from the same answers at no extra cost.
+- **Uplink model:** the uplink is busy only while a frame serializes. Round trips are added to the
+  decision time: 1 per cloud request on a kept-alive connection, and 3 for the edge's one-shot alert POST
+  on a new HTTPS connection.
+- **Upload policy:** the live policy sends the newest frame whenever the uplink frees (`--policy latest`).
+- **No double counting:** each run measures a network baseline (the median of 5 `GET /models`
+  requests) and subtracts it from the measured cloud latency before a link profile is added. Without
+  this, the eval machine's own network time would be a constant overstatement on every link.
+- **Edge delivery:** follows the shipped code. The outbox retries after 2, 4, 8 s and then every 10 s,
+  flushes every 2 s, and sends the alert before the forecast.
+- **Paired statistics:** the tables report the p50 over clips where both sides alerted, plus per-clip
+  deltas. The base-7B edge run (`bench_before`) sits next to the LoRA run, so base vs base is visible.
+- **Errors, retries and caching:** transient provider errors (429, timeouts, 5xx) are retried up to 3
+  times, and the backoff is not counted as latency. A reply that cannot be parsed is not re-requested,
+  since at temperature 0 that would bill twice for the same answer. The cache key covers host, model,
+  response format, prompts, `max_tokens` and image bytes.
+
+**Measured:**
+- cloud answers and accuracy, with accuracy also reported over answered calls only;
+- provider-reported tokens (billed);
+- the real cloud round trip from the machine that ran the script. This is taken over fresh calls only;
+  answers served from the cache are counted separately, with the latency measured when they were first
+  fetched;
+- the network baseline;
+- edge decisions, compute time and alert sizes, from the on-device runs.
+
+**Modelled:** the tower's uplink. `sentinel/netprofile.py` defines fixed link profiles (`fiber`, `lte`,
+`rural_cellular`, `satellite_geo`, `outage`) and outage windows, layered on top of the measured
+latency. The profiles use round, typical rates. The loss model (rate / (1 − loss)) is optimistic, most of
+all for GEO satellite. Frames that the camera would capture outside the ~20 s recorded clips are
+modelled: for the cloud after a long outage, the clip's last answered frames are held; for the buffered
+backlog, median-size frames are used. We do not throttle the Nano's real network, because that would cut
+the SSH/Tailscale link.
 
 **Cost warning:** every uncached frame is a paid API call. The full crop eval is 500 calls, and the clip
 bench is about 1,000 frames at stride 1. Start with `--limit` and `--frame-stride`, and cap a run with
-`--max-fresh-calls N`. Answers are cached in `data/cloud_cache.jsonl` (git-ignored), keyed by model,
-response format and image bytes, so re-running (with other profiles, outages or `--force`) does not bill
-again. Dollar figures stay "unpriced" until you fill `usd_per_mtok_in`, `usd_per_mtok_out` and `usd_per_gb`
-in `config/cost_inputs.json` with your provider's published rates.
+`--max-fresh-calls N`. Answers are cached in `data/cloud_cache.jsonl` (git-ignored), so re-running (with
+other profiles, policies, outages or `--force`) does not bill again. Dollar figures stay "unpriced" until
+you fill `usd_per_mtok_in`, `usd_per_mtok_out` and `usd_per_gb` in `config/cost_inputs.json` with your
+provider's published rates.
 
 ## Limitations
 
