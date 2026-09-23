@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 13:20 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 13:20 Nano time (ICT) · teacher 32B download 17/21 GB (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -46,7 +46,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] Smoke test: chat returns "OK"; a `json_schema` request returns valid JSON — 7–26 s/call while YOLO trains; base model calls smoke crops "fog/cloud"
 - [x] D-Fire in `data/dfire/{train,test}/{images,labels}`; confirm 0 = smoke, 1 = fire — 17,221 train / 4,306 test via HF mirror `badsaarow/d-fire` + `scripts/prepare_dfire.py`
 - [x] PyroNear `pyro-sdis` downloaded (optional) — 29,537 train / 4,099 val tower images → `data/pyro_yolo/` via `scripts/prepare_pyro.py`
-- [ ] 4–6 FIgLib sequences in `data/demo/<name>/`
+- [x] 4–6 FIgLib sequences in `data/demo/<name>/` — 5 real ignitions (Rainbow, Beaver, Sorrento, Chia, Brengle), 81 frames each (−40 → +40 min) as `data/demo/fire_*`
 - [x] 150–300 benign images (campfire, BBQ, chimney, stack, fog, cloud) in `data/benign/` — 300 real smoke-free lookout-tower images from pyro-sdis (sky/cloud/haze); campfire/BBQ/stack still optional
 - [ ] (Optional) ~60 hand-checked crops in `data/gold/gold.jsonl`
 
@@ -54,7 +54,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 
 - [x] **Before:** `eval_detector.py --weights yolov8s-worldv2.pt --classes smoke,fire --name before_yoloworld` (run while online; caches CLIP)
 - [x] `train_detector.py --epochs 1` → note time per epoch → choose N — 2.5 min/epoch, 1 epoch already mAP50 0.085 → N = 50
-- [ ] `train_detector.py --epochs N` (tmux `train`) → `models/smoke_yolo.pt` — ⏳ running, 50 epochs (~2.75 min/epoch, ETA ~15:20 Nano time); epoch 5 mAP50 = 0.52
+- [ ] `train_detector.py --epochs N` (tmux `train`) → `models/smoke_yolo.pt` — ⏳ running, 50 epochs (~2.75 min/epoch, ETA ~15:20 Nano time); epoch 6 mAP50 = 0.54
 - [ ] **After:** `eval_detector.py --weights models/smoke_yolo.pt --name after_yolo11s`
 
 ## Phase 5 — Context VLM: before → fine-tune → after 🖥️ [T12, T16, T24, T24b]
