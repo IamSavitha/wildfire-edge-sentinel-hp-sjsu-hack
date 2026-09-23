@@ -1,0 +1,8 @@
+{
+  "towers": 4, "fps": 2,
+  "tokens_per_full_frame": 0, "bytes_per_frame": 0,
+  "usd_per_mtok": 0, "usd_per_gb": 0,
+  "local_vlm_s": 0, "detector_s": 0,
+  "events_per_day": 0, "vlm_calls_per_event": 0,
+  "alerts_per_day": 0, "bytes_per_alert": 0
+}
