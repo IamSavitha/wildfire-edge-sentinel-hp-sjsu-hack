@@ -13,6 +13,9 @@ from sentinel.outbox import Outbox
 from sentinel.schema import Severity
 
 
+FORECAST_UPDATE = "forecast_update"
+
+
 @dataclass
 class Link:
     online: bool = False
@@ -36,13 +39,17 @@ class Escalator:
             self.local_log.append(report)
 
     def flush(self, now: float) -> int:
-        """Send due ALERTs. The alert goes out first (forecast "pending") and is never held back for
-        the forecast; if the forecast then succeeds, a small forecast_update follows (best effort,
-        not queued: dispatch already has the alert)."""
+        """Send due items in two passes. Pass 1 sends every due ALERT (forecast "pending"), so no alert
+        waits behind another alert's forecast. Pass 2 fetches each forecast and sends a small
+        forecast_update; an update that cannot be delivered is queued in the outbox as
+        "<event_id>:forecast" and retried like an alert. Returns the number of ALERTs sent."""
         if not self.link.online:
             return 0
-        sent = 0
-        for event_id, payload, _ in self.outbox.due(now):
+        due = self.outbox.due(now)
+        alerts = [(e, p) for e, p, _ in due if p.get("type") != FORECAST_UPDATE]
+        queued_updates = [(e, p) for e, p, _ in due if p.get("type") == FORECAST_UPDATE]
+        sent, need_forecast = 0, []
+        for event_id, payload in alerts:
             needs_forecast = payload.get("forecast") is None
             if needs_forecast:
                 payload["forecast_status"] = "pending"
@@ -56,22 +63,37 @@ class Escalator:
             self.metrics.inc("bytes_up", len(json.dumps(payload).encode()))
             sent += 1
             if needs_forecast:
-                self._send_forecast_update(payload)
+                need_forecast.append(payload)
+        for payload in need_forecast:
+            self._send_forecast_update(payload, now)
+        for update_id, update in queued_updates:
+            self._deliver_update(update_id, update, now)
         return sent
 
-    def _send_forecast_update(self, alert: dict) -> None:
+    def _send_forecast_update(self, alert: dict, now: float) -> None:
         try:
             forecast = self.forecast_fn(alert["lat"], alert["lon"])
             self.metrics.inc("cloud_forecast_calls")
         except Exception:
-            return
-        update = {"type": "forecast_update", "event_id": alert["event_id"],
+            return  # dispatch already has the alert, marked "forecast pending"
+        update = {"type": FORECAST_UPDATE, "event_id": alert["event_id"],
                   "tower_id": alert.get("tower_id"), "tower_name": alert.get("tower_name"),
                   "severity": alert.get("severity"), "forecast": forecast, "forecast_status": "ok"}
+        update_id = f"{alert['event_id']}:forecast"
+        if not self._deliver_update(update_id, update, now, queued=False):
+            self.outbox.enqueue(update_id, update, now)
+            self.outbox.mark_failed(update_id, now)
+            logging.getLogger(__name__).warning("forecast update for %s queued for retry", alert["event_id"])
+
+    def _deliver_update(self, update_id: str, update: dict, now: float, queued: bool = True) -> bool:
         try:
             self.send_fn(update)
         except Exception:
-            logging.getLogger(__name__).warning("forecast update for %s not delivered", alert["event_id"])
-            return
+            if queued:
+                self.outbox.mark_failed(update_id, now)
+            return False
+        if queued:
+            self.outbox.mark_sent(update_id, now)
         self.metrics.inc("forecast_updates_sent")
         self.metrics.inc("bytes_up", len(json.dumps(update).encode()))
+        return True

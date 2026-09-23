@@ -39,17 +39,38 @@ def test_alert_is_sent_before_the_forecast_is_requested():
     assert order == ["alert", "forecast", "forecast_update"]
 
 
-def test_failed_forecast_update_does_not_resend_the_alert():
-    calls = []
+def test_failed_forecast_update_is_queued_and_retried_without_resending_the_alert():
+    calls, fail = [], {"on": True}
 
     def send(p):
         calls.append(p.get("type", "alert"))
-        if p.get("type") == "forecast_update":
+        if p.get("type") == "forecast_update" and fail["on"]:
             raise ConnectionError
     esc, _ = make(online=True, send_fn=send)
     esc.handle(dict(REPORT), Severity.ALERT, now=0)
-    assert esc.flush(now=0) == 1 and esc.outbox.pending_count() == 0
-    assert esc.flush(now=100) == 0 and calls == ["alert", "forecast_update"]
+    assert esc.flush(now=0) == 1 and calls == ["alert", "forecast_update"]
+    assert esc.outbox.pending_count() == 1  # the update, as "e1:forecast"
+    assert esc.outbox.due(now=1) == []      # backoff applies
+    (update_id, payload, _), = esc.outbox.due(now=2)
+    assert update_id == "e1:forecast" and payload["forecast"] == {"temp_c": [34]}
+    fail["on"] = False
+    assert esc.flush(now=2) == 0            # no ALERT sent; the update is
+    assert calls == ["alert", "forecast_update", "forecast_update"]
+    assert esc.outbox.pending_count() == 0 and esc.metrics.counters["forecast_updates_sent"] == 1
+
+
+def test_all_alerts_go_out_before_any_forecast():
+    calls = []
+
+    def forecast(lat, lon):
+        calls.append("forecast")
+        return {"temp_c": [30]}
+    esc, _ = make(online=False, forecast_fn=forecast, send_fn=lambda p: calls.append(p.get("type", "alert")))
+    esc.handle({**REPORT, "event_id": "e1"}, Severity.ALERT, now=0)
+    esc.handle({**REPORT, "event_id": "e2"}, Severity.ALERT, now=0)
+    esc.link.online = True  # link returns with two alerts queued
+    assert esc.flush(now=5) == 2
+    assert calls == ["alert", "alert", "forecast", "forecast_update", "forecast", "forecast_update"]
 
 
 def test_non_alerts_never_reach_the_cloud():

@@ -53,7 +53,10 @@ events; video never leaves the device.**
 An ALERT is queued at once and sent first, marked "forecast pending": it is never held back for the
 forecast, which follows as a small `forecast_update` when it can be fetched. While the link is down,
 failed sends are retried with a backoff capped at 10 s, so the alert goes out within seconds of the
-link returning.
+link returning. After an outage every queued ALERT is sent before any forecast is fetched. A forecast
+update that cannot be delivered is queued as `<event_id>:forecast` and retried. A retried send can reach
+dispatch twice, so dispatch should dedupe on `event_id` (the stub in `scripts/dispatch_stub.py` does, and
+merges updates into their alert).
 
 ## Before vs after fine-tuning
 
