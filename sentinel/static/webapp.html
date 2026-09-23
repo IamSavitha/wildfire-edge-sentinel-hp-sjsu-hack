@@ -235,7 +235,7 @@
       <div class="runbar">
         <button class="net" id="net" role="switch" aria-checked="true" aria-label="Uplink to the cloud">
           <span class="knob" aria-hidden="true"></span>
-          <span><span class="net-text">Link: ONLINE</span><small id="net-help">ALERTs are sent with a forecast</small></span>
+          <span><span class="net-text">Link: ONLINE</span><small id="net-help">ALERTs are sent at once; the forecast follows</small></span>
         </button>
         <button class="btn" id="run" type="button">Run comparison</button>
       </div>
@@ -366,7 +366,7 @@
       el.setAttribute("aria-checked", String(online));
       el.querySelector(".net-text").textContent = online ? "Link: ONLINE" : "Link: OFFLINE";
     }
-    $("net-help").textContent = online ? "ALERTs are sent with a forecast" : "ALERTs wait in the outbox";
+    $("net-help").textContent = online ? "ALERTs are sent at once; the forecast follows" : "ALERTs wait in the outbox";
   }
   async function toggleNet() {
     try { online = (await postJSON("/api/network", { online: !online })).online; paintNet(); refresh(); }
