@@ -258,8 +258,39 @@ git add scripts/download_data.sh && git commit -m "chore: dataset download scrip
 
 **Files:**
 - Create: `scripts/train_detector.py`
+- Modify: `sentinel/labels.py` (`write_dfire_yaml`)
+- Test: `tests/test_labels.py`
 
-**Step 1: Write the script**
+**Step 1: Write the helper and the script**
+
+Add the shared data-YAML helper to `sentinel/labels.py` (also used by `scripts/eval_detector.py`, Task 4b), test first in `tests/test_labels.py`:
+
+```python
+from sentinel.labels import write_dfire_yaml
+
+
+def test_write_dfire_yaml_uses_absolute_root(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data" / "dfire").mkdir(parents=True)
+    out = write_dfire_yaml("data/dfire", "runs/sub/dfire.yaml")
+    assert out.resolve() == (tmp_path / "runs" / "sub" / "dfire.yaml").resolve()
+    lines = out.read_text().splitlines()
+    assert f"path: {(tmp_path / 'data' / 'dfire').resolve()}" in lines
+    assert "train: train/images" in lines and "val: test/images" in lines
+    assert lines[lines.index("names:") + 1:] == ["  0: smoke", "  1: fire"]
+```
+
+```python
+def write_dfire_yaml(root: str | Path, out: str | Path) -> Path:
+    """Ultralytics data YAML for D-Fire (0=smoke, 1=fire), evaluated on its test split."""
+    root = Path(root).resolve()  # Ultralytics resolves relative paths against its own datasets dir
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(f"path: {root}\ntrain: train/images\nval: test/images\nnames:\n  0: smoke\n  1: fire\n")
+    return out
+```
+
+Then the training script (ultralytics is imported inside `main()` so `--help` works without torch):
 
 ```python
 """Fine-tune YOLO on D-Fire (0=smoke, 1=fire). Run on the Nano."""
@@ -267,11 +298,11 @@ import argparse
 import shutil
 from pathlib import Path
 
-from ultralytics import YOLO
+from sentinel.labels import write_dfire_yaml
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", default="data/dfire")
     ap.add_argument("--model", default="yolo11s.pt")
     ap.add_argument("--epochs", type=int, default=40)
@@ -279,21 +310,18 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=32)
     a = ap.parse_args()
 
-    root = Path(a.root).resolve()  # Ultralytics resolves relative paths against its own datasets dir
-    data_yaml = Path("runs/dfire.yaml")
-    data_yaml.parent.mkdir(parents=True, exist_ok=True)
-    data_yaml.write_text(
-        f"path: {root}\ntrain: train/images\nval: test/images\nnames:\n  0: smoke\n  1: fire\n"
-    )
+    from ultralytics import YOLO  # lazy: --help works without torch
 
+    data_yaml = write_dfire_yaml(a.root, "runs/dfire.yaml")
     model = YOLO(a.model)
     model.train(data=str(data_yaml), epochs=a.epochs, imgsz=a.imgsz, batch=a.batch,
                 device=0, project="runs", name="smoke", exist_ok=True)
-    metrics = model.val()
+    metrics = model.val(data=str(data_yaml), imgsz=a.imgsz, device=0, split="val")
     print(f"mAP50={metrics.box.map50:.3f} mAP50-95={metrics.box.map:.3f}")
 
     Path("models").mkdir(exist_ok=True)
-    shutil.copy("runs/smoke/weights/best.pt", "models/smoke_yolo.pt")
+    shutil.copy(model.trainer.best, "models/smoke_yolo.pt")  # runs/smoke/weights/best.pt
+    print("saved models/smoke_yolo.pt")
 
 
 if __name__ == "__main__":
@@ -308,14 +336,167 @@ python scripts/train_detector.py --epochs 1
 Expected: training completes and prints `mAP50=...`, and `models/smoke_yolo.pt` exists. Note the time per epoch and pick `--epochs` so the full run finishes in ≤ 4 h.
 
 **Step 3: Full run (leave it running)**
+
+Run Task 4b's BEFORE evaluation first if it has not been recorded yet (it only needs the dataset).
 ```bash
 python scripts/train_detector.py --epochs <N>
 ```
-Record final mAP50 and mAP50-95 in `results/detector.md`. This is a benchmark deliverable.
+Record final mAP50 and mAP50-95 in `results/detector.md` alongside the Task 4b before/after JSON results. This is a benchmark deliverable.
 
 **Step 4: Commit**
 ```bash
+git add sentinel/labels.py tests/test_labels.py && git commit -m "feat: shared D-Fire data yaml helper"
 git add scripts/train_detector.py && git commit -m "feat: YOLO detector fine-tuning script"
+```
+
+---
+
+### Task 4b: Detector before/after evaluation (Nano)
+
+Measure an off-the-shelf detector, fine-tune, and measure again on the same D-Fire test split (`data/dfire/test`, the `val:` split of `runs/dfire.yaml`). A standard COCO YOLO has no smoke class, so the BEFORE baseline is YOLO-World zero-shot (`yolov8s-worldv2.pt`) prompted with `["smoke", "fire"]` via `model.set_classes(...)`; the prompt order must match the dataset class ids (0=smoke, 1=fire). AFTER is YOLO11s fine-tuned on D-Fire (Task 4) → `models/smoke_yolo.pt`.
+
+**Files:**
+- Create: `scripts/eval_detector.py`
+- Test: `tests/test_eval_detector.py`
+
+**Step 1: Write the failing test** (the pure summarizing part; no ultralytics needed)
+
+```python
+from types import SimpleNamespace
+
+import pytest
+
+from scripts.eval_detector import summarize
+
+
+def _box(**kw):
+    base = dict(map50=0.61, map=0.33, mp=0.7, mr=0.55, ap50=[0.5, 0.72])
+    base.update(kw)
+    return SimpleNamespace(**base)
+
+
+def test_summarize_builds_result_dict():
+    out = summarize("after_yolo11s", "models/smoke_yolo.pt", None, _box(),
+                    {"preprocess": 1.0, "inference": 12.5, "postprocess": 0.8}, {0: "smoke", 1: "fire"})
+    assert out == {
+        "name": "after_yolo11s", "weights": "models/smoke_yolo.pt", "classes": None,
+        "map50": 0.61, "map50_95": 0.33, "precision": 0.7, "recall": 0.55,
+        "per_class_map50": {"smoke": 0.5, "fire": 0.72}, "ms_per_image": 12.5,
+    }
+
+
+def test_summarize_uses_ap_class_index_and_n_images():
+    # Ultralytics reports ap50 only for classes present, in ap_class_index order
+    box = _box(ap50=[0.4], ap_class_index=[1])
+    out = summarize("before_yoloworld", "yolov8s-worldv2.pt", ["smoke", "fire"], box,
+                    {"inference": 30.0}, ["smoke", "fire"], n_images=4306)
+    assert out["classes"] == ["smoke", "fire"]
+    assert out["per_class_map50"] == {"fire": pytest.approx(0.4)}
+    assert out["n_images"] == 4306
+```
+
+Run: `pytest tests/test_eval_detector.py -v`
+Expected: FAIL, `ModuleNotFoundError`
+
+**Step 2: Implement `scripts/eval_detector.py`**
+
+```python
+"""Evaluate a detector on the D-Fire test split and save results/detector_<name>.json. Run on the Nano.
+
+BEFORE: --weights yolov8s-worldv2.pt --classes smoke,fire --name before_yoloworld  (zero-shot)
+AFTER:  --weights models/smoke_yolo.pt --name after_yolo11s                        (fine-tuned)
+"""
+import argparse
+import json
+from pathlib import Path
+
+from sentinel.labels import write_dfire_yaml
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+def summarize(name: str, weights: str, classes: list[str] | None, box, speed: dict, names,
+              n_images: int | None = None) -> dict:
+    """Turn Ultralytics val metrics (metrics.box, metrics.speed, class names) into a JSON-able dict."""
+    ap50 = [float(v) for v in box.ap50]
+    # ap50 has one entry per class present in the split, ordered by ap_class_index
+    idx = [int(i) for i in getattr(box, "ap_class_index", range(len(ap50)))]
+    out = {
+        "name": name,
+        "weights": weights,
+        "classes": classes,
+        "map50": float(box.map50),
+        "map50_95": float(box.map),
+        "precision": float(box.mp),
+        "recall": float(box.mr),
+        "per_class_map50": {names[i]: v for i, v in zip(idx, ap50)},
+        "ms_per_image": float(speed["inference"]),
+    }
+    if n_images is not None:
+        out["n_images"] = n_images
+    return out
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--weights", required=True)
+    ap.add_argument("--name", required=True, help="result tag, e.g. before_yoloworld / after_yolo11s")
+    ap.add_argument("--classes", default=None,
+                    help="comma-separated text prompts for YOLO-World, in class-id order (e.g. smoke,fire)")
+    ap.add_argument("--root", default="data/dfire")
+    ap.add_argument("--imgsz", type=int, default=640)
+    a = ap.parse_args()
+    classes = [c.strip() for c in a.classes.split(",")] if a.classes else None
+
+    from ultralytics import YOLO  # lazy: --help and tests work without torch
+
+    data_yaml = write_dfire_yaml(a.root, "runs/dfire.yaml")
+    model = YOLO(a.weights)
+    if classes:
+        model.set_classes(classes)  # must match data yaml ids: 0=smoke, 1=fire
+    m = model.val(data=str(data_yaml), imgsz=a.imgsz, device=0, split="val", plots=False)
+
+    test_images = Path(a.root) / "test" / "images"
+    n_images = sum(1 for p in test_images.iterdir() if p.suffix.lower() in IMAGE_EXTS) if test_images.is_dir() else None
+    result = summarize(a.name, a.weights, classes, m.box, m.speed, m.names, n_images)
+
+    out = Path("results") / f"detector_{a.name}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result, indent=2))
+    print(f"wrote {out}")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Run: `pytest tests/test_eval_detector.py -v` → 2 passed; `python scripts/eval_detector.py --help` works without ultralytics.
+
+**Step 3: Run BEFORE, train, run AFTER (Nano)**
+```bash
+python scripts/eval_detector.py --weights yolov8s-worldv2.pt --classes smoke,fire --name before_yoloworld
+python scripts/train_detector.py --epochs <N>
+python scripts/eval_detector.py --weights models/smoke_yolo.pt --name after_yolo11s
+```
+Expected: `results/detector_before_yoloworld.json` and `results/detector_after_yolo11s.json`, each with `map50`, `map50_95`, `precision`, `recall`, `per_class_map50`, `ms_per_image`, `n_images`. Put both rows side by side in `results/detector.md`.
+
+**Step 4: Run the pipeline with either detector**
+
+The runtime detector is chosen in `config/settings.json` (Task 13 `detector_classes`, Task 20 `YoloDetector(classes=...)`):
+```json
+{"detector_weights": "yolov8s-worldv2.pt", "detector_classes": ["smoke", "fire"]}
+```
+(BEFORE, zero-shot) vs
+```json
+{"detector_weights": "models/smoke_yolo.pt"}
+```
+(AFTER, fine-tuned; the default).
+
+**Step 5: Commit**
+```bash
+git add scripts/eval_detector.py tests/test_eval_detector.py
+git commit -m "feat: detector evaluation for before/after comparison"
 ```
 
 ---
@@ -1282,6 +1463,13 @@ def test_load_towers(tmp_path):
     p.write_text(json.dumps([{"id": "t1", "name": "A", "lat": 1.0, "lon": 2.0, "source": "x"}]))
     towers = load_towers(p)
     assert towers["t1"].name == "A" and towers["t1"].benign_zones == []
+
+
+def test_detector_classes_setting(tmp_path):
+    assert Settings().detector_classes is None
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"detector_weights": "yolov8s-worldv2.pt", "detector_classes": ["smoke", "fire"]}))
+    assert load_settings(p).detector_classes == ["smoke", "fire"]
 ```
 
 **Step 2: Run to verify it fails**
@@ -1304,6 +1492,7 @@ class Settings:
     vlm_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
     vlm_timeout_s: float = 5.0
     detector_weights: str = "models/smoke_yolo.pt"
+    detector_classes: list[str] | None = None  # set for YOLO-World zero-shot, e.g. ["smoke", "fire"]
     fps: float = 2.0
     min_conf: float = 0.4
     min_frames: int = 3
@@ -1346,7 +1535,7 @@ def load_towers(path: str | Path = "config/towers.json") -> dict[str, Tower]:
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_config.py -v`
-Expected: 4 passed
+Expected: 5 passed
 
 **Step 5: Commit**
 ```bash
@@ -2031,7 +2220,7 @@ git add sentinel/escalation.py tests/test_escalation.py && git commit -m "feat: 
 
 **Files:**
 - Create: `sentinel/replayer.py`, `sentinel/detector.py`
-- Test: `tests/test_replayer.py`
+- Test: `tests/test_replayer.py`, `tests/test_detector.py`
 
 **Step 1: Write the failing test**
 
@@ -2118,19 +2307,74 @@ def frames(source: str, fps: float, loop: bool = True) -> Iterator[np.ndarray]:
         i += 1
 ```
 
-**Step 4: Implement `sentinel/detector.py`** (integration-tested on the Nano, no unit test)
+**Step 4: Implement `sentinel/detector.py`** (unit-tested with a fake model; real weights integration-tested on the Nano)
+
+`classes` enables the YOLO-World zero-shot baseline (Task 4b); `model` lets tests inject a fake.
 
 ```python
-"""Stage 1: YOLO smoke/fire detector."""
+from types import SimpleNamespace
+
+import numpy as np
+
+from sentinel.detector import YoloDetector
+from sentinel.schema import Detection
+
+
+class _Seq:
+    def __init__(self, values):
+        self.values = values
+
+    def tolist(self):
+        return self.values
+
+
+class FakeModel:
+    def __init__(self):
+        self.classes, self.predict_kwargs = None, None
+
+    def set_classes(self, classes):
+        self.classes = classes
+
+    def predict(self, frame, **kwargs):
+        self.predict_kwargs = kwargs
+        boxes = SimpleNamespace(xyxy=_Seq([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]),
+                                conf=_Seq([0.9, 0.5]), cls=_Seq([0.0, 1.0]))
+        return [SimpleNamespace(names={0: "smoke", 1: "fire"}, boxes=boxes)]
+
+
+def test_detector_builds_detections_from_result():
+    model = FakeModel()
+    det = YoloDetector("unused.pt", conf=0.3, imgsz=320, model=model)
+    out = det(np.zeros((10, 10, 3), np.uint8))
+    assert out == [Detection("smoke", 0.9, (1.0, 2.0, 3.0, 4.0)), Detection("fire", 0.5, (5.0, 6.0, 7.0, 8.0))]
+    assert model.predict_kwargs == {"conf": 0.3, "imgsz": 320, "verbose": False}
+
+
+def test_set_classes_only_when_given():
+    plain = FakeModel()
+    YoloDetector("unused.pt", model=plain)
+    assert plain.classes is None
+    world = FakeModel()
+    YoloDetector("yolov8s-worldv2.pt", classes=["smoke", "fire"], model=world)
+    assert world.classes == ["smoke", "fire"]
+```
+
+```python
+"""Stage 1: YOLO smoke/fire detector (fine-tuned YOLO, or YOLO-World zero-shot with text classes)."""
 import numpy as np
 
 from sentinel.schema import Detection
 
 
 class YoloDetector:
-    def __init__(self, weights: str, conf: float = 0.25, imgsz: int = 640):
-        from ultralytics import YOLO  # imported lazily so laptop tests don't need torch
-        self.model = YOLO(weights)
+    def __init__(self, weights: str, conf: float = 0.25, imgsz: int = 640,
+                 classes: list[str] | None = None, model=None):
+        if model is None:
+            from ultralytics import YOLO  # imported lazily so laptop tests don't need torch
+            model = YOLO(weights)
+        self.model = model
+        if classes:
+            self.model.set_classes(classes)  # YOLO-World: prompt order defines class ids
         self.conf = conf
         self.imgsz = imgsz
 
@@ -2142,8 +2386,8 @@ class YoloDetector:
 
 **Step 5: Run tests, then a Nano smoke test**
 
-Run: `pytest tests/test_replayer.py -v`
-Expected: 4 passed
+Run: `pytest tests/test_replayer.py tests/test_detector.py -v`
+Expected: 6 passed
 
 On the Nano:
 ```bash
@@ -2153,7 +2397,7 @@ Expected: a list of `Detection(...)`, possibly empty for a negative image.
 
 **Step 6: Commit**
 ```bash
-git add sentinel/replayer.py sentinel/detector.py tests/test_replayer.py
+git add sentinel/replayer.py sentinel/detector.py tests/test_replayer.py tests/test_detector.py
 git commit -m "feat: frame replayer and YOLO detector wrapper"
 ```
 
@@ -2817,21 +3061,25 @@ FLUSH_EVERY_S = 2.0
 
 def run_loop(rt: Runtime, streams: dict, settings: Settings, stop: threading.Event) -> None:
     # flush runs on this thread; Metrics has a single writer.
+    log = logging.getLogger(__name__)
     period = 1.0 / settings.fps
     last_flush = 0.0
     while not stop.is_set():
         tick = time.time()
-        try:
-            for tid, stream in streams.items():
+        for tid, stream in streams.items():
+            try:  # isolate per tower: one bad source or frame must not skip the others
                 frame = next(stream)
                 rt.pipeline.process(tid, frame, tick)  # takes pipeline.lock itself; released during the VLM call
-            if tick - last_flush >= FLUSH_EVERY_S:
+            except Exception:
+                log.exception("tower %s failed", tid)
+        if tick - last_flush >= FLUSH_EVERY_S:
+            try:
                 if rt.link.online:
                     rt.pipeline.burn_towers = fetch_burn_schedule()
                 rt.escalator.flush(tick)  # network I/O: never under the lock
-                last_flush = tick
-        except Exception:
-            logging.getLogger(__name__).exception("tower loop error")
+            except Exception:
+                log.exception("burn schedule / outbox flush failed")
+            last_flush = tick
         time.sleep(max(0.0, period - (time.time() - tick)))
 
 
@@ -2841,7 +3089,7 @@ def main() -> None:
     metrics, link = Metrics(), Link(online=False)
     escalator = Escalator(Outbox(settings.db_path), link, fetch_forecast,
                           lambda payload: send_dispatch(settings.dispatch_url, payload), metrics)
-    pipeline = Pipeline(towers, YoloDetector(settings.detector_weights),
+    pipeline = Pipeline(towers, YoloDetector(settings.detector_weights, classes=settings.detector_classes),
                         ContextVLM(settings.vlm_model, settings.vlm_base_url, settings.vlm_timeout_s),
                         escalator, settings, metrics)
     rt = Runtime(pipeline, escalator, link)
@@ -2905,10 +3153,33 @@ def test_run_loop_processes_frames_and_flushes():
         worker.join(5)
     assert not worker.is_alive()
     assert pipe.calls[0][0] == "t1" and len(esc.calls) >= 1
+
+
+class FlakyPipeline(FakePipeline):
+    def process(self, tower_id, frame, now):
+        if tower_id == "t1":
+            raise RuntimeError("bad tower")
+        super().process(tower_id, frame, now)
+
+
+def test_failing_tower_does_not_stall_others():
+    pipe, esc = FlakyPipeline(), FakeEscalator()
+    rt = SimpleNamespace(pipeline=pipe, escalator=esc, link=Link())
+    streams = {"t1": itertools.repeat(ZERO_FRAME), "t2": itertools.repeat(ZERO_FRAME)}
+    stop = threading.Event()
+    worker = threading.Thread(target=run_loop, args=(rt, streams, Settings(fps=50), stop), daemon=True)
+    worker.start()
+    try:
+        assert pipe.called.wait(5) and esc.called.wait(5)
+    finally:
+        stop.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert {tid for tid, _ in pipe.calls} == {"t2"} and len(esc.calls) >= 1
 ```
 
 Run: `pytest tests/test_main.py -v`
-Expected: 1 passed. Also `python -c "import sentinel.main"` must work without ultralytics installed.
+Expected: 2 passed (a tower whose `process` always raises must not stop the others or the outbox flush). Also `python -c "import sentinel.main"` must work without ultralytics installed.
 
 **Step 2: Implement `scripts/dispatch_stub.py`** (the simulated cloud dispatch center)
 
