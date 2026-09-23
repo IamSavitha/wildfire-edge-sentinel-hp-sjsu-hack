@@ -21,7 +21,8 @@
 | Detector mAP50 on D-Fire test (4,306 images) | 0.002 (YOLO-World zero-shot) | **0.787** (YOLO11s) |
 | Detector precision / recall | 0.10 / 0.008 | **0.78 / 0.72** |
 | Detector on lookout-tower smoke (pyro-sdis val, 960 px) | 0.198 (stage 1, domain gap) | **0.728** (stage 2 tower fine-tune) |
-| Same stage-2 detector back on D-Fire | 0.787 | 0.106 — catastrophic forgetting; stage-3 joint training *pending* |
+| Same stage-2 detector back on D-Fire | 0.787 | 0.106 — catastrophic forgetting |
+| **Stage-3 joint (replay) detector — deployed** | tower 0.198 / D-Fire 0.787 (stage 1) | **tower 0.718 / D-Fire 0.748** (fire 0.687) |
 | VLM LoRA training loss (answer tokens) | 1.21 at step 10 | **0.137** after 2 epochs (answer-token accuracy 70% → 95.1%) |
 | VLM source-type agreement with teacher (500 held-out crops) | 45.0% (base 7B) | **73.6%** (LoRA 7B) |
 | VLM danger / benign / look-alike group agreement | 53.0% | **75.6%** |
@@ -177,7 +178,7 @@ YOLO runs **in-process** on the GPU (no server): ~3.3 ms/image at 640 px. The de
 - **Why it works:** full fine-tuning of a 9M-parameter detector is cheap, and transfer from COCO features converges fast (mAP50 0.52 by epoch 5, 0.787 final).
 - **Stage 2:** the tower-domain check (§8.4) showed mAP50 ~0.2 on lookout-tower smoke. Training continued from the stage-1 weights on pyro-sdis (29,537 tower images) at **960 px** so small distant plumes keep enough pixels → tower mAP50 **0.198 → 0.728** (`models/tower_yolo.pt`).
 - **Catastrophic forgetting:** the same stage-2 model dropped to 0.106 on D-Fire and lost the fire class entirely (pyro-sdis has smoke only). Sequential fine-tuning on a narrow dataset overwrites earlier skills.
-- **Stage 3 (mitigation, pending):** joint / replay training from stage 1 on D-Fire + tower data together (46,758 images, 960 px) → `models/joint_yolo.pt`, evaluated on both domains.
+- **Stage 3 (mitigation):** joint / replay training from stage 1 on D-Fire + tower data together (46,758 images, 960 px, 6 epochs) → `models/joint_yolo.pt`: tower **0.718**, D-Fire **0.748**, fire class 0.687 — keeps ~99% of the tower gain and ~95% of D-Fire. This is the deployed detector (`v1.3.0-joint`).
 
 ### 6.2 Teacher → student distillation for the VLM
 

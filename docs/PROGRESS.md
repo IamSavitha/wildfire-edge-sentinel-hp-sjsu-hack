@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 04:00 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 05:10 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -60,8 +60,8 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] Domain check on lookout-tower smoke (pyro-sdis val, 4,099 images, imgsz 1024): fine-tuned YOLO11s only **mAP50 0.213** (P 0.37, R 0.29) vs 0.787 on D-Fire — small distant plumes are missed (also seen on FIgLib demo frames)
 - [x] **Stage-2 tower fine-tune:** from `models/smoke_yolo.pt` on pyro-sdis (29,537 tower images), 960 px, 12 epochs → `models/tower_yolo.pt`
 - [x] Evaluate stage 2 on tower val and on D-Fire test — tower smoke mAP50 **0.198 → 0.728**; but D-Fire **0.787 → 0.106** (fire class lost): catastrophic forgetting
-- [ ] ⏳ **Stage-3 joint (replay) training:** from stage 1 on D-Fire train + tower train (46,758 images), 960 px, 6 epochs → `models/joint_yolo.pt` (~24 min/epoch, ETA ~05:15)
-- [ ] Evaluate stage 3 on both tower val and D-Fire test; pick the deployed detector
+- [x] **Stage-3 joint (replay) training:** from stage 1 on D-Fire train + tower train (46,758 images), 960 px, 6 epochs → `models/joint_yolo.pt`
+- [x] Evaluate stage 3 on both tower val and D-Fire test — tower **0.718**, D-Fire **0.748** (fire 0.687): forgetting fixed → **deployed detector** (`v1.3.0-joint`, runs at 960 px)
 
 ## Phase 5 — Context VLM: before → fine-tune → after 🖥️ [T12, T16, T24, T24b]
 
@@ -93,11 +93,11 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] Weights frozen read-only on the Nano in `models/versions/<tag>/` with `SHA256SUMS`
 - [x] `CONTRIBUTING.md`, PR template, `CODEOWNERS`
 - [ ] GitHub rulesets (owner action): require PRs on `main` for everyone but the owner; protect `v*` tags from deletion/moving
-- [ ] `v1.3.0-joint` after stage-3 training is evaluated
+- [x] `v1.3.0-joint` tagged at 8283fac (weights frozen, doc in docs/versions/)
 
 ## Phase 6b — Edge vs cloud-only (measured) ☁️ — the core proof
 
-- [ ] ⏳ Build: provider-agnostic cloud client (same Qwen2.5-VL-7B, hosted), response cache (no re-billing), link profiles (fiber / LTE / rural cellular / satellite / outage), cloud-only bench (every frame → cloud), edge vs cloud outage scenario, comparison table
+- [x] Build (390 tests; fairness reviewed twice — cloud gets a full-frame prompt, temporal rule, latest-frame uplink, network-baseline subtraction, live frames after restore; edge timing follows the shipped retry code): provider-agnostic cloud client (same Qwen2.5-VL-7B, hosted), response cache (no re-billing), link profiles (fiber / LTE / rural cellular / satellite / outage), cloud-only bench (every frame → cloud), edge vs cloud outage scenario, comparison table
 - [ ] Owner: create an account + API key with a provider serving Qwen2.5-VL-7B-Instruct (e.g. Fireworks AI or Alibaba Cloud Model Studio); put the three env vars on the Nano (never in the repo)
 - [ ] A. Same 500 held-out crops through the cloud model → accuracy, real latency incl. network, billed tokens, $
 - [ ] B. Cloud-only architecture on the same 25 tower clips → recall, false alarms, time to decision, bytes, $ per 1,000 frames
@@ -109,7 +109,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 
 - [x] `data/bench/clips.csv` with 20–40 clips (`alert` / `no_alert`) — 25 real tower clips via `scripts/make_bench_clips.py`: 15 alert (5 FIgLib post-ignition + 10 pyro smoke windows), 10 no_alert (smoke-free tower footage)
 - [x] `bench.py --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model <base id> --recheck-s 5`
-- [ ] `bench.py --name after --detector-weights models/smoke_yolo.pt --model context --recheck-s 5`
+- [ ] ⏳ `bench.py --name after --detector-weights models/joint_yolo.pt --detector-imgsz 960 --model context --recheck-s 5` (+ before rerun with first-alert timing, + deployed recheck 30 s)
 - [ ] `bench.py --name base_full --model <base id> --full-frame --recheck-s 5` (token ablation for the cost model)
 - [ ] `bench.py --name detector_only --detector-only` (optional ablation)
 - [ ] `compare.py` → `results/before_after.md`
@@ -166,6 +166,7 @@ Fill these in as runs finish (they also land in `results/*.json`).
 | context `after_lora7b` | group accuracy | **75.6%** (source-type 73.6%) | 2026-09-24 |
 | detector tower smoke (stage 1 → stage 2) | mAP50 | 0.198 → **0.728** | 2026-09-24 |
 | detector D-Fire after stage 2 | mAP50 | 0.787 → 0.106 (forgetting) | 2026-09-24 |
+| detector joint (stage 3) tower / D-Fire | mAP50 | **0.718 / 0.748** | 2026-09-24 |
 | context `linear_probe` | group accuracy | | |
 | bench `before` | precision / recall | | |
 | bench `after` | precision / recall | | |
