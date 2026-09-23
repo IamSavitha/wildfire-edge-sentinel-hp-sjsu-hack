@@ -210,7 +210,9 @@ def usd(prompt_tokens: float, completion_tokens: float, nbytes: float, prices: d
             + nbytes / 1e9 * p["usd_per_gb"])
 
 
-def profile_summary(rows: list[dict], sims: list[dict], prices: dict) -> dict:
+def profile_summary(rows: list[dict], sims: list[dict], prices: dict, camera_frames: int | None = None) -> dict:
+    """camera_frames: every frame the camera captured (default: the frames offered to the link); the
+    "per 1,000 captured frames" figures use it, so a sparser cadence reads as cheaper per camera frame."""
     predictions = [s["first_alert_s"] is not None for s in sims]
     tta = [s["first_alert_s"] for r, s in zip(rows, sims) if r["label"] == "alert" and s["first_alert_s"] is not None]
     delays = [d for s in sims for d in s["delays_s"]]
@@ -218,6 +220,7 @@ def profile_summary(rows: list[dict], sims: list[dict], prices: dict) -> dict:
             "completion_tokens", "decisions_during_outage", "captured_during_outage")
     tot = {k: sum(s[k] for s in sims) for k in keys}
     cost = usd(tot["prompt_tokens"], tot["completion_tokens"], tot["bytes_up"], prices)
+    captured = camera_frames or tot["frames"]
     return {
         **score(rows, predictions),
         "first_alert_s_by_clip": [s["first_alert_s"] for s in sims],
@@ -231,9 +234,10 @@ def profile_summary(rows: list[dict], sims: list[dict], prices: dict) -> dict:
         "captured_during_outage": tot["captured_during_outage"],
         "usd": cost,
         "usd_per_1000_frames": cost / tot["sent"] * 1000 if tot["sent"] else None,   # per frame sent
-        "usd_per_1000_captured_frames": cost / tot["frames"] * 1000 if tot["frames"] else None,
+        "camera_frames": captured,
+        "usd_per_1000_captured_frames": cost / captured * 1000 if captured else None,
         "bytes_per_1000_frames": tot["bytes_up"] / tot["sent"] * 1000 if tot["sent"] else None,
-        "bytes_per_1000_captured_frames": tot["bytes_up"] / tot["frames"] * 1000 if tot["frames"] else None,
+        "bytes_per_1000_captured_frames": tot["bytes_up"] / captured * 1000 if captured else None,
         "tokens_per_decision": ((tot["prompt_tokens"] + tot["completion_tokens"]) / tot["decided"]
                                 if tot["decided"] else None),
     }
@@ -253,10 +257,11 @@ def evaluate_rule(rows: list[dict], clips: list[dict], profiles: list[LinkProfil
                   prices: dict, stride_filter: int = 1) -> dict:
     """Score one decision rule (per-frame or temporal) at one cadence over every link profile."""
     subset = [{**c, "frames": [f for f in c["frames"] if f["i"] % stride_filter == 0]} for c in clips]
+    camera = sum(max((f["i"] for f in c["frames"]), default=-1) + 1 for c in clips)
     out = {**score(rows, _ideal(subset, alert_on, temporal)), "profiles": {}}
     for prof in profiles:
         sims = [simulate(c["frames"], prof, outages, policy, alert_on, net_baseline_ms, temporal) for c in subset]
-        out["profiles"][prof.name] = profile_summary(rows, sims, prices)
+        out["profiles"][prof.name] = profile_summary(rows, sims, prices, camera)
     return out
 
 

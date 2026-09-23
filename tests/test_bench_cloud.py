@@ -208,6 +208,10 @@ def test_bench_cloud_scores_rules_cadence_and_profiles(tmp_path):
     # cadence 2: frames 0 and 2 of each clip; frame 2 of the fire clip is ALERT
     assert out["cadence"]["stride"] == 2 and out["cadence"]["per_frame"]["recall"] == 0.5
     assert out["cadence"]["temporal"]["recall"] == 0.0  # only one positive frame at that cadence
+    # per camera frame, the sparser cadence sends half the bytes (10 camera frames either way)
+    full, cad = out["profiles"]["fiber"], out["cadence"]["per_frame"]["profiles"]["fiber"]
+    assert full["camera_frames"] == cad["camera_frames"] == 10
+    assert cad["bytes_per_1000_captured_frames"] == pytest.approx(full["bytes_per_1000_captured_frames"] / 2, rel=0.05)
     assert out["clips"][0]["severities"]["ALERT"] == 2 and out["clips"][2]["severities"]["failed"] == 2
     json.dumps(out, allow_nan=False)  # strict JSON
 
