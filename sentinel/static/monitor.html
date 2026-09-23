@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Model Economics</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:#f9f9f7; --surface:#fcfcfb; --fg:#0b0b0b; --fg2:#52514e; --muted:#6f6d68;
+    --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,0.10);
+    --s-in:#2a78d6; --s-out:#eb6834;
+    --good:#0ca30c; --critical:#d03b3b; --accent:#2a78d6; --accent-fg:#fff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page:#0d0d0d; --surface:#1a1a19; --fg:#ffffff; --fg2:#c3c2b7; --muted:#9a9890;
+      --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,0.10);
+      --s-in:#3987e5; --s-out:#d95926; --accent:#3987e5;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page:#0d0d0d; --surface:#1a1a19; --fg:#ffffff; --fg2:#c3c2b7; --muted:#9a9890;
+    --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,0.10);
+    --s-in:#3987e5; --s-out:#d95926; --accent:#3987e5;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--page); color:var(--fg);
+         font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:8px 24px; justify-content:space-between; align-items:flex-end;
+           padding:16px; border-bottom:1px solid var(--ring); }
+  h1 { font-size:20px; margin:0; }
+  .sub { color:var(--fg2); font-size:13px; margin:2px 0 0; }
+  .hstats { display:flex; flex-wrap:wrap; gap:6px 20px; margin:0; font-size:13px; }
+  .hstats div { display:flex; flex-direction:column; min-width:0; }
+  .hstats dt { color:var(--muted); font-size:12px; }
+  .hstats dd { margin:0; font-weight:600; font-variant-numeric:tabular-nums; }
+  .meter { height:4px; width:120px; max-width:100%; background:var(--grid); border-radius:2px; margin-top:3px; overflow:hidden; }
+  .meter span { display:block; height:100%; background:var(--accent); border-radius:2px; width:0; }
+  main { padding:16px; max-width:1400px; margin:0 auto; }
+  section { margin-bottom:24px; }
+  h2 { font-size:15px; margin:0 0 10px; }
+  .card { background:var(--surface); border:1px solid var(--ring); border-radius:10px; padding:14px; min-width:0; }
+  .tiles { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(min(100%, 230px), 1fr)); }
+  .tile h3 { font-size:13px; font-weight:500; color:var(--fg2); margin:0 0 6px; }
+  .big { font-size:28px; font-weight:650; line-height:1.15; overflow-wrap:anywhere; }
+  .detail { color:var(--fg2); font-size:12.5px; margin-top:6px; }
+  .detail b { color:var(--fg); font-weight:600; }
+  .hint { color:var(--muted); font-size:13px; font-style:italic; }
+  .vs { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .vs .big { font-size:21px; white-space:nowrap; }
+  .vs small { display:block; color:var(--muted); font-size:12px; }
+  .tablewrap { overflow-x:auto; border:1px solid var(--ring); border-radius:10px; background:var(--surface); }
+  table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; font-size:13px; }
+  th, td { padding:8px 9px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--grid); }
+  th { color:var(--fg2); font-weight:600; font-size:12px; position:sticky; top:0; background:var(--surface); }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2), th:nth-child(3), td:nth-child(3) { text-align:left; }
+  tr:last-child td { border-bottom:0; }
+  td.uri { max-width:200px; overflow:hidden; text-overflow:ellipsis; color:var(--fg2); }
+  .status { display:inline-flex; align-items:center; gap:5px; font-weight:600; }
+  .status::before { content:""; width:8px; height:8px; border-radius:50%; background:currentColor; }
+  .status.ok { color:var(--good); } .status.bad { color:var(--critical); }
+  .status span { color:var(--fg); font-weight:500; }
+  .sparks { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
+  .spark-head { display:flex; justify-content:space-between; gap:8px; align-items:baseline; flex-wrap:wrap; }
+  .spark-head strong { font-size:14px; }
+  .legend { display:flex; gap:12px; font-size:12px; color:var(--fg2); }
+  .legend i { display:inline-block; width:12px; height:2px; vertical-align:middle; margin-right:4px; border-radius:1px; }
+  .plot { position:relative; margin-top:8px; }
+  .plot svg { display:block; width:100%; height:90px; overflow:visible; touch-action:none; }
+  .plot .gridl { stroke:var(--grid); stroke-width:1; }
+  .plot .base { stroke:var(--axis); stroke-width:1; }
+  .plot path { fill:none; stroke-width:2; stroke-linejoin:round; stroke-linecap:round; vector-effect:non-scaling-stroke; }
+  .plot .l-in { stroke:var(--s-in); } .plot .l-out { stroke:var(--s-out); }
+  .plot .cross { stroke:var(--axis); stroke-width:1; vector-effect:non-scaling-stroke; }
+  .axisnote { display:flex; justify-content:space-between; color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+  .tip { position:absolute; top:0; pointer-events:none; background:var(--surface); border:1px solid var(--ring);
+         border-radius:6px; padding:4px 8px; font-size:12px; white-space:nowrap; box-shadow:0 2px 8px rgba(0,0,0,.15);
+         font-variant-numeric:tabular-nums; display:none; }
+  form.prices { display:grid; gap:12px; grid-template-columns:repeat(auto-fit, minmax(min(100%, 180px), 1fr)); align-items:end; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:12.5px; color:var(--fg2); }
+  input { font:inherit; color:var(--fg); background:var(--page); border:1px solid var(--axis); border-radius:6px; padding:6px 8px; width:100%; }
+  input:focus-visible, button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  button { font:inherit; font-weight:600; padding:7px 14px; border-radius:6px; border:0; cursor:pointer;
+           background:var(--accent); color:var(--accent-fg); }
+  .note { color:var(--fg2); font-size:12.5px; margin:10px 0 0; }
+  .empty { padding:14px; color:var(--muted); }
+  @media (max-width:520px) { .big { font-size:24px; } header { padding:12px 16px; } main { padding:12px 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Live Model Economics</h1>
+    <p class="sub">Wildfire Edge Sentinel · vLLM backends served by zrt on the HP ZGX Nano</p>
+  </div>
+  <dl class="hstats" aria-live="polite">
+    <div><dt>Last update</dt><dd id="h-ts">—</dd></div>
+    <div><dt>GPU utilisation</dt><dd id="h-gpu">—</dd><div class="meter" aria-hidden="true"><span id="m-gpu"></span></div></div>
+    <div><dt>Unified memory used / total</dt><dd id="h-mem">—</dd><div class="meter" aria-hidden="true"><span id="m-mem"></span></div></div>
+  </dl>
+</header>
+<main>
+  <section aria-labelledby="econ-h">
+    <h2 id="econ-h">Edge vs cloud</h2>
+    <div class="tiles" id="tiles"></div>
+  </section>
+
+  <section aria-labelledby="models-h">
+    <h2 id="models-h">Served models</h2>
+    <div class="tablewrap" tabindex="0" role="region" aria-labelledby="models-h">
+      <table>
+        <thead><tr>
+          <th scope="col">Label</th><th scope="col">Model</th><th scope="col">Status</th>
+          <th scope="col">Running</th><th scope="col">Requests</th>
+          <th scope="col">Prompt tok</th><th scope="col">Gen tok</th>
+          <th scope="col">Tok/s in</th><th scope="col">Tok/s out</th>
+          <th scope="col">Latency p50</th><th scope="col">Latency p95</th><th scope="col">TTFT p50</th>
+          <th scope="col">KV cache</th><th scope="col">GPU mem fraction</th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="14" class="empty">Waiting for first poll…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="tp-h">
+    <h2 id="tp-h">Throughput, last 5 minutes</h2>
+    <div class="sparks" id="sparks"></div>
+  </section>
+
+  <section aria-labelledby="pr-h">
+    <h2 id="pr-h">Price assumptions</h2>
+    <div class="card">
+      <form class="prices" id="prices">
+        <label>$ per 1M input tokens<input name="usd_per_mtok_in" type="number" min="0" step="any" inputmode="decimal" required></label>
+        <label>$ per 1M output tokens<input name="usd_per_mtok_out" type="number" min="0" step="any" inputmode="decimal" required></label>
+        <label>$ per GB uplink<input name="usd_per_gb" type="number" min="0" step="any" inputmode="decimal" required></label>
+        <label>Tokens per full frame (cloud)<input name="tokens_per_full_frame" type="number" min="0" step="any" inputmode="decimal" required></label>
+        <label>Bytes per streamed frame<input name="bytes_per_frame" type="number" min="0" step="any" inputmode="decimal" required></label>
+        <button type="submit">Apply for this session</button>
+      </form>
+      <p class="note">These are assumptions, not measurements. Fill them from current published cloud API
+        and data rates; defaults come from <code>config/cost_inputs.json</code>. Token counts, latency and
+        frame counts on this page are measured live.</p>
+      <p class="note" id="price-msg" role="status"></p>
+    </div>
+  </section>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const WINDOW_MS = 5 * 60 * 1000;
+  const history = {};        // label -> [{t, in, out}]
+  let pricesLoaded = false, hover = null;   // hover survives the 2 s re-render
+
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const isNum = (v) => typeof v === "number" && isFinite(v);
+  const DASH = "—";
+  function num(v, d = 1) {
+    if (!isNum(v)) return DASH;
+    const a = Math.abs(v);
+    if (a >= 1e9) return (v / 1e9).toFixed(d) + "B";
+    if (a >= 1e6) return (v / 1e6).toFixed(d) + "M";
+    if (a >= 1e3) return (v / 1e3).toFixed(d) + "k";
+    return Number.isInteger(v) ? String(v) : v.toFixed(d);
+  }
+  const rate = (v) => isNum(v) ? (v >= 100 ? Math.round(v).toLocaleString() : v.toFixed(1)) : DASH;
+  const dur = (s) => !isNum(s) ? DASH : s < 1 ? Math.round(s * 1000) + " ms" : s.toFixed(2) + " s";
+  const pct = (v, d = 0) => isNum(v) ? v.toFixed(d) + "%" : DASH;
+  const gb = (v) => isNum(v) ? v.toFixed(1) + " GB" : DASH;
+  function bytes(v) {
+    if (!isNum(v)) return DASH;
+    const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
+    while (Math.abs(v) >= 1000 && i < u.length - 1) { v /= 1000; i++; }
+    return (i ? v.toFixed(1) : Math.round(v)) + " " + u[i];
+  }
+  function usd(v) {
+    if (!isNum(v)) return DASH;
+    if (v === 0) return "$0";
+    if (v < 0.0001) return "<$0.0001";
+    if (v < 0.01) return "$" + v.toPrecision(2);
+    return "$" + v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function header(d) {
+    $("h-ts").textContent = new Date(d.ts * 1000).toLocaleTimeString();
+    const s = d.system || {};
+    $("h-gpu").textContent = pct(s.gpu_util_pct);
+    $("m-gpu").style.width = isNum(s.gpu_util_pct) ? Math.min(100, s.gpu_util_pct) + "%" : "0";
+    $("h-mem").textContent = isNum(s.mem_used_gb) && isNum(s.mem_total_gb) ? `${gb(s.mem_used_gb)} / ${gb(s.mem_total_gb)}` : DASH;
+    $("m-mem").style.width = isNum(s.mem_used_gb) && s.mem_total_gb > 0 ? (100 * s.mem_used_gb / s.mem_total_gb) + "%" : "0";
+  }
+
+  function tiles(d) {
+    const e = d.economics, t = e.total, p = d.prices, priced = p.usd_per_mtok_in > 0 || p.usd_per_mtok_out > 0;
+    const out = [], nm = Object.keys(e.models).length;
+    out.push(`<div class="card tile"><h3>Tokens processed at the edge</h3>
+      <div class="big">${num(t.edge_tokens)}</div>
+      <div class="detail"><b>${num(t.prompt_tokens)}</b> input · <b>${num(t.generation_tokens)}</b> output, across ${nm} model${nm === 1 ? "" : "s"} that reported. None of it left the device.</div></div>`);
+    out.push(`<div class="card tile"><h3>Equivalent cloud API cost</h3>
+      ${priced ? `<div class="big">${usd(t.cloud_equiv_usd)}</div>` : `<div class="big hint">set prices to see $</div>`}
+      <div class="detail">What the same input and output tokens would cost at the price assumptions below.</div></div>`);
+    const q = e.pipeline;
+    if (!q) {
+      out.push(`<div class="card tile"><h3>Cascade vs cloud-per-frame</h3><div class="hint">No pipeline data. Start the monitor with
+        <code>--pipeline-url http://localhost:8080/api/state</code> while the demo runs.</div></div>`);
+    } else {
+      const tokHint = p.tokens_per_full_frame > 0 ? "" : `<small>set tokens per full frame</small>`;
+      out.push(`<div class="card tile"><h3>Cloud-per-frame cost for frames seen vs edge cascade</h3>
+        <div class="vs">
+          <div><small>Cloud VLM on every frame</small><div class="big">${priced && p.tokens_per_full_frame > 0 ? usd(q.cloud_per_frame_usd) : DASH}</div>${tokHint}
+            <small>${num(q.cloud_per_frame_tokens)} tokens</small></div>
+          <div><small>Edge cascade (uplink only)</small><div class="big">${usd(q.edge_uplink_usd)}</div>
+            <small>0 cloud tokens · ${num(q.vlm_tokens)} local</small></div>
+        </div></div>`);
+      out.push(`<div class="card tile"><h3>Model calls avoided by the cascade</h3>
+        <div class="big">${num(q.cascade_calls_avoided, 1)}</div>
+        <div class="detail"><b>${num(q.frames_seen)}</b> frames seen, <b>${num(q.vlm_calls)}</b> VLM calls
+          ${isNum(q.frames_per_vlm_call) ? `· one call per <b>${num(q.frames_per_vlm_call)}</b> frames` : ""}</div></div>`);
+      const r = q.upstream_saving_ratio;
+      const saved = !isNum(r) ? `<span class="hint">set bytes per frame</span>`
+        : q.bytes_up === 0 ? "Nothing sent upstream yet"
+        : `${(100 * r).toFixed(r > 0.999 ? 3 : 1)}% less upstream than streaming`;
+      out.push(`<div class="card tile"><h3>Bytes sent vs streaming video</h3>
+        <div class="vs">
+          <div><small>Sent by the cascade</small><div class="big">${bytes(q.bytes_up)}</div></div>
+          <div><small>Streaming every frame</small><div class="big">${p.bytes_per_frame > 0 ? bytes(q.video_bytes_equiv) : DASH}</div></div>
+        </div><div class="detail">${saved}${p.usd_per_gb > 0 && p.bytes_per_frame > 0 ? ` · video upload ≈ ${usd(q.video_upload_usd)}` : ""}</div></div>`);
+    }
+    $("tiles").innerHTML = out.join("");
+  }
+
+  function rows(d) {
+    if (!d.models.length) { $("rows").innerHTML = `<tr><td colspan="14" class="empty">No vllm-*.json in the run dir. Is zrt serving a model?</td></tr>`; return; }
+    $("rows").innerHTML = d.models.map((m) => {
+      const ok = m.status === "ok";
+      return `<tr>
+        <td><strong>${esc(m.label)}</strong></td>
+        <td class="uri" title="${esc(m.model_uri)}">${esc(m.model_uri) || DASH}</td>
+        <td><span class="status ${ok ? "ok" : "bad"}" ${ok ? "" : `title="${esc(m.error)}"`}><span>${ok ? "live" : "unreachable"}</span></span></td>
+        <td>${num(m.running, 0)}</td><td>${num(m.requests)}</td>
+        <td>${num(m.prompt_tokens)}</td><td>${num(m.generation_tokens)}</td>
+        <td>${rate(m.prompt_tok_per_s)}</td><td>${rate(m.gen_tok_per_s)}</td>
+        <td>${dur(m.latency_p50_s)}</td><td>${dur(m.latency_p95_s)}</td><td>${dur(m.ttft_p50_s)}</td>
+        <td>${pct(m.kv_cache_pct, 1)}</td><td>${isNum(m.gpu_memory_fraction) ? Math.round(m.gpu_memory_fraction * 100) + "%" : DASH}</td></tr>`;
+    }).join("");
+  }
+
+  function record(d) {
+    const now = d.ts * 1000;
+    for (const m of d.models) {
+      const h = history[m.label] || (history[m.label] = []);
+      h.push({ t: now, in: m.prompt_tok_per_s, out: m.gen_tok_per_s });
+      while (h.length && h[0].t < now - WINDOW_MS) h.shift();
+    }
+  }
+
+  // one path per series; null rates break the line instead of drawing a false zero
+  function pathFor(h, key, t0, ymax) {
+    let dstr = "", pen = false;
+    for (const p of h) {
+      if (!isNum(p[key])) { pen = false; continue; }
+      const x = ((p.t - t0) / WINDOW_MS) * 300, y = 60 - (p[key] / ymax) * 56;
+      dstr += (pen ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1);
+      pen = true;
+    }
+    return dstr;
+  }
+
+  function sparks(d) {
+    const now = d.ts * 1000, t0 = now - WINDOW_MS;
+    const html = d.models.map((m, i) => {
+      const h = history[m.label] || [];
+      const vals = h.flatMap((p) => [p.in, p.out]).filter(isNum);
+      const ymax = Math.max(1, ...vals);
+      return `<div class="card">
+        <div class="spark-head"><strong>${esc(m.label)}</strong>
+          <span class="legend"><span><i style="background:var(--s-in)"></i>input ${rate(m.prompt_tok_per_s)} tok/s</span>
+          <span><i style="background:var(--s-out)"></i>output ${rate(m.gen_tok_per_s)} tok/s</span></span></div>
+        <div class="plot" data-i="${i}">
+          <svg viewBox="0 0 300 60" preserveAspectRatio="none" role="img"
+               aria-label="${esc(m.label)} input and output tokens per second over the last 5 minutes; peak ${rate(ymax)} tok/s">
+            <line class="gridl" x1="0" x2="300" y1="4" y2="4" vector-effect="non-scaling-stroke"/>
+            <line class="base" x1="0" x2="300" y1="60" y2="60" vector-effect="non-scaling-stroke"/>
+            <path class="l-in" d="${pathFor(h, "in", t0, ymax)}"/>
+            <path class="l-out" d="${pathFor(h, "out", t0, ymax)}"/>
+            <line class="cross" x1="0" x2="0" y1="0" y2="60" visibility="hidden"/>
+          </svg>
+          <div class="tip"></div>
+        </div>
+        <div class="axisnote"><span>−5 min</span><span>top line ${rate(ymax)} tok/s</span><span>now</span></div></div>`;
+    }).join("");
+    $("sparks").innerHTML = html || `<div class="card empty">No models yet.</div>`;
+    $("sparks").querySelectorAll(".plot").forEach((el) => {
+      const m = d.models[+el.dataset.i], h = history[m.label] || [];
+      const svg = el.querySelector("svg"), cross = el.querySelector(".cross"), tip = el.querySelector(".tip");
+      const move = (ev) => {
+        if (!h.length) return;
+        const r = svg.getBoundingClientRect(), fx = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+        const tt = t0 + fx * WINDOW_MS;
+        let best = h[0];
+        for (const p of h) if (Math.abs(p.t - tt) < Math.abs(best.t - tt)) best = p;
+        const x = ((best.t - t0) / WINDOW_MS) * 300;
+        cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
+        tip.innerHTML = `${new Date(best.t).toLocaleTimeString()}<br>in <b>${rate(best.in)}</b> · out <b>${rate(best.out)}</b> tok/s`;
+        tip.style.display = "block";
+        const px = (x / 300) * r.width, w = tip.offsetWidth;
+        tip.style.left = Math.min(Math.max(0, px - w / 2), r.width - w) + "px";
+        tip.style.top = "-38px";
+      };
+      const leave = () => { hover = null; cross.setAttribute("visibility", "hidden"); tip.style.display = "none"; };
+      svg.addEventListener("pointermove", (ev) => { hover = { label: m.label, clientX: ev.clientX }; move(ev); });
+      svg.addEventListener("pointerleave", leave);
+      if (hover && hover.label === m.label) move(hover);
+    });
+  }
+
+  function fillPrices(p) {
+    const f = $("prices");
+    for (const k of ["usd_per_mtok_in", "usd_per_mtok_out", "usd_per_gb", "tokens_per_full_frame", "bytes_per_frame"]) f.elements[k].value = p[k];
+  }
+
+  $("prices").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const body = {};
+    for (const el of ev.target.elements) if (el.name) body[el.name] = parseFloat(el.value);
+    try {
+      const r = await fetch("/api/prices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!r.ok) throw new Error(r.status === 422 ? "values must be non-negative numbers" : "HTTP " + r.status);
+      fillPrices(await r.json());
+      $("price-msg").textContent = "Applied for this session (not saved to disk).";
+      refresh();
+    } catch (e) { $("price-msg").textContent = "Could not apply prices: " + e.message; }
+  });
+
+  async function refresh() {
+    try {
+      const d = await (await fetch("/api/live", { cache: "no-store" })).json();
+      if (!pricesLoaded) { fillPrices(d.prices); pricesLoaded = true; }
+      record(d); header(d); tiles(d); rows(d); sparks(d);
+    } catch (e) {
+      $("h-ts").textContent = "monitor unreachable";
+    }
+  }
+  setInterval(refresh, 2000);
+  refresh();
+})();
+</script>
+</body>
+</html>
