@@ -253,6 +253,51 @@ redistributing data or weights.**
 Ultralytics is AGPL-3.0: a networked deployment of this service must offer its source, or use an
 Ultralytics enterprise license.
 
+## Edge vs cloud-only (measured)
+
+The same model, Qwen2.5-VL-7B-Instruct (base weights: a hosted provider cannot run our LoRA), behind any
+OpenAI-compatible provider, with **every frame sent to the cloud**. It is scored on the same 500 held-out
+crops and the same tower clips as the edge. Configuration comes only from environment variables; never
+put the key in a file, a command line you save, or a commit:
+
+- `CLOUD_VLM_BASE_URL`: the provider's OpenAI-compatible `/v1` URL
+- `CLOUD_VLM_MODEL`: the provider's id for Qwen2.5-VL-7B-Instruct
+- `CLOUD_VLM_API_KEY`: the API key
+- `CLOUD_VLM_RESPONSE_FORMAT` (optional): `json_schema` (default), `json_object` or `none`. Use `json_object` or `none` if the provider rejects `json_schema`; the schema then goes into the system prompt.
+
+```bash
+# run from the machine that holds data/ (the Nano); cloud latency is measured from there
+# A. context accuracy + real cloud latency on the same 500 crops (dry run first)
+python scripts/eval_context.py --cloud --limit 20 --name dryrun            # 20 calls
+python scripts/eval_context.py --cloud                       # -> results/context_cloud_qwen7b.json
+# B. cloud-only end-to-end on the tower clips, per link profile (dry run first)
+python scripts/bench_cloud.py --limit 2 --frame-stride 10 --name dryrun     # ~8 calls
+rm results/context_dryrun.json results/bench_cloud_dryrun.json            # dry runs are not results
+python scripts/bench_cloud.py                                 # -> results/bench_cloud_cloud_qwen7b.json
+# C. edge side: the step-4 bench.py run (`--name after`) records first_alert_s and alert_payload_bytes
+#    per clip; result files written before this change lack them (outage_scenario.py says so)
+# D. outage: link down for the first 10 min of every clip, edge vs cloud (drop and buffer)
+python scripts/outage_scenario.py --edge after --cloud cloud_qwen7b --outage-min 10
+python scripts/outage_scenario.py --edge after --cloud cloud_qwen7b --outage-min 10 --outage-lead-min 5  # link was already down 5 min before the fire
+python scripts/compare.py                                     # adds the "Edge vs cloud-only" section
+```
+
+**Measured:** cloud answers and accuracy, provider-reported tokens (billed), and the cloud latency: the
+real HTTPS round trip from the machine that ran the script, over fresh calls only (answers served from
+the cache are counted separately, with the latency measured when they were first fetched). Edge latency,
+decisions and alert sizes come from the on-device runs. **Modelled:** the tower's uplink.
+`sentinel/netprofile.py` has fixed profiles (`fiber`, `lte`, `rural_cellular`, `satellite_geo`, `outage`) and
+outage windows, layered on top of the measured latency. We do not throttle the Nano's real network,
+because that would cut the SSH/Tailscale link. Cloud-only has no local detector, gate or trend, so each
+frame is judged alone with `assess(ctx, trend=None)`.
+
+**Cost warning:** every uncached frame is a paid API call. The full crop eval is 500 calls, and the clip
+bench is about 1,000 frames at stride 1. Start with `--limit` and `--frame-stride`, and cap a run with
+`--max-fresh-calls N`. Answers are cached in `data/cloud_cache.jsonl` (git-ignored), keyed by model,
+response format and image bytes, so re-running (with other profiles, outages or `--force`) does not bill
+again. Dollar figures stay "unpriced" until you fill `usd_per_mtok_in`, `usd_per_mtok_out` and `usd_per_gb`
+in `config/cost_inputs.json` with your provider's published rates.
+
 ## Limitations
 
 - **Simulated world:** towers are replayed clips, the temperature sensor and the connectivity toggle are

@@ -101,3 +101,94 @@ def test_load_results_reads_known_prefixes(tmp_path):
     (tmp_path / "cost_model.jsonl").write_text("{}\n")
     (tmp_path / "notes.json").write_text("{}")
     assert sorted(load_results(tmp_path)) == ["bench_x", "detector_after_yolo11s"]
+
+
+# ---------------------------------------------------------------- edge vs cloud-only
+
+CLOUD_CTX = {**ctx("cloud_qwen7b", 0.44, 0.52, 0.02, 1400.0, 1500.0), "cloud": True,
+             "provider_host": "api.example.com", "response_format": "json_object",
+             "latency_ms_p95": 2600.0, "prompt_tokens_per_call": 1210.0, "completion_tokens_per_call": 58.0}
+
+
+def edge_bench_with_alerts():
+    b = bench("after", 0.9, 0.8, 1, 790.0, 55.5)
+    b["clips"] = [{"path": "fire", "label": "alert", "frames": 40, "first_alert_s": 1.5,
+                   "first_alert_compute_ms": 12000.0, "alert_payload_bytes": 20_000},
+                  {"path": "fog", "label": "no_alert", "frames": 40, "first_alert_s": None,
+                   "first_alert_compute_ms": None, "alert_payload_bytes": None}]
+    return b
+
+
+CLOUD_BENCH = {"name": "cloud_qwen7b", "recall": 0.6, "false_alarms": 3, "missed": 6, "frame_stride": 1,
+               "outages": [], "prices": {"usd_per_mtok_in": 0.2, "usd_per_mtok_out": 0.6, "usd_per_gb": 0},
+               "profiles": {"fiber": {"recall": 0.6, "time_to_first_alert_s_p50": 2.4, "decision_delay_s_p95": 1.9,
+                                      "max_backlog_s": 0.0, "usd_per_1000_frames": 0.2766,
+                                      "bytes_per_1000_frames": 150e6},
+                            "rural_cellular": {"recall": 0.6, "time_to_first_alert_s_p50": 30.1,
+                                               "decision_delay_s_p95": 45.0, "max_backlog_s": 38.2,
+                                               "usd_per_1000_frames": 0.2766, "bytes_per_1000_frames": 150e6}}}
+
+
+def test_no_cloud_results_no_section():
+    assert "Edge vs cloud-only" not in render(FULL)
+
+
+def test_bench_cloud_is_not_listed_as_an_edge_bench_row():
+    md = render({**FULL, "bench_cloud_cloud_qwen7b": CLOUD_BENCH})
+    e2e = md.split("## End-to-end")[1].split("## Edge vs cloud-only")[0]
+    assert "`cloud_qwen7b`" not in e2e
+
+
+def test_edge_vs_cloud_section_with_everything():
+    from scripts.outage_scenario import scenario
+    from sentinel.netprofile import PROFILES
+
+    edge = edge_bench_with_alerts()
+    cloud_clips = {**CLOUD_BENCH, "fps": 2.0, "clips": [
+        {"path": "fire", "frames": [{"t": 0.0, "bytes": 150_000, "severity": "ALERT", "latency_ms": 900.0}]},
+        {"path": "fog", "frames": [{"t": 0.0, "bytes": 150_000, "severity": "IGNORE", "latency_ms": 900.0}]}]}
+    outage = scenario({**edge, "config": {"fps": 2.0}}, cloud_clips, [PROFILES["fiber"]], 10)
+    md = render({**FULL, "bench_after": edge, "context_cloud_qwen7b": CLOUD_CTX,
+                 "bench_cloud_cloud_qwen7b": CLOUD_BENCH, "outage_after_vs_cloud_10min": outage})
+    sec = md.split("## Edge vs cloud-only (measured)")[1]
+    assert "Not run yet" not in sec
+    (row,) = lines_with(sec, "cloud (api.example.com, json_object)")
+    assert "| 44.0% |" in row and "| 1400 | 2600 | 1210 in + 58 out |" in row
+    (row,) = [ln for ln in lines_with(sec, "`after_lora7b`")]
+    assert row.endswith("| 0 (local) |")
+    (row,) = lines_with(sec, "cloud-only, stride 1")
+    assert "| 60.0% | 3 | 6 | $0.2766 | 150.00 MB |" in row
+    (row,) = lines_with(sec, "| `after` | edge cascade")
+    assert row.endswith("| $0 API | 0.25 MB |")  # 20 KB alert over 80 frames
+    (row,) = lines_with(sec, "| rural_cellular |")
+    assert "| 30.1 | 45.0 | 38.2 | 60.0% |" in row
+    edge_rural = 1.5 + 12.0 + (0.15 + 20_000 * 8 / 1e6) / 0.98
+    assert row.startswith(f"| rural_cellular | {edge_rural:.1f} |")
+    assert "### Outage scenario" in sec and "| fiber |" in sec.split("### Outage scenario")[1]
+
+
+def test_partial_cloud_results_note_what_is_missing():
+    md = render({"context_cloud_qwen7b": {**CLOUD_CTX, "latency_ms_p50": None, "latency_ms_p95": None,
+                                          "cached_latency_ms_p50": 1300.0, "cached_latency_ms_p95": 2000.0}})
+    sec = md.split("## Edge vs cloud-only (measured)")[1]
+    (note,) = lines_with(sec, "Not run yet")
+    assert "bench_cloud_" in note and "outage_" in note and "context_cloud_" not in note
+    (row,) = lines_with(sec, "latency from cache")
+    assert "| 1300 | 2000 |" in row
+    assert "Time to dispatch" not in sec
+
+
+def test_unpriced_cloud_and_old_edge_results():
+    old_edge = bench("after", 0.9, 0.8, 1, 790.0, 55.5)  # no clips / first_alert_s
+    md = render({"bench_after": old_edge, "bench_cloud_c": {**CLOUD_BENCH, "prices": {}}})
+    (row,) = lines_with(md, "cloud-only, stride 1")
+    assert "unpriced" in row
+    assert "re-run bench_after" in md
+    (row,) = lines_with(md, "| fiber |")
+    assert row.startswith("| fiber | — | 2.4 |")
+
+
+def test_load_results_reads_outage_files(tmp_path):
+    (tmp_path / "outage_x.json").write_text("{}")
+    (tmp_path / "outage_x.md").write_text("")
+    assert list(load_results(tmp_path)) == ["outage_x"]
