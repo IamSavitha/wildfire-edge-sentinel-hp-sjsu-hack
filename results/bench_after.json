@@ -1,0 +1,364 @@
+{
+  "name": "after",
+  "detector_only": false,
+  "n_clips": 25,
+  "tp": 11,
+  "fp": 6,
+  "fn": 4,
+  "tn": 4,
+  "precision": 0.6470588235294118,
+  "recall": 0.7333333333333333,
+  "false_alarms": 6,
+  "missed": 4,
+  "tokens_per_vlm_call": 220.27272727272728,
+  "frames_per_vlm_call": 40.5,
+  "time_to_decision_s_p50": 5.0,
+  "time_to_decision_s_p95": 10.0,
+  "metrics": {
+    "frames": 891,
+    "candidates": 22,
+    "vlm_calls": 22,
+    "vlm_tokens": 4846,
+    "severity_LOG": 2,
+    "severity_ALERT": 17,
+    "severity_IGNORE": 1,
+    "detect_ms_p50": 24.104159994749352,
+    "detect_ms_p95": 31.808560015633702,
+    "vlm_ms_p50": 4566.867311979877,
+    "vlm_ms_p95": 5188.739895199251,
+    "decision_s_p50": 5.0,
+    "decision_s_p95": 10.0
+  },
+  "clips": [
+    {
+      "path": "data/bench/figlib_fire_beaverfire",
+      "label": "alert",
+      "predicted_alert": false,
+      "severities": [
+        "LOG"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": null,
+      "first_alert_compute_ms": null,
+      "alert_payload_bytes": null
+    },
+    {
+      "path": "data/bench/figlib_fire_brenglefire",
+      "label": "alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 7.5,
+      "first_alert_compute_ms": 40.5835040146485,
+      "alert_payload_bytes": 2648
+    },
+    {
+      "path": "data/bench/figlib_fire_chiafire",
+      "label": "alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 12.0,
+      "first_alert_compute_ms": 29.025903990259394,
+      "alert_payload_bytes": 8645
+    },
+    {
+      "path": "data/bench/figlib_fire_rainbowfire",
+      "label": "alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 8.0,
+      "first_alert_compute_ms": 30.900223995558918,
+      "alert_payload_bytes": 7022
+    },
+    {
+      "path": "data/bench/figlib_fire_sorrentofire",
+      "label": "alert",
+      "predicted_alert": false,
+      "severities": [],
+      "frames": 40,
+      "vlm_calls": 0,
+      "first_alert_s": null,
+      "first_alert_compute_ms": null,
+      "alert_payload_bytes": null
+    },
+    {
+      "path": "data/bench/pyro_alert_sdis-77_croix-augas-265",
+      "label": "alert",
+      "predicted_alert": false,
+      "severities": [
+        "MONITOR"
+      ],
+      "frames": 25,
+      "vlm_calls": 1,
+      "first_alert_s": null,
+      "first_alert_compute_ms": null,
+      "alert_payload_bytes": null
+    },
+    {
+      "path": "data/bench/pyro_alert_sdis-77_croix-augas-59",
+      "label": "alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 34,
+      "vlm_calls": 1,
+      "first_alert_s": 16.0,
+      "first_alert_compute_ms": 24.65843199752271,
+      "alert_payload_bytes": 1546
+    },
+    {
+      "path": "data/bench/pyro_alert_sdis-07_brison-200",
+      "label": "alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 6.0,
+      "first_alert_compute_ms": 6.983903993386775,
+      "alert_payload_bytes": 1888
+    },
+    {
+      "path": "data/bench/pyro_alert_sdis-07_marguerite-282",
+      "label": "alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 7.5,
+      "first_alert_compute_ms": 24.4954880035948,
+      "alert_payload_bytes": 1571
+    },
+    {
+      "path": "data/bench/pyro_alert_sdis-07_brison-20",
+      "label": "alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 9.0,
+      "first_alert_compute_ms": 30.985488003352657,
+      "alert_payload_bytes": 2470
+    },
+    {
+      "path": "data/bench/pyro_alert_force-06_cabanelle-125",
+      "label": "alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 11.5,
+      "first_alert_compute_ms": 31.731248018331826,
+      "alert_payload_bytes": 1779
+    },
+    {
+      "path": "data/bench/pyro_alert_force-06_ferion-142",
+      "label": "alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 11.0,
+      "first_alert_compute_ms": 11.068735999288037,
+      "alert_payload_bytes": 2171
+    },
+    {
+      "path": "data/bench/pyro_alert_sdis-77_croix-augas-161",
+      "label": "alert",
+      "predicted_alert": false,
+      "severities": [
+        "LOG"
+      ],
+      "frames": 25,
+      "vlm_calls": 1,
+      "first_alert_s": null,
+      "first_alert_compute_ms": null,
+      "alert_payload_bytes": null
+    },
+    {
+      "path": "data/bench/pyro_alert_force-06_courmettes-212",
+      "label": "alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 6.0,
+      "first_alert_compute_ms": 31.687248003436252,
+      "alert_payload_bytes": 2109
+    },
+    {
+      "path": "data/bench/pyro_alert_force-06_cabanelle-327",
+      "label": "alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 7.5,
+      "first_alert_compute_ms": 24.894496018532664,
+      "alert_payload_bytes": 2638
+    },
+    {
+      "path": "data/bench/pyro_clear_sdis-07_brison-20",
+      "label": "no_alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 7.5,
+      "first_alert_compute_ms": 32.055200019385666,
+      "alert_payload_bytes": 2477
+    },
+    {
+      "path": "data/bench/pyro_clear_sdis-07_brison-110",
+      "label": "no_alert",
+      "predicted_alert": false,
+      "severities": [],
+      "frames": 12,
+      "vlm_calls": 0,
+      "first_alert_s": null,
+      "first_alert_compute_ms": null,
+      "alert_payload_bytes": null
+    },
+    {
+      "path": "data/bench/pyro_clear_sdis-07_brison-200",
+      "label": "no_alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 8.0,
+      "first_alert_compute_ms": 25.216976006049663,
+      "alert_payload_bytes": 2419
+    },
+    {
+      "path": "data/bench/pyro_clear_force-06_courmettes-160",
+      "label": "no_alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 10.0,
+      "first_alert_compute_ms": 6.887823983561248,
+      "alert_payload_bytes": 2577
+    },
+    {
+      "path": "data/bench/pyro_clear_force-06_cabanelle-125",
+      "label": "no_alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 25,
+      "vlm_calls": 1,
+      "first_alert_s": 6.5,
+      "first_alert_compute_ms": 24.718688015127555,
+      "alert_payload_bytes": 1879
+    },
+    {
+      "path": "data/bench/pyro_clear_sdis-07_marguerite-339",
+      "label": "no_alert",
+      "predicted_alert": false,
+      "severities": [],
+      "frames": 16,
+      "vlm_calls": 0,
+      "first_alert_s": null,
+      "first_alert_compute_ms": null,
+      "alert_payload_bytes": null
+    },
+    {
+      "path": "data/bench/pyro_clear_force-06_courmettes-212",
+      "label": "no_alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 7.0,
+      "first_alert_compute_ms": 24.593968002591282,
+      "alert_payload_bytes": 7438
+    },
+    {
+      "path": "data/bench/pyro_clear_force-06_valbonne-138",
+      "label": "no_alert",
+      "predicted_alert": false,
+      "severities": [
+        "MONITOR"
+      ],
+      "frames": 34,
+      "vlm_calls": 1,
+      "first_alert_s": null,
+      "first_alert_compute_ms": null,
+      "alert_payload_bytes": null
+    },
+    {
+      "path": "data/bench/pyro_clear_sdis-07_brison-290",
+      "label": "no_alert",
+      "predicted_alert": false,
+      "severities": [
+        "IGNORE"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": null,
+      "first_alert_compute_ms": null,
+      "alert_payload_bytes": null
+    },
+    {
+      "path": "data/bench/pyro_clear_force-06_cabanelle-327",
+      "label": "no_alert",
+      "predicted_alert": true,
+      "severities": [
+        "ALERT"
+      ],
+      "frames": 40,
+      "vlm_calls": 1,
+      "first_alert_s": 16.0,
+      "first_alert_compute_ms": 17.00262402300723,
+      "alert_payload_bytes": 3158
+    }
+  ],
+  "config": {
+    "detector_weights": "models/joint_yolo.pt",
+    "detector_classes": null,
+    "detector_imgsz": 960,
+    "vlm_model": "context",
+    "full_frame": false,
+    "recheck_s": 5.0,
+    "vlm_timeout_s": 30,
+    "clips": "data/bench/clips.csv",
+    "fps": 2.0
+  }
+}
