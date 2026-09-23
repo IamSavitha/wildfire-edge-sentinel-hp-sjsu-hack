@@ -1,0 +1,15 @@
+/home/hp11/sentinel/.venv/lib/python3.12/site-packages/torch/jit/_serialization.py:176: FutureWarning: `torch.jit.load` is deprecated. Please switch to `torch.export`.
+  warnings.warn(
+{
+  "name": "before",
+  "precision": 0.0,
+  "recall": 0.0,
+  "false_alarms": 0,
+  "missed": 15,
+  "tokens_per_vlm_call": 0,
+  "frames_per_vlm_call": null,
+  "time_to_decision_s_p50": null,
+  "time_to_decision_s_p95": null
+}
+wrote results/bench_before.json
+EXIT 0
