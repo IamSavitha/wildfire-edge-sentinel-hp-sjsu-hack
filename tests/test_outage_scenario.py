@@ -3,7 +3,7 @@ import json
 import pytest
 
 from scripts.outage_scenario import edge_knows_s, main, markdown, scenario
-from sentinel.netprofile import PROFILES, transfer_s
+from sentinel.netprofile import PROFILES, rtt_s, serialize_s, transfer_s
 
 FIBER, SAT = PROFILES["fiber"], PROFILES["satellite_geo"]
 
@@ -41,8 +41,8 @@ def test_long_outage_edge_knows_cloud_drop_blind_cloud_buffer_drains_backlog():
     f = fire["profiles"]["fiber"]
     assert f["edge_knows_s"] == pytest.approx(600 + transfer_s(20_000, FIBER))
     assert f["cloud_drop_knows_s"] is None and f["cloud_drop_frames_dropped"] == 40
-    up = transfer_s(150_000, FIBER)
-    assert f["cloud_buffer_knows_s"] == pytest.approx(600 + 3 * up + 0.8)  # third frame is the first ALERT
+    up = serialize_s(150_000, FIBER)
+    assert f["cloud_buffer_knows_s"] == pytest.approx(600 + 3 * up + rtt_s(FIBER) + 0.8)  # third frame: first ALERT
     s = res["profiles"]["satellite_geo"]
     assert s["cloud_buffer_knows_s_p50"] > res["profiles"]["fiber"]["cloud_buffer_knows_s_p50"]
     assert s["edge_known"] == 1 and s["cloud_drop_known"] == 0 and s["cloud_buffer_known"] == 1
@@ -56,9 +56,9 @@ def test_long_outage_edge_knows_cloud_drop_blind_cloud_buffer_drains_backlog():
 def test_backlog_from_before_the_fire_is_uploaded_first():
     res = scenario(EDGE, CLOUD, [FIBER], outage_min=10, lead_min=1)
     f = res["clips"][0]["profiles"]["fiber"]
-    up = transfer_s(150_000, FIBER)
+    up = serialize_s(150_000, FIBER)
     # 120 modelled frames from the minute before the clip drain ahead of the clip's third frame
-    assert f["cloud_buffer_knows_s"] == pytest.approx(600 + 123 * up + 0.8)
+    assert f["cloud_buffer_knows_s"] == pytest.approx(600 + 123 * up + rtt_s(FIBER) + 0.8)
     assert f["cloud_buffer_queued_frames"] == 1320
     assert f["edge_knows_s"] == pytest.approx(600 + transfer_s(20_000, FIBER))
     assert "for 1 min before it" in markdown(res)

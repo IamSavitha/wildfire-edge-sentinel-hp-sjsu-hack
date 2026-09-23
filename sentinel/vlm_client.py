@@ -223,6 +223,25 @@ def cloud_vlm_from_env(prefix: str = "CLOUD_VLM", env: Mapping[str, str] | None 
                       parse_retries=parse_retries)
 
 
+def measure_net_baseline_ms(vlm: ContextVLM, n: int = 5, clock=None) -> float | None:
+    """Median wall time of n cheap authenticated requests (GET /models) to the provider: the network
+    + HTTPS overhead already inside every measured cloud latency. Subtracted before a modelled link is
+    added, so the machine's own link is not counted twice. None if the provider refuses the request."""
+    import statistics
+    import time
+    clock = clock or time.perf_counter
+    samples = []
+    for _ in range(n):
+        t0 = clock()
+        try:
+            vlm.client.models.list()
+        except Exception as exc:  # noqa: BLE001 - optional measurement
+            log.warning("network baseline not measured: %s", vlm._redact(f"{type(exc).__name__}: {exc}")[:200])
+            return None
+        samples.append((clock() - t0) * 1000)
+    return float(statistics.median(samples))
+
+
 def ensure_served(client, model: str, base_url: str) -> None:
     """Fail fast if `model` is not served: classify() swallows request errors, so a wrong id or a
     down server would otherwise produce a results file full of parse failures."""

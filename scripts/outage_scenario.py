@@ -42,6 +42,7 @@ except ModuleNotFoundError as e:  # run as `python scripts/outage_scenario.py`
     from eval_context import check_output
 
 POLICIES = ("drop", "buffer")
+SIM_POLICY = {"drop": "drop", "buffer": "fifo"}
 
 
 def _finite(x):
@@ -111,12 +112,12 @@ def scenario(edge: dict, cloud: dict, profiles: list[LinkProfile], outage_min: f
             for pol in POLICIES:
                 if pol == "buffer" and outage_end > 0:
                     queued = with_backlog(c["frames"], fps, stride, lead_s, outage_end)
-                    sim = simulate(queued, prof, backlog_outages, pol, cloud.get("alert_on", "alert"))
+                    sim = simulate(queued, prof, backlog_outages, SIM_POLICY[pol], cloud.get("alert_on", "alert"))
                     if sim["first_alert_s"] is not None:
                         sim["first_alert_s"] -= lead_s  # back to clip time
                     r["cloud_buffer_queued_frames"] = sim["captured_during_outage"]
                 else:
-                    sim = simulate(c["frames"], prof, outages, pol, cloud.get("alert_on", "alert"))
+                    sim = simulate(c["frames"], prof, outages, SIM_POLICY[pol], cloud.get("alert_on", "alert"))
                 r[f"cloud_{pol}_knows_s"] = _finite(sim["first_alert_s"])
                 r[f"cloud_{pol}_bytes_up"] = sim["bytes_up"]
                 r[f"cloud_{pol}_decisions_during_outage"] = sim["decisions_during_outage"]

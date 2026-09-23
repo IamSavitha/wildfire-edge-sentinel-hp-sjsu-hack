@@ -303,3 +303,13 @@ def test_request_exception_is_kept_for_the_retry_policy():
     v, _ = cloud([TimeoutError("slow")], "json_object")
     v.classify(b"\xff\xd8fake")
     assert isinstance(v.last_exception, TimeoutError)
+
+
+def test_net_baseline_is_the_median_of_cheap_requests():
+    from sentinel.vlm_client import measure_net_baseline_ms
+    ticks = iter([0, 0.10, 1, 1.30, 2, 2.20, 3, 3.90, 4, 4.25])
+    v = ContextVLM("m", client=SimpleNamespace(models=FakeModels(["m"])))
+    assert measure_net_baseline_ms(v, n=5, clock=lambda: next(ticks)) == pytest.approx(250)
+    broken = ContextVLM("m", client=SimpleNamespace(models=FakeModels(error=RuntimeError(f"bad key {SECRET}"))),
+                        api_key=SECRET)
+    assert measure_net_baseline_ms(broken) is None

@@ -1,17 +1,25 @@
 """Deterministic network-link model for the cloud-only baseline and the outage scenarios.
 
 This is a MODEL layered on top of REAL measured cloud inference latency: we do not throttle the
-Nano's real network (that would cut the SSH/Tailscale link we operate it through). A frame's
-upload time is
+Nano's real network (that would cut the SSH/Tailscale link we operate it through).
 
-    transfer_s = (rtt + bytes * 8 / uplink_bps) / (1 - loss)
+    serialize_s = bytes * 8 / uplink_bps / (1 - loss)     how long a payload occupies the uplink
+    rtt_s(n)    = n * rtt / (1 - loss)                    n round trips (not occupying the uplink)
+    transfer_s  = serialize_s + rtt_s(n)                  one message, delivered
 
-where dividing by (1 - loss) charges the expected retransmissions. Responses are ~1 KB, so the
-downlink rate is kept for reference only. The `outage` profile never delivers (math.inf).
-Link parameters are round, typical figures for each link class, not measurements.
+Dividing by (1 - loss) charges the expected retransmissions. This loss model is optimistic, most of
+all for GEO satellite: real TCP throughput on a lossy high-latency link is far below the nominal rate.
+Round trips per message follow the shipped code: the edge posts each ALERT with a one-shot
+`httpx.post` (new HTTPS connection: TCP handshake + TLS + request = EDGE_POST_RTTS), while the cloud
+client keeps one HTTPS connection alive, so each cloud request costs CLOUD_REQUEST_RTTS. Responses
+are ~1 KB, so the downlink rate is kept for reference only. The `outage` profile never delivers
+(math.inf). Link parameters are round, typical figures for each link class, not measurements.
 """
 import math
 from dataclasses import dataclass
+
+EDGE_POST_RTTS = 3      # new HTTPS connection per alert POST (sentinel/cloud.py send_dispatch)
+CLOUD_REQUEST_RTTS = 1  # persistent keep-alive connection (openai client)
 
 
 @dataclass(frozen=True)
@@ -47,12 +55,22 @@ def parse_profiles(csv: str) -> list[LinkProfile]:
     return [get_profile(n) for n in csv.split(",") if n.strip()]
 
 
-def transfer_s(nbytes: int | float, profile: LinkProfile) -> float:
-    """Seconds to deliver `nbytes` upstream over `profile` (one round trip + serialization,
-    inflated by expected retransmissions)."""
+def serialize_s(nbytes: int | float, profile: LinkProfile) -> float:
+    """Seconds `nbytes` occupy the uplink (inflated by expected retransmissions)."""
     if profile.is_down:
         return math.inf
-    return (profile.rtt_ms / 1000 + nbytes * 8 / (profile.uplink_kbps * 1000)) / (1 - profile.loss)
+    return nbytes * 8 / (profile.uplink_kbps * 1000) / (1 - profile.loss)
+
+
+def rtt_s(profile: LinkProfile, n: int = 1) -> float:
+    if profile.is_down:
+        return math.inf
+    return n * profile.rtt_ms / 1000 / (1 - profile.loss)
+
+
+def transfer_s(nbytes: int | float, profile: LinkProfile, rtts: int = 1) -> float:
+    """Seconds to deliver `nbytes` upstream over `profile`: serialization + `rtts` round trips."""
+    return serialize_s(nbytes, profile) + rtt_s(profile, rtts)
 
 
 class Outages:

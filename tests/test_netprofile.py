@@ -2,7 +2,8 @@ import math
 
 import pytest
 
-from sentinel.netprofile import PROFILES, LinkProfile, Outages, get_profile, parse_outage, parse_profiles, transfer_s
+from sentinel.netprofile import (EDGE_POST_RTTS, PROFILES, LinkProfile, Outages, get_profile, parse_outage,
+                                 parse_profiles, rtt_s, serialize_s, transfer_s)
 
 
 def test_presets():
@@ -41,3 +42,11 @@ def test_outage_validation():
     for bad in ("5", "a,b", "10,2"):
         with pytest.raises(ValueError):
             parse_outage(bad)
+
+
+def test_serialization_occupies_the_link_rtt_does_not():
+    rural = PROFILES["rural_cellular"]
+    assert serialize_s(125_000, rural) == pytest.approx(1.0 / 0.98)
+    assert rtt_s(rural, 3) == pytest.approx(0.45 / 0.98)
+    assert transfer_s(125_000, rural, rtts=EDGE_POST_RTTS) == pytest.approx((1.0 + 0.45) / 0.98)
+    assert serialize_s(1, PROFILES["outage"]) == math.inf and rtt_s(PROFILES["outage"]) == math.inf
