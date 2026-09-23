@@ -11,7 +11,8 @@ REPORTS: list[dict] = []
 @app.post("/dispatch")
 def receive(report: dict):
     REPORTS.append(report)
-    print(f"[DISPATCH] {report['severity']} {report['tower_name']} {report['event_id']} "
+    kind = "UPDATE" if report.get("type") == "forecast_update" else "DISPATCH"
+    print(f"[{kind}] {report.get('severity')} {report.get('tower_name')} {report['event_id']} "
           f"forecast={report.get('forecast_status')}", flush=True)
     return {"received": report["event_id"]}
 

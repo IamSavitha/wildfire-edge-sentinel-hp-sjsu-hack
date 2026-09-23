@@ -4,7 +4,9 @@ import sqlite3
 import threading
 from pathlib import Path
 
-MAX_BACKOFF_S = 300
+# Retry delay after a failed send doubles (2, 4, 8 s) up to this cap. Kept short: an ALERT must go
+# out within seconds of the link returning, and a retry is one small POST.
+MAX_BACKOFF_S = 10
 
 
 class Outbox:

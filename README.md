@@ -48,10 +48,12 @@ events; video never leaves the device.**
 | IGNORE | fog, cloud, dust; known stack in its zone | count in metrics | none |
 | LOG | attended campfire, BBQ/chimney, static | store locally | none |
 | MONITOR | unclear source, small but new | re-check on a timer; escalate on growth | none until upgraded |
-| ALERT | growing, uncontrolled, black smoke, near structures/road | queue report immediately | fetch forecast, send report + 1 thumbnail |
+| ALERT | growing, uncontrolled, black smoke, near structures/road | queue report immediately | send report + 1 thumbnail, then fetch forecast and send it as a small update |
 
-An ALERT raised while offline is queued at once and sent the moment the link returns, marked
-"forecast pending" if the forecast cannot be fetched yet.
+An ALERT is queued at once and sent first, marked "forecast pending": it is never held back for the
+forecast, which follows as a small `forecast_update` when it can be fetched. While the link is down,
+failed sends are retried with a backoff capped at 10 s, so the alert goes out within seconds of the
+link returning.
 
 ## Before vs after fine-tuning
 

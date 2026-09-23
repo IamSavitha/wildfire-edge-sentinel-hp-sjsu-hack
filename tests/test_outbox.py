@@ -40,8 +40,8 @@ def test_backoff_is_capped_after_many_failures():
     ob.enqueue("e1", {}, now=0)
     ob.db.execute("UPDATE outbox SET attempts = 70")
     ob.mark_failed("e1", now=1000)
-    assert ob.due(now=1000) == []
-    assert ob.due(now=1300) != []
+    assert ob.due(now=1009) == []
+    assert ob.due(now=1010) != []  # ALERTs retry within MAX_BACKOFF_S = 10 s
 
 
 def test_creates_parent_directory(tmp_path):
