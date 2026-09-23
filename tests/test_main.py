@@ -81,7 +81,9 @@ def test_ended_stream_is_dropped_and_logged_once(caplog):
         worker.start()
         try:
             assert pipe.called.wait(5) and esc.called.wait(5)
+            deadline = time.monotonic() + 5
             while len(pipe.calls) < 3:
+                assert time.monotonic() < deadline, "timed out waiting for 3 pipeline calls"
                 time.sleep(0.01)
         finally:
             stop.set()
