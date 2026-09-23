@@ -36,12 +36,15 @@ def run_loop(rt: Runtime, streams: dict, settings: Settings, stop: threading.Eve
             except Exception:
                 log.exception("tower %s failed", tid)
         if tick - last_flush >= FLUSH_EVERY_S:
-            try:
-                if rt.link.online:
+            if rt.link.online:
+                try:  # a burn-schedule failure must never hold back the alert outbox
                     rt.pipeline.burn_towers = fetch_burn_schedule()
+                except Exception:
+                    log.exception("burn schedule fetch failed")
+            try:
                 rt.escalator.flush(tick)  # network I/O: never under the lock
             except Exception:
-                log.exception("burn schedule / outbox flush failed")
+                log.exception("outbox flush failed")
             last_flush = tick
         time.sleep(max(0.0, period - (time.time() - tick)))
 

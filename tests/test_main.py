@@ -138,3 +138,23 @@ def test_build_detector_uses_settings_imgsz(monkeypatch):
     monkeypatch.setattr(m, "YoloDetector", Fake)
     m.build_detector(Settings(detector_weights="models/joint_yolo.pt", detector_imgsz=960))
     assert seen == {"weights": "models/joint_yolo.pt", "imgsz": 960, "classes": None}
+
+
+def test_burn_schedule_failure_does_not_skip_the_outbox_flush(monkeypatch):
+    import sentinel.main as m
+
+    def boom():
+        raise OSError("burn schedule unavailable")
+    monkeypatch.setattr(m, "fetch_burn_schedule", boom)
+    pipe, esc = FakePipeline(), FakeEscalator()
+    rt = SimpleNamespace(pipeline=pipe, escalator=esc, link=Link(online=True))
+    stop = threading.Event()
+    worker = threading.Thread(target=run_loop, args=(rt, {"t1": itertools.repeat(ZERO_FRAME)}, Settings(fps=50), stop),
+                              daemon=True)
+    worker.start()
+    try:
+        assert esc.called.wait(5)
+    finally:
+        stop.set()
+        worker.join(5)
+    assert len(esc.calls) >= 1
