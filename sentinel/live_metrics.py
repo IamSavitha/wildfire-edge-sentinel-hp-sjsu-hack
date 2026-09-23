@@ -1,12 +1,16 @@
 """Pure helpers for the live model-economics dashboard: Prometheus parsing, vLLM snapshots,
 rates, edge-vs-cloud economics, zrt model discovery and host stats. No network I/O here."""
 import json
+import logging
 import math
 import subprocess
 from pathlib import Path
 from typing import Callable
 
 Sample = tuple[str, dict, float]
+Buckets = list[tuple[float, float]]
+
+log = logging.getLogger(__name__)
 
 SMI_CMD = ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"]
 
@@ -150,6 +154,68 @@ def model_snapshot(samples: list[Sample], model_name: str | None) -> dict:
     }
 
 
+HISTOGRAMS = {"latency": "vllm:e2e_request_latency_seconds", "ttft": "vllm:time_to_first_token_seconds"}
+QUANTILES = (("latency_p50_s", "latency", 0.5), ("latency_p95_s", "latency", 0.95),
+             ("ttft_p50_s", "ttft", 0.5))
+
+
+def histogram_buckets(samples: list[Sample], model_name: str | None) -> dict[str, Buckets]:
+    """Cumulative buckets of the latency and TTFT histograms, for windowed quantiles."""
+    return {key: _buckets(samples, name, model_name) for key, name in HISTOGRAMS.items()}
+
+
+def bucket_delta(prev: Buckets, cur: Buckets) -> Buckets | None:
+    """Per-bucket increase since `prev` (a bound missing from prev counts as 0). None when any
+    bucket went down, i.e. the server restarted and its histograms reset."""
+    before = dict(prev)
+    out = []
+    for le, count in cur:
+        d = count - before.get(le, 0.0)
+        if d < 0:
+            return None
+        out.append((le, d))
+    return out
+
+
+def windowed_quantiles(prev: dict | None, cur: dict, last: dict | None) -> dict:
+    """Latency/TTFT quantiles over requests that finished since the previous poll.
+    No previous poll -> cumulative since server start ("since_start"). No new requests or a reset
+    -> keep the last value ("held"). Otherwise quantiles of the bucket deltas ("window")."""
+    last = last or {}
+    out: dict = {}
+    basis = {}
+    for key in HISTOGRAMS:
+        cur_b = cur.get(key) or []
+        if prev is None:
+            basis[key], b = "since_start", cur_b
+        else:
+            d = bucket_delta(prev.get(key) or [], cur_b)
+            new = max((c for _, c in d), default=0.0) if d is not None else 0.0
+            basis[key], b = ("window", d) if new > 0 else ("held", None)
+        for out_key, hist, q in QUANTILES:
+            if hist == key:
+                out[out_key] = histogram_quantile(b, q) if b is not None else last.get(out_key)
+    out["latency_window"] = basis["latency"]
+    return out
+
+
+TOTAL_KEYS = ("prompt_tokens", "generation_tokens", "requests")
+
+
+def accumulate_totals(prev_raw: dict | None, cur_raw: dict, offsets: dict) -> tuple[dict, dict]:
+    """Session totals that never decrease: when a counter drops (server restart) the value it had
+    reached is added to a per-key offset. Returns (adjusted totals, new offsets)."""
+    offsets = dict(offsets)
+    adjusted = {}
+    for key in TOTAL_KEYS:
+        a = prev_raw.get(key) if prev_raw else None
+        b = cur_raw.get(key)
+        if a is not None and b is not None and b < a:
+            offsets[key] = offsets.get(key, 0.0) + a
+        adjusted[key] = None if b is None else b + offsets.get(key, 0.0)
+    return adjusted, offsets
+
+
 _RATE_KEYS = (("prompt_tok_per_s", "prompt_tokens"), ("gen_tok_per_s", "generation_tokens"),
               ("req_per_s", "requests"))
 
@@ -229,7 +295,7 @@ def discover_models(run_dir) -> list[dict]:
         paths = sorted(run_dir.glob("vllm-*.json"))
     except OSError:
         return []
-    out = []
+    out, seen = [], set()
     for path in paths:
         try:
             meta = json.loads(path.read_text())
@@ -238,9 +304,14 @@ def discover_models(run_dir) -> list[dict]:
         except (OSError, ValueError):
             meta = {}
         file_label = path.stem[len("vllm-"):]
+        label = str(meta.get("label") or file_label)
+        if label in seen:
+            log.warning("duplicate model label %r in %s; keeping the first", label, path)
+            continue
+        seen.add(label)
         sock = path.with_suffix(".sock")
         out.append({
-            "label": str(meta.get("label") or file_label),
+            "label": label,
             "model_uri": meta.get("model_uri"),
             "gpu_memory_fraction": meta.get("gpu_memory_fraction"),
             "started_at": meta.get("started_at"),

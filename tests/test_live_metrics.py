@@ -2,8 +2,9 @@ import json
 
 import pytest
 
-from sentinel.live_metrics import (discover_models, economics, histogram_quantile, model_snapshot,
-                                   parse_prometheus, rates, system_stats)
+from sentinel.live_metrics import (accumulate_totals, bucket_delta, discover_models, economics,
+                                   histogram_buckets, histogram_quantile, model_snapshot,
+                                   parse_prometheus, rates, system_stats, windowed_quantiles)
 
 INF = float("inf")
 
@@ -203,3 +204,75 @@ def test_system_stats_unavailable(tmp_path):
     assert system_stats(tmp_path / "none", run=boom) == {
         "gpu_util_pct": None, "mem_used_gb": None, "mem_total_gb": None}
     assert system_stats(tmp_path / "none", run=lambda c: "[N/A]")["gpu_util_pct"] is None
+
+
+# ---- windowed latency ----
+
+def hists(lat, ttft=None):
+    return {"latency": lat, "ttft": ttft if ttft is not None else []}
+
+
+def test_histogram_buckets_extracts_both_histograms():
+    h = histogram_buckets(parse_prometheus(METRICS), "base7b")
+    assert h["latency"] == [(1.0, 1.0), (2.0, 3.0), (INF, 4.0)]
+    assert h["ttft"] == [(0.1, 2.0), (0.2, 4.0), (INF, 4.0)]
+
+
+def test_bucket_delta_subtracts_and_detects_reset():
+    prev = [(1.0, 1.0), (2.0, 3.0), (INF, 4.0)]
+    assert bucket_delta(prev, [(1.0, 1.0), (2.0, 5.0), (INF, 8.0)]) == [(1.0, 0.0), (2.0, 2.0), (INF, 4.0)]
+    assert bucket_delta([], [(1.0, 2.0), (INF, 2.0)]) == [(1.0, 2.0), (INF, 2.0)]
+    assert bucket_delta(prev, [(1.0, 0.0), (2.0, 1.0), (INF, 1.0)]) is None     # server restarted
+
+
+def test_windowed_quantiles_first_poll_uses_cumulative():
+    cur = hists([(1.0, 1.0), (2.0, 3.0), (INF, 4.0)])
+    w = windowed_quantiles(None, cur, None)
+    assert w["latency_p50_s"] == pytest.approx(1.5) and w["latency_window"] == "since_start"
+    assert w["ttft_p50_s"] is None
+
+
+def test_windowed_quantiles_use_only_new_requests():
+    prev = hists([(1.0, 10.0), (2.0, 10.0), (INF, 10.0)])      # 10 fast requests before
+    cur = hists([(1.0, 10.0), (2.0, 12.0), (INF, 14.0)])       # 2 in (1,2], 2 slower since
+    w = windowed_quantiles(prev, cur, None)
+    assert w["latency_p50_s"] == pytest.approx(2.0)            # cumulative would say < 1 s
+    assert w["latency_p95_s"] == 2.0 and w["latency_window"] == "window"
+
+
+def test_windowed_quantiles_hold_last_value_when_idle_or_restarted():
+    last = {"latency_p50_s": 0.7, "latency_p95_s": 0.9, "ttft_p50_s": 0.05}
+    same = hists([(1.0, 3.0), (INF, 3.0)], [(0.1, 3.0), (INF, 3.0)])
+    w = windowed_quantiles(same, same, last)
+    assert (w["latency_p50_s"], w["latency_p95_s"], w["ttft_p50_s"]) == (0.7, 0.9, 0.05)
+    assert w["latency_window"] == "held"
+    restarted = hists([(1.0, 1.0), (INF, 1.0)], [(0.1, 1.0), (INF, 1.0)])
+    w = windowed_quantiles(same, restarted, last)
+    assert w["latency_p50_s"] == 0.7 and w["ttft_p50_s"] == 0.05 and w["latency_window"] == "held"
+    assert windowed_quantiles(same, same, None)["latency_p50_s"] is None
+
+
+# ---- stable totals across counter resets ----
+
+def test_accumulate_totals_never_decrease_across_reset():
+    offsets: dict = {}
+    adj, offsets = accumulate_totals(None, {"prompt_tokens": 100.0, "generation_tokens": 10.0,
+                                            "requests": 2.0}, offsets)
+    assert adj == {"prompt_tokens": 100.0, "generation_tokens": 10.0, "requests": 2.0}
+    raw1 = {"prompt_tokens": 150.0, "generation_tokens": 20.0, "requests": 3.0}
+    adj, offsets = accumulate_totals({"prompt_tokens": 100.0, "generation_tokens": 10.0,
+                                      "requests": 2.0}, raw1, offsets)
+    assert adj["prompt_tokens"] == 150.0
+    raw2 = {"prompt_tokens": 30.0, "generation_tokens": 5.0, "requests": None}   # restart
+    adj, offsets = accumulate_totals(raw1, raw2, offsets)
+    assert adj == {"prompt_tokens": 180.0, "generation_tokens": 25.0, "requests": None}
+    adj, offsets = accumulate_totals(raw2, {"prompt_tokens": 40.0, "generation_tokens": 5.0,
+                                            "requests": 1.0}, offsets)
+    assert adj["prompt_tokens"] == 190.0 and adj["requests"] == 1.0
+
+
+def test_discover_models_skips_duplicate_labels(tmp_path):
+    (tmp_path / "vllm-a.json").write_text(json.dumps({"label": "same", "model_uri": "first"}))
+    (tmp_path / "vllm-b.json").write_text(json.dumps({"label": "same", "model_uri": "second"}))
+    models = discover_models(tmp_path)
+    assert [(m["label"], m["model_uri"]) for m in models] == [("same", "first")]

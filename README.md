@@ -155,7 +155,8 @@ cropping). To run the live demo with the BEFORE detector, set `"detector_weights
 `sentinel.monitor` is a second, read-only page that shows tokens, latency and edge-vs-cloud economics
 for every model zrt is serving, while those models run. It finds the backends from
 `/opt/hp/zrt/run/vllm-<label>.json` and reads each one's vLLM Prometheus `/metrics` over its unix
-socket (`vllm-<label>.sock`). It polls every 2 s and keeps nothing on disk.
+socket (`vllm-<label>.sock`). One background thread polls all sockets in parallel every 2 s (1 s
+timeout each), so a hung backend never blocks the page. Nothing is kept on disk.
 
 ```bash
 # on the Nano (binds 127.0.0.1:8090); --pipeline-url is optional and needs the demo app on :8080
@@ -175,7 +176,7 @@ Other flags: `--run-dir` (default `/opt/hp/zrt/run`), `--prices` (default `confi
 | Cloud-per-frame vs edge cascade | Needs `--pipeline-url`. Cost of sending every frame the pipeline saw to a cloud VLM (frames × tokens per full frame), next to the cascade's cost (uplink bytes only). |
 | Model calls avoided by the cascade | Frames seen minus VLM calls, and frames per VLM call. |
 | Bytes sent vs streaming video | Bytes the cascade actually sent upstream (alerts) vs frames × bytes per frame. |
-| Served models table | Per backend: status, running requests, request/token counters, tok/s in and out, e2e latency p50/p95 and TTFT p50 (from vLLM histograms), KV-cache use, zrt GPU memory fraction. |
+| Served models table | Per backend: status, running requests, request/token totals (they keep counting across server restarts), tok/s in and out, KV-cache use, zrt GPU memory fraction. Also e2e latency p50/p95 and TTFT p50, computed from vLLM histogram deltas over the latest ~2 s poll window and held while the model is idle. |
 | Throughput | Input and output tok/s per model over the last 5 minutes, kept in the browser. |
 
 **Prices are user-supplied assumptions.** The page does not invent dollar figures. It starts from

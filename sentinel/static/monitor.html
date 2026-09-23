@@ -55,7 +55,9 @@
   .tablewrap { overflow-x:auto; border:1px solid var(--ring); border-radius:10px; background:var(--surface); }
   table { border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; font-size:13px; }
   th, td { padding:8px 9px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--grid); }
-  th { color:var(--fg2); font-weight:600; font-size:12px; position:sticky; top:0; background:var(--surface); }
+  th { color:var(--fg2); font-weight:600; font-size:12px; position:sticky; top:0; background:var(--surface); vertical-align:bottom; }
+  th small { font-weight:400; color:var(--muted); }
+  .mark { color:var(--muted); }
   th:first-child, td:first-child, th:nth-child(2), td:nth-child(2), th:nth-child(3), td:nth-child(3) { text-align:left; }
   tr:last-child td { border-bottom:0; }
   td.uri { max-width:200px; overflow:hidden; text-overflow:ellipsis; color:var(--fg2); }
@@ -117,12 +119,16 @@
           <th scope="col">Running</th><th scope="col">Requests</th>
           <th scope="col">Prompt tok</th><th scope="col">Gen tok</th>
           <th scope="col">Tok/s in</th><th scope="col">Tok/s out</th>
-          <th scope="col">Latency p50</th><th scope="col">Latency p95</th><th scope="col">TTFT p50</th>
+          <th scope="col">Latency p50<br><small>recent</small></th><th scope="col">Latency p95<br><small>recent</small></th><th scope="col">TTFT p50<br><small>recent</small></th>
           <th scope="col">KV cache</th><th scope="col">GPU mem fraction</th>
         </tr></thead>
         <tbody id="rows"><tr><td colspan="14" class="empty">Waiting for first poll…</td></tr></tbody>
       </table>
     </div>
+    <p class="note">Latency and TTFT quantiles cover only the requests that finished in the latest ~2 s poll
+      window. While a model is idle they hold the last window's value (marked *). Right after the monitor
+      starts they cover every request since the server started (marked †). Token and request totals are
+      for this monitor session and keep counting across server restarts.</p>
   </section>
 
   <section aria-labelledby="tp-h">
@@ -152,12 +158,15 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const WINDOW_MS = 5 * 60 * 1000;
-  const history = {};        // label -> [{t, in, out}]
+  const history = new Map();   // label -> [{t, in, out}]
   let pricesLoaded = false, hover = null;   // hover survives the 2 s re-render
 
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const isNum = (v) => typeof v === "number" && isFinite(v);
   const DASH = "—";
+  const WINDOW_MARK = { held: "*", since_start: "†" };
+  const WINDOW_NOTE = { window: "requests finished in the latest poll window", held: "no new requests: last window's value",
+                        since_start: "all requests since the server started" };
   function num(v, d = 1) {
     if (!isNum(v)) return DASH;
     const a = Math.abs(v);
@@ -214,7 +223,7 @@
             <small>${num(q.cloud_per_frame_tokens)} tokens</small></div>
           <div><small>Edge cascade (uplink only)</small><div class="big">${usd(q.edge_uplink_usd)}</div>
             <small>0 cloud tokens · ${num(q.vlm_tokens)} local</small></div>
-        </div></div>`);
+        </div><div class="detail">Cloud side prices input tokens only (frames × tokens per full frame × $/M input); output tokens and upload bytes are not included.</div></div>`);
       out.push(`<div class="card tile"><h3>Model calls avoided by the cascade</h3>
         <div class="big">${num(q.cascade_calls_avoided, 1)}</div>
         <div class="detail"><b>${num(q.frames_seen)}</b> frames seen, <b>${num(q.vlm_calls)}</b> VLM calls
@@ -243,15 +252,18 @@
         <td>${num(m.running, 0)}</td><td>${num(m.requests)}</td>
         <td>${num(m.prompt_tokens)}</td><td>${num(m.generation_tokens)}</td>
         <td>${rate(m.prompt_tok_per_s)}</td><td>${rate(m.gen_tok_per_s)}</td>
-        <td>${dur(m.latency_p50_s)}</td><td>${dur(m.latency_p95_s)}</td><td>${dur(m.ttft_p50_s)}</td>
+        ${[m.latency_p50_s, m.latency_p95_s, m.ttft_p50_s].map((v) => `<td title="${WINDOW_NOTE[m.latency_window] || ""}">${dur(v)}${isNum(v) ? (WINDOW_MARK[m.latency_window] || "") : ""}</td>`).join("")}
         <td>${pct(m.kv_cache_pct, 1)}</td><td>${isNum(m.gpu_memory_fraction) ? Math.round(m.gpu_memory_fraction * 100) + "%" : DASH}</td></tr>`;
     }).join("");
   }
 
   function record(d) {
-    const now = d.ts * 1000;
+    const now = d.ts * 1000, live = new Set(d.models.map((m) => m.label));
+    for (const label of [...history.keys()]) if (!live.has(label)) history.delete(label);
     for (const m of d.models) {
-      const h = history[m.label] || (history[m.label] = []);
+      if (!history.has(m.label)) history.set(m.label, []);
+      const h = history.get(m.label);
+      if (h.length && h[h.length - 1].t === now) continue;   // same server poll seen twice
       h.push({ t: now, in: m.prompt_tok_per_s, out: m.gen_tok_per_s });
       while (h.length && h[0].t < now - WINDOW_MS) h.shift();
     }
@@ -272,7 +284,7 @@
   function sparks(d) {
     const now = d.ts * 1000, t0 = now - WINDOW_MS;
     const html = d.models.map((m, i) => {
-      const h = history[m.label] || [];
+      const h = history.get(m.label) || [];
       const vals = h.flatMap((p) => [p.in, p.out]).filter(isNum);
       const ymax = Math.max(1, ...vals);
       return `<div class="card">
@@ -294,7 +306,7 @@
     }).join("");
     $("sparks").innerHTML = html || `<div class="card empty">No models yet.</div>`;
     $("sparks").querySelectorAll(".plot").forEach((el) => {
-      const m = d.models[+el.dataset.i], h = history[m.label] || [];
+      const m = d.models[+el.dataset.i], h = history.get(m.label) || [];
       const svg = el.querySelector("svg"), cross = el.querySelector(".cross"), tip = el.querySelector(".tip");
       const move = (ev) => {
         if (!h.length) return;
@@ -335,17 +347,21 @@
     } catch (e) { $("price-msg").textContent = "Could not apply prices: " + e.message; }
   });
 
+  const timeoutSignal = (ms) => (window.AbortSignal && AbortSignal.timeout) ? AbortSignal.timeout(ms) : undefined;
   async function refresh() {
     try {
-      const d = await (await fetch("/api/live", { cache: "no-store" })).json();
+      const r = await fetch("/api/live", { cache: "no-store", signal: timeoutSignal(5000) });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const d = await r.json();
       if (!pricesLoaded) { fillPrices(d.prices); pricesLoaded = true; }
       record(d); header(d); tiles(d); rows(d); sparks(d);
     } catch (e) {
       $("h-ts").textContent = "monitor unreachable";
     }
   }
-  setInterval(refresh, 2000);
-  refresh();
+  // self-scheduling: never more than one request in flight, even if the monitor is slow
+  async function loop() { await refresh(); setTimeout(loop, 2000); }
+  loop();
 })();
 </script>
 </body>
