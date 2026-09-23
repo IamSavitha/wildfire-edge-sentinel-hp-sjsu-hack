@@ -1,1 +1,1 @@
-{}
+{"vlm_model": "base7b", "vlm_base_url": "unix:///opt/hp/zrt/run/vllm-base7b.sock", "vlm_timeout_s": 30}

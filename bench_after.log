@@ -1,0 +1,12 @@
+{
+  "name": "after",
+  "precision": 0.6470588235294118,
+  "recall": 0.7333333333333333,
+  "false_alarms": 6,
+  "missed": 4,
+  "tokens_per_vlm_call": 220.27272727272728,
+  "frames_per_vlm_call": 40.5,
+  "time_to_decision_s_p50": 5.0,
+  "time_to_decision_s_p95": 10.0
+}
+wrote results/bench_after.json

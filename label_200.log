@@ -1,0 +1,9 @@
+500 crops to label
+0/500 (0 labeled)
+100/500 (100 labeled)
+200/500 (200 labeled)
+300/500 (300 labeled)
+400/500 (400 labeled)
+wrote 500/500 labels to data/teacher
+6.77user 1.14system 6:50.21elapsed 1%CPU (0avgtext+0avgdata 133400maxresident)k
+123048inputs+25856outputs (148major+34339minor)pagefaults 0swaps

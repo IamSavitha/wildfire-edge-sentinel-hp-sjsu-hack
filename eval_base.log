@@ -1,0 +1,39 @@
+{
+  "name": "before_base7b",
+  "model": "base7b",
+  "split": "data/teacher/heldout.jsonl",
+  "n": 500,
+  "source_type_acc": 0.45,
+  "group_acc": 0.53,
+  "parse_fail_rate": 0.0,
+  "latency_ms_p50": 12805.696359995636,
+  "latency_ms_p95": 15066.776737598406,
+  "tokens_per_call": 303.64,
+  "per_source": {
+    "industrial_stack": {
+      "n": 66,
+      "correct": 54
+    },
+    "wildland": {
+      "n": 84,
+      "correct": 74
+    },
+    "fog_dust_cloud": {
+      "n": 158,
+      "correct": 96
+    },
+    "unknown": {
+      "n": 138,
+      "correct": 0
+    },
+    "controlled_burn": {
+      "n": 53,
+      "correct": 1
+    },
+    "campfire": {
+      "n": 1,
+      "correct": 0
+    }
+  }
+}
+wrote results/context_before_base7b.json
