@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 13:38 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 20:20 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -54,14 +54,14 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 
 - [x] **Before:** `eval_detector.py --weights yolov8s-worldv2.pt --classes smoke,fire --name before_yoloworld` (run while online; caches CLIP)
 - [x] `train_detector.py --epochs 1` → note time per epoch → choose N — 2.5 min/epoch, 1 epoch already mAP50 0.085 → N = 50
-- [ ] `train_detector.py --epochs N` (tmux `train`) → `models/smoke_yolo.pt` — ⏳ running, 50 epochs (~2.75 min/epoch, ETA ~15:20 Nano time); epoch 12 mAP50 = 0.69
-- [ ] **After:** `eval_detector.py --weights models/smoke_yolo.pt --name after_yolo11s`
+- [x] `train_detector.py --epochs N` (tmux `train`) → `models/smoke_yolo.pt` — 50 epochs done; final validation mAP50 = 0.78
+- [ ] **After:** `eval_detector.py --weights models/smoke_yolo.pt --name after_yolo11s` — ⏸ blocked: Nano unreachable over Tailscale since ~20:20
 
 ## Phase 5 — Context VLM: before → fine-tune → after 🖥️ [T12, T16, T24, T24b]
 
 - [x] Serve the 32B teacher on :8001 (tmux `teacher`) — served as `teacher32b` on the shared zrt proxy (:8000) at 45% memory; base7b paused meanwhile
 - [x] `teacher_label.py --n 200` → check progress, several `source_type`s, note seconds per image — 500 crops in 6m50s (~0.8 s/crop, 32 workers); D-Fire smoke/fire crops → wildland/controlled burn/stack, only 6.6% called fog; no-fire crops → mostly fog/cloud ✔
-- [ ] `teacher_label.py --n 2000` (overnight) → `data/teacher/train.jsonl`, `heldout.jsonl` — ⏳ running: 2,000 D-Fire + 300 benign, then +800 pyro-sdis tower smoke crops (~45 min)
+- [x] `teacher_label.py --n 2000` (overnight) → `data/teacher/train.jsonl`, `heldout.jsonl` — 3,100 crops labeled (2,000 D-Fire + 300 benign + 800 pyro-sdis tower smoke)
 - [ ] **Reference:** `eval_context.py --model <teacher id> --base-url http://localhost:8001/v1 --name ref_teacher32b`
 - [ ] **Before:** `eval_context.py --model <base id> --name before_base7b`
 - [ ] Set `vlm_timeout_s` in `config/settings.json` to ~2× the measured `latency_ms_p95`
@@ -125,7 +125,7 @@ Fill these in as runs finish (they also land in `results/*.json`).
 | Run | Key metric | Value | Date |
 |---|---|---|---|
 | detector `before_yoloworld` | mAP50 | 0.002 (P 0.10, R 0.008, 3.8 ms/img) | 2026-09-23 |
-| detector `after_yolo11s` | mAP50 | | |
+| detector `after_yolo11s` | mAP50 | 0.78 (training validation on the same test split; formal eval pending) | 2026-09-23 |
 | context `ref_teacher32b` | group accuracy | | |
 | context `before_base7b` | group accuracy | | |
 | context `after_lora7b` | group accuracy | | |
@@ -144,4 +144,5 @@ Fill these in as runs finish (they also land in `results/*.json`).
 - 2026-09-23: Runtime `vlm_timeout_s` (15 s) is too low while training shares the GPU — set it from measured p95 after Phase 5.
 - 2026-09-23: vLLM per-model metrics (tokens, latency histograms, KV cache) are readable at `/opt/hp/zrt/run/vllm-<label>.sock` → `/metrics`; the live dashboard uses them.
 - 2026-09-23: Teacher label mix (500-crop trial): no campfire/BBQ examples in D-Fire or tower data — add some if time allows, or say so in Limitations.
+- 2026-09-23 ~20:20: Nano stopped responding over Tailscale (relay, no ping reply) — check power / network / reboot.
 - 2026-09-23: YOLO-World zero-shot baseline is near zero (mAP50 0.002). Consider more descriptive prompts (e.g. "wildfire smoke plume") so the baseline isn't seen as a strawman.
