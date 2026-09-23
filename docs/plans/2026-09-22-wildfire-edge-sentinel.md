@@ -1357,7 +1357,7 @@ A large local teacher VLM labels crops with the context schema, and the LoRA stu
 - Create: `scripts/teacher_label.py`
 - Test: `tests/test_teacher_label.py`
 
-**Step 1: Write the failing test.** The YOLO-label parsing is tested first; it lives in `sentinel/labels.py` so the test can import it. The last two tests cover `make_crops` (accepts .jpg/.jpeg/.png) and `write_labels` (counts rows, skips failed labels) from Step 5.
+**Step 1: Write the failing test.** The YOLO-label parsing is tested first; it lives in `sentinel/labels.py` so the test can import it. The next two tests cover `make_crops` (accepts .jpg/.jpeg/.png) and `write_labels` (counts rows, skips failed labels) from Step 5, and the last checks that `main` verifies the teacher is served before cutting any crops.
 
 ```python
 # tests/test_teacher_label.py
@@ -1406,6 +1406,24 @@ def test_write_labels_counts_rows_and_skips_failures(tmp_path):
     assert write_labels(pairs, ftr, fho, total=10) == 5
     assert len((ftr.getvalue() + fho.getvalue()).splitlines()) == 5
     assert write_labels([(Path("y.jpg"), None)], ftr, fho, total=1) == 0
+
+
+def test_main_checks_server_before_cutting_crops(tmp_path, monkeypatch):
+    import sys
+
+    import pytest
+
+    import scripts.teacher_label as tl
+    cropped = []
+    monkeypatch.setattr(tl, "make_crops", lambda *a, **k: cropped.append(a) or [])
+
+    def not_served(*a, **k):
+        raise SystemExit("model 'x' not served")
+    monkeypatch.setattr(tl, "ensure_served", not_served)
+    monkeypatch.setattr(sys, "argv", ["teacher_label.py", "--model", "x", "--out", str(tmp_path)])
+    with pytest.raises(SystemExit, match="not served"):
+        tl.main()
+    assert cropped == []
 ```
 
 **Step 2: Run to verify it fails**
@@ -1437,7 +1455,7 @@ def yolo_boxes(label_path: Path, w: int, h: int) -> list[tuple[float, float, flo
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_teacher_label.py -v`
-Expected: the 2 label tests pass; after Step 5, 4 passed.
+Expected: the 2 label tests pass; after Step 5, 5 passed.
 
 **Step 5: Write `scripts/teacher_label.py`**
 
@@ -1506,15 +1524,15 @@ def main() -> None:
                     help="append to train/heldout.jsonl instead of overwriting (e.g. topping up benign labels)")
     a = ap.parse_args()
 
+    teacher = ContextVLM(a.model, a.base_url, timeout_s=180, max_tokens=200)
+    ensure_served(teacher.client, a.model, a.base_url)  # before cropping: a dead teacher fails in seconds
+
     out = Path(a.out)
     crops_dir = out / "crops"
     crops_dir.mkdir(parents=True, exist_ok=True)
     crops = make_crops(Path(a.images), Path(a.labels), crops_dir, a.n)
     crops += make_crops(Path(a.benign), Path(a.benign) / "_no_labels", crops_dir, 10_000)
     print(f"{len(crops)} crops to label")
-
-    teacher = ContextVLM(a.model, a.base_url, timeout_s=180, max_tokens=200)
-    ensure_served(teacher.client, a.model, a.base_url)
 
     def label(p: Path):
         return p, teacher.classify(p.read_bytes())[0]
@@ -1541,7 +1559,7 @@ zrt serve hf:Qwen/Qwen2.5-VL-32B-Instruct-AWQ --host 0.0.0.0 --port 8001 \
 # new tmux window:
 python scripts/teacher_label.py --model "$(curl -s localhost:8001/v1/models | python -c 'import sys,json;print(json.load(sys.stdin)["data"][0]["id"])')" --n 200
 ```
-Expected: progress lines, then `wrote N/M labels`. It exits at once if the model id is not listed at `/v1/models`, and exits non-zero if no label was written. Check that throughput is acceptable at `--n 200`, then rerun with `--n 2000`. Use a 72B-AWQ teacher only if the throughput allows. Also record the **teacher's** seconds per image for the distillation slide.
+Expected: progress lines, then `wrote N/M labels`. It exits at once, before cutting any crops, if the model id is not listed at `/v1/models`, and exits non-zero if no label was written. Check that throughput is acceptable at `--n 200`, then rerun with `--n 2000`. Use a 72B-AWQ teacher only if the throughput allows. Also record the **teacher's** seconds per image for the distillation slide.
 
 **Step 7: Commit**
 ```bash
@@ -3282,7 +3300,7 @@ from sentinel.metrics import Metrics
 from sentinel.outbox import Outbox
 from sentinel.pipeline import Pipeline
 from sentinel.replayer import frames
-from sentinel.vlm_client import ContextVLM
+from sentinel.vlm_client import ContextVLM, ensure_served
 
 FLUSH_EVERY_S = 2.0
 
@@ -3314,15 +3332,26 @@ def run_loop(rt: Runtime, streams: dict, settings: Settings, stop: threading.Eve
         time.sleep(max(0.0, period - (time.time() - tick)))
 
 
+def warn_if_not_served(vlm: ContextVLM, model: str, base_url: str) -> bool:
+    """Warn (don't exit) when the VLM model isn't served: the live demo still runs on the fallback."""
+    try:
+        ensure_served(vlm.client, model, base_url)
+    except SystemExit as exc:
+        logging.getLogger(__name__).warning("%s — the demo will run on the detector-only fallback", exc)
+        return False
+    return True
+
+
 def main() -> None:
     settings = load_settings()
     towers = load_towers()
     metrics, link = Metrics(), Link(online=False)
     escalator = Escalator(Outbox(settings.db_path), link, fetch_forecast,
                           lambda payload: send_dispatch(settings.dispatch_url, payload), metrics)
+    vlm = ContextVLM(settings.vlm_model, settings.vlm_base_url, settings.vlm_timeout_s)
+    warn_if_not_served(vlm, settings.vlm_model, settings.vlm_base_url)
     pipeline = Pipeline(towers, YoloDetector(settings.detector_weights, classes=settings.detector_classes),
-                        ContextVLM(settings.vlm_model, settings.vlm_base_url, settings.vlm_timeout_s),
-                        escalator, settings, metrics)
+                        vlm, escalator, settings, metrics)
     rt = Runtime(pipeline, escalator, link)
     stop = threading.Event()
     streams = {tid: frames(t.source, settings.fps) for tid, t in towers.items()}
@@ -3336,7 +3365,7 @@ if __name__ == "__main__":
     main()
 ```
 
-Test the loop without a detector, VLM or network (`tests/test_main.py`):
+Test the loop and the VLM pre-flight warning without a detector, VLM or network (`tests/test_main.py`):
 
 ```python
 import itertools
@@ -3348,7 +3377,7 @@ import numpy as np
 
 from sentinel.config import Settings
 from sentinel.escalation import Link
-from sentinel.main import run_loop
+from sentinel.main import run_loop, warn_if_not_served
 
 ZERO_FRAME = np.zeros((10, 10, 3), np.uint8)
 
@@ -3422,7 +3451,9 @@ def test_ended_stream_is_dropped_and_logged_once(caplog):
         worker.start()
         try:
             assert pipe.called.wait(5) and esc.called.wait(5)
+            deadline = time.monotonic() + 5
             while len(pipe.calls) < 3:
+                assert time.monotonic() < deadline, "timed out waiting for 3 pipeline calls"
                 time.sleep(0.01)
         finally:
             stop.set()
@@ -3431,10 +3462,44 @@ def test_ended_stream_is_dropped_and_logged_once(caplog):
     assert {tid for tid, _ in pipe.calls} == {"t2"}
     ended = [r for r in caplog.records if "stream ended" in r.getMessage()]
     assert len(ended) == 1 and ended[0].exc_info is None
+
+
+class FakeModels:
+    def __init__(self, ids=(), error=None):
+        self.ids, self.error = list(ids), error
+
+    def list(self):
+        if self.error:
+            raise self.error
+        return SimpleNamespace(data=[SimpleNamespace(id=i) for i in self.ids])
+
+
+def fake_vlm(**kw):
+    return SimpleNamespace(client=SimpleNamespace(models=FakeModels(**kw)))
+
+
+def test_warn_if_not_served_is_quiet_when_served(caplog):
+    with caplog.at_level("WARNING", logger="sentinel.main"):
+        assert warn_if_not_served(fake_vlm(ids=["base", "context"]), "context", "http://x/v1") is True
+    assert not caplog.records
+
+
+def test_warn_if_not_served_warns_when_model_missing(caplog):
+    with caplog.at_level("WARNING", logger="sentinel.main"):
+        assert warn_if_not_served(fake_vlm(ids=["base"]), "context", "http://x/v1") is False
+    msg = caplog.records[-1].getMessage()
+    assert "'context' not served" in msg and "detector-only fallback" in msg
+
+
+def test_warn_if_not_served_warns_when_server_unreachable(caplog):
+    with caplog.at_level("WARNING", logger="sentinel.main"):
+        assert warn_if_not_served(fake_vlm(error=ConnectionError("refused")), "m", "http://x/v1") is False
+    msg = caplog.records[-1].getMessage()
+    assert "cannot list models" in msg and "detector-only fallback" in msg
 ```
 
 Run: `pytest tests/test_main.py -v`
-Expected: 3 passed (a tower whose `process` always raises must not stop the others or the outbox flush; an exhausted stream is dropped and logged once). Also `python -c "import sentinel.main"` must work without ultralytics installed.
+Expected: 6 passed (a tower whose `process` always raises must not stop the others or the outbox flush; an exhausted stream is dropped and logged once; an unserved or unreachable VLM model logs a warning instead of exiting, so the demo still starts on the detector-only fallback). Also `python -c "import sentinel.main"` must work without ultralytics installed.
 
 **Step 2: Implement `scripts/dispatch_stub.py`** (the simulated cloud dispatch center)
 
@@ -3479,8 +3544,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source .venv/bin/activate
 mkdir -p results
-trap 'kill 0' EXIT   # stop the background dispatch stub when the sentinel exits
 python scripts/dispatch_stub.py > results/dispatch.log 2>&1 &
+STUB_PID=$!
+trap 'kill "$STUB_PID" 2>/dev/null || true' EXIT   # stop the dispatch stub when the sentinel exits
 python -m sentinel.main
 ```
 
@@ -3491,7 +3557,7 @@ python -m sentinel.main
 rm -f data/outbox.db   # start the recording from an empty outbox
 chmod +x scripts/*.sh && ./scripts/run_all.sh
 ```
-`run_all.sh` traps EXIT, so stopping the sentinel (Ctrl-C) also stops the background dispatch stub.
+`run_all.sh` traps EXIT and kills only the dispatch stub's pid, so stopping the sentinel (Ctrl-C) also stops the background stub.
 On the laptop, tunnel and open the dashboard:
 ```bash
 ssh -L 8080:localhost:8080 hpX@<nano-ip>    # then open http://localhost:8080

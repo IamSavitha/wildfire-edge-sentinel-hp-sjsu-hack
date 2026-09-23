@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source .venv/bin/activate
 mkdir -p results
-trap 'kill 0' EXIT   # stop the background dispatch stub when the sentinel exits
 python scripts/dispatch_stub.py > results/dispatch.log 2>&1 &
+STUB_PID=$!
+trap 'kill "$STUB_PID" 2>/dev/null || true' EXIT   # stop the dispatch stub when the sentinel exits
 python -m sentinel.main

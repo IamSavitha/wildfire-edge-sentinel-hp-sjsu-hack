@@ -44,3 +44,21 @@ def test_write_labels_counts_rows_and_skips_failures(tmp_path):
     assert write_labels(pairs, ftr, fho, total=10) == 5
     assert len((ftr.getvalue() + fho.getvalue()).splitlines()) == 5
     assert write_labels([(Path("y.jpg"), None)], ftr, fho, total=1) == 0
+
+
+def test_main_checks_server_before_cutting_crops(tmp_path, monkeypatch):
+    import sys
+
+    import pytest
+
+    import scripts.teacher_label as tl
+    cropped = []
+    monkeypatch.setattr(tl, "make_crops", lambda *a, **k: cropped.append(a) or [])
+
+    def not_served(*a, **k):
+        raise SystemExit("model 'x' not served")
+    monkeypatch.setattr(tl, "ensure_served", not_served)
+    monkeypatch.setattr(sys, "argv", ["teacher_label.py", "--model", "x", "--out", str(tmp_path)])
+    with pytest.raises(SystemExit, match="not served"):
+        tl.main()
+    assert cropped == []

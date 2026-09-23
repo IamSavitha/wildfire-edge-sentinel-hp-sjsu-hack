@@ -62,15 +62,15 @@ def main() -> None:
                     help="append to train/heldout.jsonl instead of overwriting (e.g. topping up benign labels)")
     a = ap.parse_args()
 
+    teacher = ContextVLM(a.model, a.base_url, timeout_s=180, max_tokens=200)
+    ensure_served(teacher.client, a.model, a.base_url)  # before cropping: a dead teacher fails in seconds
+
     out = Path(a.out)
     crops_dir = out / "crops"
     crops_dir.mkdir(parents=True, exist_ok=True)
     crops = make_crops(Path(a.images), Path(a.labels), crops_dir, a.n)
     crops += make_crops(Path(a.benign), Path(a.benign) / "_no_labels", crops_dir, 10_000)
     print(f"{len(crops)} crops to label")
-
-    teacher = ContextVLM(a.model, a.base_url, timeout_s=180, max_tokens=200)
-    ensure_served(teacher.client, a.model, a.base_url)
 
     def label(p: Path):
         return p, teacher.classify(p.read_bytes())[0]

@@ -7,7 +7,7 @@ import numpy as np
 
 from sentinel.config import Settings
 from sentinel.escalation import Link
-from sentinel.main import run_loop
+from sentinel.main import run_loop, warn_if_not_served
 
 ZERO_FRAME = np.zeros((10, 10, 3), np.uint8)
 
@@ -92,3 +92,37 @@ def test_ended_stream_is_dropped_and_logged_once(caplog):
     assert {tid for tid, _ in pipe.calls} == {"t2"}
     ended = [r for r in caplog.records if "stream ended" in r.getMessage()]
     assert len(ended) == 1 and ended[0].exc_info is None
+
+
+class FakeModels:
+    def __init__(self, ids=(), error=None):
+        self.ids, self.error = list(ids), error
+
+    def list(self):
+        if self.error:
+            raise self.error
+        return SimpleNamespace(data=[SimpleNamespace(id=i) for i in self.ids])
+
+
+def fake_vlm(**kw):
+    return SimpleNamespace(client=SimpleNamespace(models=FakeModels(**kw)))
+
+
+def test_warn_if_not_served_is_quiet_when_served(caplog):
+    with caplog.at_level("WARNING", logger="sentinel.main"):
+        assert warn_if_not_served(fake_vlm(ids=["base", "context"]), "context", "http://x/v1") is True
+    assert not caplog.records
+
+
+def test_warn_if_not_served_warns_when_model_missing(caplog):
+    with caplog.at_level("WARNING", logger="sentinel.main"):
+        assert warn_if_not_served(fake_vlm(ids=["base"]), "context", "http://x/v1") is False
+    msg = caplog.records[-1].getMessage()
+    assert "'context' not served" in msg and "detector-only fallback" in msg
+
+
+def test_warn_if_not_served_warns_when_server_unreachable(caplog):
+    with caplog.at_level("WARNING", logger="sentinel.main"):
+        assert warn_if_not_served(fake_vlm(error=ConnectionError("refused")), "m", "http://x/v1") is False
+    msg = caplog.records[-1].getMessage()
+    assert "cannot list models" in msg and "detector-only fallback" in msg

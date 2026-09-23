@@ -14,7 +14,7 @@ from sentinel.metrics import Metrics
 from sentinel.outbox import Outbox
 from sentinel.pipeline import Pipeline
 from sentinel.replayer import frames
-from sentinel.vlm_client import ContextVLM
+from sentinel.vlm_client import ContextVLM, ensure_served
 
 FLUSH_EVERY_S = 2.0
 
@@ -46,15 +46,26 @@ def run_loop(rt: Runtime, streams: dict, settings: Settings, stop: threading.Eve
         time.sleep(max(0.0, period - (time.time() - tick)))
 
 
+def warn_if_not_served(vlm: ContextVLM, model: str, base_url: str) -> bool:
+    """Warn (don't exit) when the VLM model isn't served: the live demo still runs on the fallback."""
+    try:
+        ensure_served(vlm.client, model, base_url)
+    except SystemExit as exc:
+        logging.getLogger(__name__).warning("%s — the demo will run on the detector-only fallback", exc)
+        return False
+    return True
+
+
 def main() -> None:
     settings = load_settings()
     towers = load_towers()
     metrics, link = Metrics(), Link(online=False)
     escalator = Escalator(Outbox(settings.db_path), link, fetch_forecast,
                           lambda payload: send_dispatch(settings.dispatch_url, payload), metrics)
+    vlm = ContextVLM(settings.vlm_model, settings.vlm_base_url, settings.vlm_timeout_s)
+    warn_if_not_served(vlm, settings.vlm_model, settings.vlm_base_url)
     pipeline = Pipeline(towers, YoloDetector(settings.detector_weights, classes=settings.detector_classes),
-                        ContextVLM(settings.vlm_model, settings.vlm_base_url, settings.vlm_timeout_s),
-                        escalator, settings, metrics)
+                        vlm, escalator, settings, metrics)
     rt = Runtime(pipeline, escalator, link)
     stop = threading.Event()
     streams = {tid: frames(t.source, settings.fps) for tid, t in towers.items()}
