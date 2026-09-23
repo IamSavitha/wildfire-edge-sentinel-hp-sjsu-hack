@@ -1,0 +1,14 @@
+{
+  "name": "tower_stage1",
+  "weights": "models/smoke_yolo.pt",
+  "classes": null,
+  "map50": 0.1984465853791587,
+  "map50_95": 0.07676195231696548,
+  "precision": 0.35310566660229664,
+  "recall": 0.2718160226171233,
+  "per_class_map50": {
+    "smoke": 0.1984465853791587
+  },
+  "ms_per_image": 7.278386260119044,
+  "n_images": 4099
+}
