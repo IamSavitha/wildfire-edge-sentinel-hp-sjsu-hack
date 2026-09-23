@@ -1,0 +1,26 @@
+{
+  "train": {
+    "n": 2600,
+    "source_type": {
+      "fog_dust_cloud": 915,
+      "unknown": 579,
+      "wildland": 477,
+      "industrial_stack": 328,
+      "controlled_burn": 284,
+      "vehicle": 10,
+      "structure": 5,
+      "campfire": 2
+    }
+  },
+  "heldout": {
+    "n": 500,
+    "source_type": {
+      "fog_dust_cloud": 158,
+      "unknown": 138,
+      "wildland": 84,
+      "industrial_stack": 66,
+      "controlled_burn": 53,
+      "campfire": 1
+    }
+  }
+}
