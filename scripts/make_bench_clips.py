@@ -17,8 +17,13 @@ def camera_of(name: str) -> str:
     return Path(name).stem.rsplit("_", 1)[0]
 
 
+def _has_smoke(labels_dir: Path, frame: Path) -> bool:
+    lbl = labels_dir / f"{frame.stem}.txt"
+    return lbl.exists() and bool(lbl.read_text().strip())
+
+
 def build_sequences(images_dir: Path, labels_dir: Path, min_frames: int) -> dict[str, dict]:
-    """Group frames per camera (sorted by timestamp) and mark whether any frame has smoke."""
+    """Group frames per camera (sorted by timestamp); keep per-frame smoke flags."""
     groups: dict[str, list[Path]] = defaultdict(list)
     for p in sorted(images_dir.glob("*.jpg")):
         groups[camera_of(p.name)].append(p)
@@ -26,10 +31,21 @@ def build_sequences(images_dir: Path, labels_dir: Path, min_frames: int) -> dict
     for cam, frames in groups.items():
         if len(frames) < min_frames:
             continue
-        smoke = any((labels_dir / f"{f.stem}.txt").read_text().strip() for f in frames
-                    if (labels_dir / f"{f.stem}.txt").exists())
-        seqs[cam] = {"frames": frames, "smoke": smoke}
+        flags = [_has_smoke(labels_dir, f) for f in frames]
+        seqs[cam] = {"frames": frames, "flags": flags, "smoke": any(flags)}
     return seqs
+
+
+def smoke_window(frames: list[Path], flags: list[bool], max_frames: int, lead: int = 10) -> list[Path]:
+    """A window that starts `lead` frames before the first smoky frame."""
+    first = flags.index(True)
+    start = max(0, first - lead)
+    return frames[start:start + max_frames]
+
+
+def clean_frames(frames: list[Path], flags: list[bool]) -> list[Path]:
+    """Only the smoke-free frames of a camera, in time order (benign footage)."""
+    return [f for f, s in zip(frames, flags) if not s]
 
 
 def main() -> None:
@@ -58,15 +74,22 @@ def main() -> None:
 
     for seq in sorted(Path(a.figlib).glob("fire_*")):
         frames = sorted(p for p in seq.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"})
-        link_clip(f"figlib_{seq.name}", frames, "alert")
+        # FIgLib names carry the offset from ignition (…_-02340.jpg … _+02400.jpg): keep ignition onward
+        post = [p for p in frames if "_+" in p.stem] or frames
+        link_clip(f"figlib_{seq.name}", post, "alert")
 
     seqs = build_sequences(Path(a.pyro) / "images", Path(a.pyro) / "labels", a.min_frames)
     rng = random.Random(a.seed)
-    for label, want_smoke in (("alert", True), ("no_alert", False)):
-        cams = sorted(c for c, s in seqs.items() if s["smoke"] == want_smoke)
-        rng.shuffle(cams)
-        for cam in cams[: a.per_label]:
-            link_clip(f"pyro_{label}_{cam}", seqs[cam]["frames"], label)
+    smoky = sorted(c for c, s in seqs.items() if s["smoke"])
+    rng.shuffle(smoky)
+    for cam in smoky[: a.per_label]:
+        s = seqs[cam]
+        link_clip(f"pyro_alert_{cam}", smoke_window(s["frames"], s["flags"], a.max_frames), "alert")
+    clean = sorted(c for c, s in seqs.items() if len(clean_frames(s["frames"], s["flags"])) >= a.min_frames)
+    rng.shuffle(clean)
+    for cam in clean[: a.per_label]:
+        s = seqs[cam]
+        link_clip(f"pyro_clear_{cam}", clean_frames(s["frames"], s["flags"]), "no_alert")
 
     with open(out / "clips.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["path", "label"])

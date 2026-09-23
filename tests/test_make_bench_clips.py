@@ -19,3 +19,13 @@ def test_build_sequences_groups_by_camera_and_flags_smoke(tmp_path):
     assert set(seqs) == {"p_camA", "p_camB"}          # camC too short
     assert seqs["p_camA"]["smoke"] and not seqs["p_camB"]["smoke"]
     assert [p.name for p in seqs["p_camA"]["frames"]] == sorted(p.name for p in seqs["p_camA"]["frames"])
+
+
+def test_smoke_window_starts_before_first_smoke_and_clean_frames_drop_smoke():
+    from pathlib import Path
+    from scripts.make_bench_clips import clean_frames, smoke_window
+    frames = [Path(f"{i:02d}.jpg") for i in range(30)]
+    flags = [i >= 20 for i in range(30)]
+    w = smoke_window(frames, flags, max_frames=8, lead=5)
+    assert w[0].name == "15.jpg" and len(w) == 8
+    assert [f.name for f in clean_frames(frames, flags)] == [f"{i:02d}.jpg" for i in range(20)]
