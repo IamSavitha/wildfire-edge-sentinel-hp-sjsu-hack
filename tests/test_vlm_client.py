@@ -90,3 +90,12 @@ def test_ensure_served_exits_when_server_unreachable():
     from sentinel.vlm_client import ensure_served
     with pytest.raises(SystemExit, match="http://x/v1"):
         ensure_served(SimpleNamespace(models=FakeModels(error=ConnectionError("refused"))), "m", "http://x/v1")
+
+
+def test_last_usage_keeps_the_prompt_completion_split():
+    v, _ = vlm(["not json", VALID])
+    v.classify(b"\xff\xd8fake")
+    assert v.last_usage == {"prompt_tokens": 600, "completion_tokens": 80, "calls": 2}
+    v2, _ = vlm([TimeoutError("slow")])
+    v2.classify(b"\xff\xd8fake")
+    assert v2.last_usage == {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}

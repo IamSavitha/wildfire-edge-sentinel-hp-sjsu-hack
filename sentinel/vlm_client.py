@@ -23,6 +23,7 @@ class ContextVLM:
                  timeout_s: float = 5.0, max_tokens: int = 160, client=None):
         self.model = model
         self.max_tokens = max_tokens
+        self.last_usage: dict = {}  # prompt/completion split of the latest classify() call
         self.client = client or OpenAI(base_url=base_url, api_key="EMPTY",
                                        timeout=timeout_s, max_retries=0)
 
@@ -37,8 +38,9 @@ class ContextVLM:
         ]
 
     def classify(self, jpeg: bytes) -> tuple[ContextResult | None, int]:
-        """Returns (context or None, total tokens spent)."""
+        """Returns (context or None, total tokens spent). The in/out split is kept in last_usage."""
         tokens = 0
+        usage = self.last_usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
         for _ in range(2):
             try:
                 resp = self.client.chat.completions.create(
@@ -51,6 +53,9 @@ class ContextVLM:
                 logging.getLogger(__name__).warning("VLM request failed: %s", exc)
                 return None, tokens
             tokens += resp.usage.prompt_tokens + resp.usage.completion_tokens
+            usage["prompt_tokens"] += resp.usage.prompt_tokens
+            usage["completion_tokens"] += resp.usage.completion_tokens
+            usage["calls"] += 1
             try:
                 return ContextResult.model_validate_json(resp.choices[0].message.content), tokens
             except ValidationError:
