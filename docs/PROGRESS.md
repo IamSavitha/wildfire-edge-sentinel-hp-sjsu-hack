@@ -29,9 +29,9 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 ## Phase 2 — Repo housekeeping 💻
 
 - [ ] Decide: push `feat/core-pipeline` to GitHub, and/or merge into `main`
-- [ ] (Optional) Live demo warns when `vlm_model` is not served
-- [ ] (Optional) `run_all.sh`: narrow `trap 'kill 0'` to the stub's pid
-- [ ] (Optional) `teacher_label.py`: check the server before cutting crops
+- [x] (Optional) Live demo warns when `vlm_model` is not served
+- [x] (Optional) `run_all.sh`: narrow `trap 'kill 0'` to the stub's pid
+- [x] (Optional) `teacher_label.py`: check the server before cutting crops
 - [ ] (Optional) Delete or set `sync: false` in `~/Library/Application Support/Ultralytics/settings.json`
 - [ ] Check the GitHub "Contributors" sidebar shows only IamSavitha (cache refresh)
 
