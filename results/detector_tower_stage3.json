@@ -1,0 +1,14 @@
+{
+  "name": "tower_stage3",
+  "weights": "models/joint_yolo.pt",
+  "classes": null,
+  "map50": 0.717920572086746,
+  "map50_95": 0.45672232141922275,
+  "precision": 0.6853490354587868,
+  "recall": 0.7188585164254662,
+  "per_class_map50": {
+    "smoke": 0.717920572086746
+  },
+  "ms_per_image": 7.276520400150334,
+  "n_images": 4099
+}
