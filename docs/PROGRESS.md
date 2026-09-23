@@ -95,6 +95,16 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [ ] GitHub rulesets (owner action): require PRs on `main` for everyone but the owner; protect `v*` tags from deletion/moving
 - [ ] `v1.3.0-joint` after stage-3 training is evaluated
 
+## Phase 6b — Edge vs cloud-only (measured) ☁️ — the core proof
+
+- [ ] ⏳ Build: provider-agnostic cloud client (same Qwen2.5-VL-7B, hosted), response cache (no re-billing), link profiles (fiber / LTE / rural cellular / satellite / outage), cloud-only bench (every frame → cloud), edge vs cloud outage scenario, comparison table
+- [ ] Owner: create an account + API key with a provider serving Qwen2.5-VL-7B-Instruct (e.g. Fireworks AI or Alibaba Cloud Model Studio); put the three env vars on the Nano (never in the repo)
+- [ ] A. Same 500 held-out crops through the cloud model → accuracy, real latency incl. network, billed tokens, $
+- [ ] B. Cloud-only architecture on the same 25 tower clips → recall, false alarms, time to decision, bytes, $ per 1,000 frames
+- [ ] C. Link profiles → upload time per frame vs per 1 KB alert
+- [ ] D. "Edge as the rescue": fire during a network outage → time until dispatch knows (edge vs cloud-only), decisions made during the outage
+- [ ] Tag `v1.4.0-cloud-comparison`
+
 ## Phase 6 — End-to-end benchmark and cost 🖥️ [T25, T25b, T26]
 
 - [x] `data/bench/clips.csv` with 20–40 clips (`alert` / `no_alert`) — 25 real tower clips via `scripts/make_bench_clips.py`: 15 alert (5 FIgLib post-ignition + 10 pyro smoke windows), 10 no_alert (smoke-free tower footage)
