@@ -43,3 +43,26 @@ def test_run_loop_processes_frames_and_flushes():
         worker.join(5)
     assert not worker.is_alive()
     assert pipe.calls[0][0] == "t1" and len(esc.calls) >= 1
+
+
+class FlakyPipeline(FakePipeline):
+    def process(self, tower_id, frame, now):
+        if tower_id == "t1":
+            raise RuntimeError("bad tower")
+        super().process(tower_id, frame, now)
+
+
+def test_failing_tower_does_not_stall_others():
+    pipe, esc = FlakyPipeline(), FakeEscalator()
+    rt = SimpleNamespace(pipeline=pipe, escalator=esc, link=Link())
+    streams = {"t1": itertools.repeat(ZERO_FRAME), "t2": itertools.repeat(ZERO_FRAME)}
+    stop = threading.Event()
+    worker = threading.Thread(target=run_loop, args=(rt, streams, Settings(fps=50), stop), daemon=True)
+    worker.start()
+    try:
+        assert pipe.called.wait(5) and esc.called.wait(5)
+    finally:
+        stop.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert {tid for tid, _ in pipe.calls} == {"t2"} and len(esc.calls) >= 1

@@ -21,21 +21,25 @@ FLUSH_EVERY_S = 2.0
 
 def run_loop(rt: Runtime, streams: dict, settings: Settings, stop: threading.Event) -> None:
     # flush runs on this thread; Metrics has a single writer.
+    log = logging.getLogger(__name__)
     period = 1.0 / settings.fps
     last_flush = 0.0
     while not stop.is_set():
         tick = time.time()
-        try:
-            for tid, stream in streams.items():
+        for tid, stream in streams.items():
+            try:  # isolate per tower: one bad source or frame must not skip the others
                 frame = next(stream)
                 rt.pipeline.process(tid, frame, tick)  # takes pipeline.lock itself; released during the VLM call
-            if tick - last_flush >= FLUSH_EVERY_S:
+            except Exception:
+                log.exception("tower %s failed", tid)
+        if tick - last_flush >= FLUSH_EVERY_S:
+            try:
                 if rt.link.online:
                     rt.pipeline.burn_towers = fetch_burn_schedule()
                 rt.escalator.flush(tick)  # network I/O: never under the lock
-                last_flush = tick
-        except Exception:
-            logging.getLogger(__name__).exception("tower loop error")
+            except Exception:
+                log.exception("burn schedule / outbox flush failed")
+            last_flush = tick
         time.sleep(max(0.0, period - (time.time() - tick)))
 
 
