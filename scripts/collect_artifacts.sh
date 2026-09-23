@@ -15,7 +15,7 @@ fi
 # Logs: strip carriage-return progress spam so they read cleanly.
 for f in *.log; do
   [ -f "$f" ] || continue
-  tr '\r' '\n' < "$f" | grep -v -E '^\s*$' | tail -n 400 > "results/logs/$f"
+  { tr '\r' '\n' < "$f" | grep -v -E '^\s*$' || true; } | tail -n 400 > "results/logs/$f"
 done
 
 # Teacher label distribution (what the student learns from).
