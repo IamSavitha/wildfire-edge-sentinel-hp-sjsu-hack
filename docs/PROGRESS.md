@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 13:45 (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 13:20 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -54,7 +54,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 
 - [x] **Before:** `eval_detector.py --weights yolov8s-worldv2.pt --classes smoke,fire --name before_yoloworld` (run while online; caches CLIP)
 - [x] `train_detector.py --epochs 1` → note time per epoch → choose N — 2.5 min/epoch, 1 epoch already mAP50 0.085 → N = 50
-- [ ] `train_detector.py --epochs N` (tmux `train`) → `models/smoke_yolo.pt` — ⏳ running, 50 epochs (~2.5 min/epoch)
+- [ ] `train_detector.py --epochs N` (tmux `train`) → `models/smoke_yolo.pt` — ⏳ running, 50 epochs (~2.75 min/epoch, ETA ~15:20 Nano time); epoch 5 mAP50 = 0.52
 - [ ] **After:** `eval_detector.py --weights models/smoke_yolo.pt --name after_yolo11s`
 
 ## Phase 5 — Context VLM: before → fine-tune → after 🖥️ [T12, T16, T24, T24b]
@@ -100,7 +100,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [ ] Design the demo page: what judges see in 5 minutes (live tower feeds, event timeline, escalation/outbox, online/offline toggle, metrics)
 - [ ] Before vs after view: same frame through base vs fine-tuned models, side by side (detector boxes + VLM verdict)
 - [ ] Results panel that reads `results/*.json` (detector mAP, VLM accuracy, end-to-end precision/recall, cost model)
-- [ ] **Live comparative metrics dashboard** — while any model runs (detector, base VLM, LoRA VLM, teacher), show live per-model: requests, tokens in/out, tokens/s, latency p50/p95, GPU memory, calls avoided by the cascade, bytes sent upstream, and a running cost comparison (edge vs cloud-per-frame at configurable $/token and $/GB) to summarise the economics
+- [ ] ⏳ **Live comparative metrics dashboard** (building: `python -m sentinel.monitor`, port 8090) — while any model runs (detector, base VLM, LoRA VLM, teacher), show live per-model: requests, tokens in/out, tokens/s, latency p50/p95, GPU memory, calls avoided by the cascade, bytes sent upstream, and a running cost comparison (edge vs cloud-per-frame at configurable $/token and $/GB) to summarise the economics
 - [ ] Architecture + "why edge" panel (escalation rule, bytes sent vs video, tokens per event)
 - [ ] Implement, test, and serve it from the Nano dashboard (port 8080, via SSH tunnel)
 - [ ] Rehearse the demo flow on the page end to end
@@ -142,4 +142,5 @@ Fill these in as runs finish (they also land in `results/*.json`).
 - 2026-09-23: zrt serves ALL models behind ONE proxy (set to port 8000); models are selected by name. The teacher will NOT be on :8001 — use the default base URL with the teacher's model id.
 - 2026-09-23: vLLM at 30% memory failed (no KV cache room while YOLO ran) → use `--gpu-memory-fraction 0.45`.
 - 2026-09-23: Runtime `vlm_timeout_s` (15 s) is too low while training shares the GPU — set it from measured p95 after Phase 5.
+- 2026-09-23: vLLM per-model metrics (tokens, latency histograms, KV cache) are readable at `/opt/hp/zrt/run/vllm-<label>.sock` → `/metrics`; the live dashboard uses them.
 - 2026-09-23: YOLO-World zero-shot baseline is near zero (mAP50 0.002). Consider more descriptive prompts (e.g. "wildfire smoke plume") so the baseline isn't seen as a strawman.
