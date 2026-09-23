@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 23:05 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-23 23:13 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -57,6 +57,10 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] `train_detector.py --epochs N` (tmux `train`) → `models/smoke_yolo.pt` — 50 epochs done; final validation mAP50 = 0.78
 - [x] **After:** `eval_detector.py --weights models/smoke_yolo.pt --name after_yolo11s` — mAP50 **0.787** (from 0.002), P 0.78, R 0.72, smoke 0.84 / fire 0.73, 3.3 ms/img
 
+- [x] Domain check on lookout-tower smoke (pyro-sdis val, 4,099 images, imgsz 1024): fine-tuned YOLO11s only **mAP50 0.213** (P 0.37, R 0.29) vs 0.787 on D-Fire — small distant plumes are missed (also seen on FIgLib demo frames)
+- [ ] ⏳ **Stage-2 tower fine-tune:** start from `models/smoke_yolo.pt`, train on pyro-sdis (29,537 tower images) at imgsz 960, 12 epochs → `models/tower_yolo.pt` (queued to start when LoRA finishes; ~2 h)
+- [ ] Evaluate stage 2 on tower val and on D-Fire test (check it didn't forget D-Fire); use the better detector in the demo
+
 ## Phase 5 — Context VLM: before → fine-tune → after 🖥️ [T12, T16, T24, T24b]
 
 - [x] Serve the 32B teacher on :8001 (tmux `teacher`) — served as `teacher32b` on the shared zrt proxy (:8000) at 45% memory; base7b paused meanwhile
@@ -65,7 +69,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [ ] ⏸ (optional, deferred — 32B at ~7.5 s/call ≈ 1 h for 500 crops) **Reference:** `eval_context.py --model <teacher id> --base-url http://localhost:8001/v1 --name ref_teacher32b`
 - [ ] ⏳ **Before:** `eval_context.py --model <base id> --name before_base7b` — ⏳ running: 318/500 held-out crops
 - [ ] Set `vlm_timeout_s` in `config/settings.json` to ~2× the measured `latency_ms_p95`
-- [ ] ⏳ Stop the teacher; `train_lora.py` (tmux `lora`) — step 220/326, ETA ~23:30; epoch 1: loss 1.21 → 0.149, answer-token accuracy 70% → 94.7%; → `adapters/context/adapter_config.json`
+- [ ] ⏳ Stop the teacher; `train_lora.py` (tmux `lora`) — step 262/326, ETA ~23:35; epoch 1: loss 1.21 → 0.149, answer-token accuracy 70% → 94.7%; → `adapters/context/adapter_config.json`
 - [ ] Stop the base `vlm` server; re-serve with `--enable-lora --max-lora-rank 16 --lora-modules context=$HOME/sentinel/adapters/context`
 - [ ] `/v1/models` lists both the base id and `context`
 - [ ] **After:** `eval_context.py --model context --name after_lora7b`
@@ -112,7 +116,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] **Live comparative metrics dashboard** — live on the Nano (tmux `monitor`, port 8090): `ssh -N -L 8090:localhost:8090 hp11@100.109.162.35` → http://localhost:8090. Reviewed (202 tests). First reading: teacher32b 839k input / 299k output tokens — while any model runs (detector, base VLM, LoRA VLM, teacher), show live per-model: requests, tokens in/out, tokens/s, latency p50/p95, GPU memory, calls avoided by the cascade, bytes sent upstream, and a running cost comparison (edge vs cloud-per-frame at configurable $/token and $/GB) to summarise the economics
 - [ ] Architecture + "why edge" panel (escalation rule, bytes sent vs video, tokens per event)
 - [x] **Two-pane demo app** (`python -m sentinel.webapp`, port 8095) — built and reviewed (278 tests; token math verified exact; fair ≤1280 px cloud baseline; honest $0-marginal label): LEFT = pick/upload an image (+ ground truth) and run BEFORE (YOLO-World + base7b) vs AFTER (YOLO11s + LoRA) side by side with boxes, verdict, severity, report, tokens, timings; RIGHT = live usage & economics (tokens actual vs full-frame, calls avoided, bytes, $ edge vs cloud, online vs offline alerts sent/queued, served-model telemetry, benchmark table)
-- [ ] Deploy the demo app on the Nano after LoRA is served (base7b with `--enable-lora`)
+- [ ] ⏳ Deploy the demo app on the Nano after LoRA is served (base7b with `--enable-lora`) — app live on :8095 (tmux `webapp`), BEFORE pipeline works end to end (~0.85 s/image with warm detectors); AFTER VLM pending LoRA
 - [ ] Implement, test, and serve it from the Nano dashboard (port 8080, via SSH tunnel)
 - [ ] Rehearse the demo flow on the page end to end
 
