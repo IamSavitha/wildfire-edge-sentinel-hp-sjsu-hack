@@ -1843,6 +1843,8 @@ git push
 
 **Files:**
 - Create: `scripts/train_lora.py`
+- Test: `tests/test_train_lora.py`
+- Modify: `requirements-dev.txt` (add `pillow`, used by the test)
 
 **Step 1: Free GPU memory.** Stop the teacher (`tmux kill-session -t teacher`). Check the label counts:
 ```bash
@@ -1851,28 +1853,71 @@ python -c "import json,collections;print(collections.Counter(json.loads(l)['labe
 ```
 Expected: ≥ 1,000 train rows and more than one source_type. If a benign class has fewer than 30 rows, add images to `data/benign` and rerun T12 on just those.
 
-**Step 2: Write the script**
+**Step 2: Write the failing test** (the pure example builder; no torch needed, only pillow)
 
 ```python
-"""LoRA-distill teacher context labels into Qwen2.5-VL-7B. Run on the Nano.
-Fallback if TRL/transformers versions disagree: adapt HP's Med_VLM_Fine-Tune_vLLM script
-(hack guide p.6) to this JSONL; the data format below is the same chat format."""
 import json
 
-from datasets import Dataset
-from peft import LoraConfig
 from PIL import Image
-from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
-from trl import SFTConfig, SFTTrainer
 
+from scripts.train_lora import to_example
 from sentinel.vlm_client import SYSTEM_PROMPT, USER_PROMPT
 
-BASE = "Qwen/Qwen2.5-VL-7B-Instruct"
+LABEL = {"source_type": "campfire", "smoke_color": "white", "attended": "yes",
+         "near_structures": False, "near_road": True, "size_estimate": "small",
+         "description": "Small campfire with people nearby."}
+
+
+def _row(tmp_path):
+    p = tmp_path / "crop.jpg"
+    Image.new("L", (8, 6), 128).save(p)  # greyscale on purpose: to_example must convert to RGB
+    return {"image": str(p), "label": LABEL}
+
+
+def test_to_example_messages_match_runtime_prompt(tmp_path):
+    ex = to_example(_row(tmp_path))
+    msgs = ex["messages"]
+    assert [m["role"] for m in msgs] == ["system", "user", "assistant"]
+    assert msgs[0]["content"] == [{"type": "text", "text": SYSTEM_PROMPT}]
+    assert msgs[1]["content"] == [{"type": "image"}, {"type": "text", "text": USER_PROMPT}]
+    assert msgs[2]["content"] == [{"type": "text", "text": json.dumps(LABEL)}]
+
+
+def test_to_example_loads_one_rgb_image(tmp_path):
+    ex = to_example(_row(tmp_path))
+    assert len(ex["images"]) == 1
+    assert ex["images"][0].mode == "RGB"
+    assert ex["images"][0].size == (8, 6)
+```
+
+Run: `pytest tests/test_train_lora.py -v`
+Expected: FAIL, `ModuleNotFoundError`
+
+**Step 3: Write the script.** `to_example` imports its prompts from `sentinel.vlm_client`, so the training prompt is the runtime prompt. Heavy imports (torch, datasets, peft, transformers, trl) live inside `main()` so `--help` and the test work on the laptop.
+
+```python
+"""LoRA-distill teacher context labels (scripts/teacher_label.py) into Qwen2.5-VL-7B. Run on the Nano.
+
+Writes a PEFT adapter to --out; serve it with vLLM `--enable-lora --lora-modules context=<out>`
+and score it with scripts/eval_context.py (plan Task 24 / 24b).
+
+Fallback if TRL/transformers versions disagree: adapt HP's Med_VLM_Fine-Tune_vLLM script
+(hack guide p.6) to this JSONL; the data format below is the same chat format.
+"""
+import argparse
+import json
+
+from sentinel.vlm_client import SYSTEM_PROMPT, USER_PROMPT  # training prompt == runtime prompt
 
 
 def to_example(row: dict) -> dict:
+    """One JSONL row -> TRL vision chat example (messages + images, one image placeholder)."""
+    from PIL import Image  # lazy: --help works without pillow
+
+    with Image.open(row["image"]) as im:
+        image = im.convert("RGB")
     return {
-        "images": [Image.open(row["image"]).convert("RGB")],
+        "images": [image],
         "messages": [
             {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
             {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": USER_PROMPT}]},
@@ -1882,37 +1927,62 @@ def to_example(row: dict) -> dict:
 
 
 def main() -> None:
-    rows = [json.loads(line) for line in open("data/teacher/train.jsonl")]
-    ds = Dataset.from_list([to_example(r) for r in rows])
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--base", default="Qwen/Qwen2.5-VL-7B-Instruct")
+    ap.add_argument("--train", default="data/teacher/train.jsonl")
+    ap.add_argument("--out", default="adapters/context")
+    ap.add_argument("--epochs", type=float, default=2)
+    ap.add_argument("--lr", type=float, default=1e-4)
+    ap.add_argument("--rank", type=int, default=16, help="LoRA rank; vLLM needs --max-lora-rank >= this")
+    ap.add_argument("--batch", type=int, default=4, help="per-device batch size")
+    ap.add_argument("--grad-accum", type=int, default=4)
+    ap.add_argument("--max-pixels", type=int, default=448 * 448, help="processor image budget (pixels)")
+    a = ap.parse_args()
 
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(BASE, torch_dtype="bfloat16")
-    processor = AutoProcessor.from_pretrained(BASE, max_pixels=448 * 448)
-    peft_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM",
+    # lazy: --help and unit tests work without torch/transformers/trl/peft
+    import torch
+    from datasets import Dataset
+    from peft import LoraConfig
+    from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+    from trl import SFTConfig, SFTTrainer
+
+    with open(a.train) as f:
+        rows = [json.loads(line) for line in f if line.strip()]
+    ds = Dataset.from_list([to_example(r) for r in rows])
+    print(f"{len(ds)} training examples from {a.train}")
+
+    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(a.base, torch_dtype=torch.bfloat16)
+    processor = AutoProcessor.from_pretrained(a.base, max_pixels=a.max_pixels)
+    peft_config = LoraConfig(r=a.rank, lora_alpha=2 * a.rank, lora_dropout=0.05, task_type="CAUSAL_LM",
                              target_modules=["q_proj", "k_proj", "v_proj", "o_proj"])  # language model only
-    args = SFTConfig(output_dir="adapters/context", num_train_epochs=2,
-                     per_device_train_batch_size=4, gradient_accumulation_steps=4,
-                     learning_rate=1e-4, bf16=True, logging_steps=10, save_strategy="epoch",
+    args = SFTConfig(output_dir=a.out, num_train_epochs=a.epochs,
+                     per_device_train_batch_size=a.batch, gradient_accumulation_steps=a.grad_accum,
+                     learning_rate=a.lr, bf16=True, logging_steps=10, save_strategy="epoch",
                      gradient_checkpointing=True, max_length=None, report_to="none")
     trainer = SFTTrainer(model=model, args=args, train_dataset=ds,
                          processing_class=processor, peft_config=peft_config)
     trainer.train()
-    trainer.save_model("adapters/context")
+    trainer.save_model(a.out)
+    print(f"adapter saved to {a.out}")
 
 
 if __name__ == "__main__":
     main()
 ```
 
-**Step 3: Run**
+Run: `pytest tests/test_train_lora.py -v` → 2 passed; `python scripts/train_lora.py --help` works without torch.
+
+**Step 4: Run** (defaults: `--base Qwen/Qwen2.5-VL-7B-Instruct --train data/teacher/train.jsonl --out adapters/context --epochs 2 --lr 1e-4 --rank 16 --batch 4 --grad-accum 4 --max-pixels 200704`)
 ```bash
 tmux new -s lora
 python scripts/train_lora.py 2>&1 | tee results/lora_train.log
 ```
-Expected: loss decreasing in the logs, and `adapters/context/adapter_config.json` exists at the end. If it errors within 20 minutes, switch to the HP Med VLM script fallback. Don't debug TRL for more than 45 minutes; the cut line is serving the base model.
+Expected: loss decreasing in the logs, and `adapters/context/adapter_config.json` exists at the end. If it runs out of memory, try `--batch 2 --grad-accum 8`. If it errors within 20 minutes, switch to the HP Med VLM script fallback. Don't debug TRL for more than 45 minutes; the cut line is serving the base model. If you change `--rank`, vLLM's `--max-lora-rank` (Task 24 Step 1) must be at least that value.
 
-**Step 4: Commit**
+**Step 5: Commit**
 ```bash
-git add scripts/train_lora.py && git commit -m "feat: LoRA distillation script"
+git add scripts/train_lora.py tests/test_train_lora.py requirements-dev.txt
+git commit -m "feat: LoRA distillation script"
 ```
 
 ---
@@ -3298,6 +3368,7 @@ git commit -m "feat: runtime entrypoint, dispatch stub, end-to-end demo"
 
 **Files:**
 - Create: `scripts/eval_context.py`, `scripts/linear_probe.py`
+- Test: `tests/test_eval_context.py`, `tests/test_linear_probe.py`
 
 **Step 1: Re-serve the student with the adapter** (restart the `vlm` tmux session)
 ```bash
@@ -3307,10 +3378,114 @@ zrt serve hf:Qwen/Qwen2.5-VL-7B-Instruct --host 0.0.0.0 --port 8000 --max-model-
 curl -s localhost:8000/v1/models | python -m json.tool   # expect both base id and "context"
 ```
 
-**Step 2: Write `scripts/eval_context.py`**
+**Step 2: Write the failing test** for the pure scoring function (fake classify, fake image reader, fake clock; no server needed)
 
 ```python
-"""Agreement with teacher labels on the held-out split, plus latency and tokens."""
+import pytest
+
+from scripts.eval_context import GROUP, evaluate
+from sentinel.schema import ContextResult
+
+
+def _label(source_type: str) -> dict:
+    return {"source_type": source_type, "smoke_color": "grey", "attended": "no",
+            "near_structures": False, "near_road": False, "size_estimate": "small",
+            "description": "Smoke on a ridge."}
+
+
+def _row(image: str, source_type: str) -> dict:
+    return {"image": image, "label": _label(source_type)}
+
+
+class FakeClock:
+    """Each classify call advances time by the next step (seconds)."""
+
+    def __init__(self, steps):
+        self.t = 0.0
+        self.steps = list(steps)
+        self.calls = 0
+
+    def __call__(self):
+        self.calls += 1
+        if self.calls % 2 == 0:  # second read of a pair = after classify
+            self.t += self.steps.pop(0)
+        return self.t
+
+
+def _run(rows, answers, steps, tokens=100):
+    """answers: image bytes -> predicted source_type, or None for a parse failure."""
+    seen = []
+
+    def classify(jpeg):
+        seen.append(jpeg)
+        st = answers[jpeg]
+        return (ContextResult(**_label(st)) if st else None), tokens
+
+    out = evaluate(rows, classify, read_bytes=lambda p: p.encode(), clock=FakeClock(steps))
+    return out, seen
+
+
+def test_accuracy_group_parse_fail_and_per_source():
+    rows = [
+        _row("a.jpg", "wildland"),       # exact
+        _row("b.jpg", "structure"),      # wrong type, same danger group
+        _row("c.jpg", "campfire"),       # parse failure
+        _row("d.jpg", "fog_dust_cloud"),  # wrong group
+    ]
+    answers = {b"a.jpg": "wildland", b"b.jpg": "wildland", b"c.jpg": None, b"d.jpg": "campfire"}
+    out, seen = _run(rows, answers, steps=[0.1, 0.2, 0.3, 0.4])
+
+    assert seen == [b"a.jpg", b"b.jpg", b"c.jpg", b"d.jpg"]
+    assert out["n"] == 4
+    assert out["source_type_acc"] == pytest.approx(0.25)
+    assert out["group_acc"] == pytest.approx(0.5)
+    assert out["parse_fail_rate"] == pytest.approx(0.25)
+    assert out["tokens_per_call"] == pytest.approx(100.0)
+    assert out["latency_ms_p50"] == pytest.approx(250.0)
+    assert out["latency_ms_p95"] == pytest.approx(385.0)
+    assert out["per_source"] == {
+        "wildland": {"n": 1, "correct": 1},
+        "structure": {"n": 1, "correct": 0},
+        "campfire": {"n": 1, "correct": 0},
+        "fog_dust_cloud": {"n": 1, "correct": 0},
+    }
+
+
+def test_per_source_aggregates_repeated_classes():
+    rows = [_row("a.jpg", "campfire"), _row("b.jpg", "campfire"), _row("c.jpg", "wildland")]
+    answers = {b"a.jpg": "campfire", b"b.jpg": "bbq_chimney", b"c.jpg": "wildland"}
+    out, _ = _run(rows, answers, steps=[0.01] * 3)
+    assert out["per_source"]["campfire"] == {"n": 2, "correct": 1}
+    assert out["per_source"]["wildland"] == {"n": 1, "correct": 1}
+    assert out["group_acc"] == pytest.approx(1.0)  # bbq_chimney and campfire are both benign
+
+
+def test_empty_split_raises():
+    with pytest.raises(ValueError, match="empty split"):
+        evaluate([], lambda b: (None, 0), read_bytes=lambda p: b"")
+
+
+def test_group_covers_every_source_type():
+    from typing import get_args
+
+    from sentinel.schema import SourceType
+    assert set(GROUP) == set(get_args(SourceType))
+```
+
+Run: `pytest tests/test_eval_context.py -v`
+Expected: FAIL, `ModuleNotFoundError`
+
+**Step 3: Write `scripts/eval_context.py`.** `evaluate()` is pure and unit-tested; `main()` only wires the served model to it. Any JSONL of `{"image", "label"}` rows works as `--split` (teacher held-out, or a hand-checked gold set).
+
+```python
+"""Score a context VLM against a labeled JSONL split and save results/context_<name>.json.
+
+Rows are {"image": <crop path>, "label": <ContextResult dict>} (scripts/teacher_label.py output,
+or a hand-checked gold set in the same format).
+
+BEFORE: --model "<base id from /v1/models>" --name before_base7b
+AFTER:  --model context --name after_lora7b      (vLLM serving the LoRA adapter as "context")
+"""
 import argparse
 import json
 import time
@@ -3325,113 +3500,227 @@ GROUP = {"wildland": "danger", "structure": "danger", "vehicle": "danger",
          "industrial_stack": "benign", "fog_dust_cloud": "lookalike", "unknown": "unknown"}
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--model", required=True)
-    ap.add_argument("--name", required=True)
-    ap.add_argument("--base-url", default="http://localhost:8000/v1")
-    ap.add_argument("--split", default="data/teacher/heldout.jsonl")
-    a = ap.parse_args()
+def evaluate(rows, classify, read_bytes=lambda p: Path(p).read_bytes(), clock=time.perf_counter) -> dict:
+    """Run classify(jpeg) -> (ContextResult | None, tokens) over rows and score it against row labels.
 
-    vlm = ContextVLM(a.model, a.base_url, timeout_s=60)
-    rows = [json.loads(line) for line in open(a.split)]
+    A parse failure (None) counts as wrong for both accuracies.
+    """
+    rows = list(rows)
+    if not rows:
+        raise ValueError("empty split")
     exact = group = fails = 0
     latencies, tokens = [], []
+    per_source: dict[str, dict[str, int]] = {}
     for r in rows:
-        t0 = time.perf_counter()
-        ctx, tok = vlm.classify(Path(r["image"]).read_bytes())
-        latencies.append((time.perf_counter() - t0) * 1000)
+        jpeg = read_bytes(r["image"])
+        t0 = clock()
+        ctx, tok = classify(jpeg)
+        latencies.append((clock() - t0) * 1000)
         tokens.append(tok)
+        want = r["label"]["source_type"]
+        bucket = per_source.setdefault(want, {"n": 0, "correct": 0})
+        bucket["n"] += 1
         if ctx is None:
             fails += 1
             continue
-        want = r["label"]["source_type"]
-        exact += ctx.source_type == want
+        hit = ctx.source_type == want
+        exact += hit
+        bucket["correct"] += hit
         group += GROUP[ctx.source_type] == GROUP[want]
-    out = {"name": a.name, "n": len(rows), "source_type_acc": exact / len(rows),
-           "group_acc": group / len(rows), "parse_fail_rate": fails / len(rows),
-           "latency_ms_p50": float(np.percentile(latencies, 50)),
-           "latency_ms_p95": float(np.percentile(latencies, 95)),
-           "tokens_per_call": float(np.mean(tokens))}
-    Path("results").mkdir(exist_ok=True)
-    Path(f"results/context_{a.name}.json").write_text(json.dumps(out, indent=2))
-    print(json.dumps(out, indent=2))
+    n = len(rows)
+    return {
+        "n": n,
+        "source_type_acc": exact / n,
+        "group_acc": group / n,
+        "parse_fail_rate": fails / n,
+        "latency_ms_p50": float(np.percentile(latencies, 50)),
+        "latency_ms_p95": float(np.percentile(latencies, 95)),
+        "tokens_per_call": float(np.mean(tokens)),
+        "per_source": per_source,
+    }
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--model", required=True, help='served model id, or "context" for the LoRA adapter')
+    ap.add_argument("--name", required=True, help="result tag, e.g. before_base7b / after_lora7b")
+    ap.add_argument("--base-url", default="http://localhost:8000/v1")
+    ap.add_argument("--split", default="data/teacher/heldout.jsonl")
+    ap.add_argument("--timeout", type=float, default=60, help="per-request timeout, seconds")
+    a = ap.parse_args()
+
+    vlm = ContextVLM(a.model, a.base_url, timeout_s=a.timeout)
+    with open(a.split) as f:
+        rows = [json.loads(line) for line in f if line.strip()]
+    result = {"name": a.name, "model": a.model, "split": a.split, **evaluate(rows, vlm.classify)}
+
+    out = Path("results") / f"context_{a.name}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result, indent=2))
+    print(f"wrote {out}")
 
 
 if __name__ == "__main__":
     main()
 ```
 
-**Step 3: Run base vs adapter (and teacher, if it's still served on :8001)**
-```bash
-python scripts/eval_context.py --model "hf:Qwen/Qwen2.5-VL-7B-Instruct" --name base7b
-python scripts/eval_context.py --model context --name lora7b
-# optional: python scripts/eval_context.py --model <teacher id> --base-url http://localhost:8001/v1 --name teacher
-```
-Expected: `lora7b` group_acc > `base7b` group_acc. That's the headline distillation number. If it's not better, report it honestly and keep the base model.
+Run: `pytest tests/test_eval_context.py -v` → 4 passed.
 
-**Step 4: Write `scripts/linear_probe.py`** (cheap baseline; the first thing to cut)
+**Step 4: Write `scripts/linear_probe.py`** (cheap baseline; the first thing to cut). It reuses `GROUP` from `eval_context.py` and writes the same accuracy keys (`name`, `n`, `source_type_acc`, `group_acc`) plus `latency_ms_per_image`. Test first:
 
 ```python
-"""SigLIP embeddings + logistic regression on teacher source_type labels."""
+import pytest
+
+from scripts.linear_probe import group_accuracy
+
+
+def test_group_accuracy_counts_same_group_as_correct():
+    y_true = ["wildland", "campfire", "fog_dust_cloud", "unknown"]
+    y_pred = ["structure", "bbq_chimney", "wildland", "unknown"]
+    assert group_accuracy(y_true, y_pred) == pytest.approx(0.75)
+
+
+def test_group_accuracy_rejects_bad_input():
+    with pytest.raises(ValueError):
+        group_accuracy([], [])
+    with pytest.raises(ValueError):
+        group_accuracy(["wildland"], ["wildland", "campfire"])
+```
+
+```python
+"""Cheap baseline: SigLIP image embeddings + logistic regression on teacher source_type labels.
+
+Writes results/context_linear_probe.json with the same accuracy keys as scripts/eval_context.py.
+Fast, but it only predicts source_type: no attendance, structures, road or description.
+"""
+import argparse
 import json
 import time
 from pathlib import Path
 
-import numpy as np
-import torch
-from PIL import Image
-from sklearn.linear_model import LogisticRegression
-from transformers import AutoModel, AutoProcessor
+try:
+    from scripts.eval_context import GROUP
+except ModuleNotFoundError:  # run as `python scripts/linear_probe.py`: scripts/ is on sys.path, not the repo root
+    from eval_context import GROUP
 
-MODEL = "google/siglip-base-patch16-224"
+
+def group_accuracy(y_true, y_pred) -> float:
+    """Fraction of predictions in the same danger/benign/lookalike/unknown group as the label."""
+    y_true, y_pred = list(y_true), list(y_pred)
+    if not y_true or len(y_true) != len(y_pred):
+        raise ValueError("need equal-length, non-empty label lists")
+    return sum(GROUP[t] == GROUP[p] for t, p in zip(y_true, y_pred)) / len(y_true)
 
 
 def load(path):
-    rows = [json.loads(line) for line in open(path)]
+    with open(path) as f:
+        rows = [json.loads(line) for line in f if line.strip()]
     return [r["image"] for r in rows], [r["label"]["source_type"] for r in rows]
 
 
-def embed(paths, model, proc):
-    feats = []
-    for i in range(0, len(paths), 64):
-        imgs = [Image.open(p).convert("RGB") for p in paths[i:i + 64]]
-        with torch.no_grad():
-            f = model.get_image_features(**proc(images=imgs, return_tensors="pt").to("cuda"))
-        feats.append(torch.nn.functional.normalize(f, dim=-1).float().cpu().numpy())
-    return np.concatenate(feats)
-
-
 def main() -> None:
-    model = AutoModel.from_pretrained(MODEL).to("cuda").eval()
-    proc = AutoProcessor.from_pretrained(MODEL)
-    xtr, ytr = load("data/teacher/train.jsonl")
-    xte, yte = load("data/teacher/heldout.jsonl")
-    clf = LogisticRegression(max_iter=2000).fit(embed(xtr, model, proc), ytr)
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--train", default="data/teacher/train.jsonl")
+    ap.add_argument("--heldout", default="data/teacher/heldout.jsonl")
+    ap.add_argument("--model", default="google/siglip-base-patch16-224")
+    ap.add_argument("--device", default="cuda", help='"cuda" or "cpu"')
+    a = ap.parse_args()
+
+    # lazy: --help and unit tests work without torch/transformers/sklearn
+    import numpy as np
+    import torch
+    from PIL import Image
+    from sklearn.linear_model import LogisticRegression
+    from transformers import AutoModel, AutoProcessor
+
+    model = AutoModel.from_pretrained(a.model).to(a.device).eval()
+    proc = AutoProcessor.from_pretrained(a.model)
+
+    def embed(paths):
+        feats = []
+        for i in range(0, len(paths), 64):
+            imgs = [Image.open(p).convert("RGB") for p in paths[i:i + 64]]
+            with torch.no_grad():
+                f = model.get_image_features(**proc(images=imgs, return_tensors="pt").to(a.device))
+            feats.append(torch.nn.functional.normalize(f, dim=-1).float().cpu().numpy())
+        return np.concatenate(feats)
+
+    xtr, ytr = load(a.train)
+    xte, yte = load(a.heldout)
+    if not xte:
+        raise ValueError("empty split")
+    clf = LogisticRegression(max_iter=2000).fit(embed(xtr), ytr)
     t0 = time.perf_counter()
-    acc = clf.score(embed(xte, model, proc), yte)
+    pred = list(clf.predict(embed(xte)))
     ms = (time.perf_counter() - t0) * 1000 / len(xte)
-    out = {"name": "siglip_linear_probe", "source_type_acc": acc, "latency_ms_per_image": ms}
-    Path("results/context_linear_probe.json").write_text(json.dumps(out, indent=2))
-    print(out)
+
+    out = {
+        "name": "siglip_linear_probe",
+        "model": a.model,
+        "split": a.heldout,
+        "n": len(yte),
+        "source_type_acc": sum(t == p for t, p in zip(yte, pred)) / len(yte),
+        "group_acc": group_accuracy(yte, pred),
+        "latency_ms_per_image": ms,
+    }
+    path = Path("results") / "context_linear_probe.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=2) + "\n")
+    print(json.dumps(out, indent=2))
+    print(f"wrote {path}")
 
 
 if __name__ == "__main__":
     main()
 ```
 
-Run: `python scripts/linear_probe.py`
-Expected: accuracy printed. The comparison you want to show is that it's fast but has no reasoning about attendance, structures or description, which is why the VLM earns its cost.
+Run: `pytest tests/test_linear_probe.py -v` → 2 passed; `python scripts/linear_probe.py --help` works without torch/sklearn.
 
-**Step 5: Switch the runtime to the adapter**, if it won:
+**Step 5: Run the before/after comparison** — see Task 24b for the exact sequence. Expected: `after_lora7b` group_acc > `before_base7b` group_acc. That's the headline distillation number. If it's not better, report it honestly and keep the base model. The linear probe is fast but has no reasoning about attendance, structures or description, which is why the VLM earns its cost.
+
+**Step 6: Switch the runtime to the adapter**, if it won:
 ```json
 {"vlm_model": "context"}
 ```
 
-**Step 6: Commit**
+**Step 7: Commit**
 ```bash
-git add scripts/eval_context.py scripts/linear_probe.py config/settings.json results/context_*.json
-git commit -m "feat: distillation eval and linear-probe baseline"
+git add scripts/eval_context.py tests/test_eval_context.py scripts/linear_probe.py tests/test_linear_probe.py
+git commit -m "feat: context VLM evaluation for before/after comparison"
+# after Task 24b, if the adapter won:
+git add config/settings.json && git commit -m "config: serve the distilled context adapter"
+```
+
+---
+
+### Task 24b: Context VLM before/after evaluation (Nano)
+
+Measure the base student, distill, and measure again on the same held-out split (`data/teacher/heldout.jsonl`, never used for training). BEFORE is base `Qwen/Qwen2.5-VL-7B-Instruct` served on :8000 (Task 2); AFTER is the same base plus the LoRA adapter served as model `context` (Task 24 Step 1). Optional reference rows: the 32B teacher on :8001 (upper bound) and the SigLIP linear probe (cheap floor).
+
+**Fairness note:** accuracy on teacher labels measures distillation (agreement with the 32B teacher), not ground truth; the hand-checked gold split measures real accuracy.
+
+**Step 1: Run the sequence**
+```bash
+# BEFORE (base model, served on :8000 per Task 2)
+python scripts/eval_context.py --model "<base id from /v1/models>" --name before_base7b
+# optional upper bound: teacher on :8001
+python scripts/eval_context.py --model "<teacher id>" --base-url http://localhost:8001/v1 --name ref_teacher32b
+# TRAIN
+python scripts/train_lora.py
+# AFTER (re-serve with --enable-lora --lora-modules context=$HOME/sentinel/adapters/context per Task 24 Step 1)
+python scripts/eval_context.py --model context --name after_lora7b
+# cheap baseline
+python scripts/linear_probe.py
+# optional gold set: same JSONL format, hand-checked
+python scripts/eval_context.py --model context --split data/gold/gold.jsonl --name after_lora7b_gold
+```
+Expected: `results/context_before_base7b.json`, `results/context_after_lora7b.json` (and the optional rows), each with `n`, `source_type_acc`, `group_acc`, `parse_fail_rate`, `latency_ms_p50`, `latency_ms_p95`, `tokens_per_call`, `per_source`; `results/context_linear_probe.json` with `n`, `source_type_acc`, `group_acc`, `latency_ms_per_image`. For a gold comparison, also run the BEFORE model on the gold split (`--name before_base7b_gold`). Put the rows side by side in `results/context.md`.
+
+**Step 2: Commit**
+```bash
+git add results/context_*.json results/context.md
+git commit -m "results: context VLM before/after"
 ```
 
 ---
