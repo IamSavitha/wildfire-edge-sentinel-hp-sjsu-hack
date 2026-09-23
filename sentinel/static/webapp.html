@@ -268,7 +268,7 @@
       <h3>Edge cascade vs cloud: every image to a VLM</h3>
       <div id="econ"><p class="hint">No images yet.</p></div>
       <p class="note">Edge: the detector runs on every image, the local VLM only on detections (on a ≤448 px crop), and only
-        ALERT reports leave the device. Edge: $0 marginal API cost (Nano hardware and power not included); the edge pays
+        ALERT reports leave the device. Cost: $0 marginal API cost (Nano hardware and power not included); the edge pays
         uplink only, counting alerts sent and alerts queued to send when the link returns.
         Cloud baseline: every image uploaded and sent whole to a Qwen2.5-VL-class model at ≤1280 px, the same frame
         the edge VLM gets under “force”. Its image tokens are <em>estimated</em> with Qwen's resize rule; prompt and
