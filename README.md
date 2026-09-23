@@ -185,6 +185,49 @@ rates in the price form: $/M input tokens, $/M output tokens, $/GB uplink, token
 bytes per streamed frame. They apply to this session only (`POST /api/prices`) and are not written to
 disk. Token counts, latencies and frame counts are measured.
 
+## Demo app (try the models + live economics)
+
+`sentinel.webapp` is a two-pane page for judges. **Left:** pick a sample image (D-Fire test, a FIgLib tower
+fire sequence, benign look-alikes) or upload your own, optionally set the ground truth, choose the passes,
+and run them side by side. Each pass is the real cascade: detector → 0.4 gate → context VLM on a ≤448 px
+crop → severity rules → dispatch report → escalation. **Right:** live usage and economics for the session:
+images, VLM calls, calls the cascade avoided, tokens used vs a full-frame cloud estimate, latency,
+accuracy vs ground truth, and edge vs "cloud: every image to a VLM" cost, tokens and bytes. It also shows
+the online/offline counts, live vLLM metrics per served model (the same zrt sockets `sentinel.monitor`
+reads) and the before/after benchmark numbers from `results/*.json`.
+
+```bash
+# on the Nano (binds 127.0.0.1:8095)
+python -m sentinel.webapp
+# on your laptop, then open http://localhost:8095
+ssh -N -L 8095:localhost:8095 hp11@<nano-ip>
+```
+
+| Pass | Detector | Context VLM (served name on `:8000/v1`) |
+|---|---|---|
+| BEFORE fine-tuning | `yolov8s-worldv2.pt` zero-shot, prompted `smoke, fire` | `base7b` (Qwen2.5-VL-7B base) |
+| AFTER fine-tuning | `models/smoke_yolo.pt` (YOLO11s fine-tuned) | `context` (same base + LoRA) |
+| Teacher reference (optional) | `models/smoke_yolo.pt` | `teacher32b`, if served |
+
+To run BEFORE and AFTER in one server, serve `base7b` with the adapter:
+`--enable-lora --max-lora-rank 16 --lora-modules context=$HOME/sentinel/adapters/context`. The page lists
+what `GET /v1/models` reports. A pass whose VLM is not served runs detector-only and says so on its card.
+Other served names or weights: `--before-vlm`, `--after-vlm`, `--teacher-vlm`, `--before-weights`,
+`--after-weights`. Other flags: `--vlm-base-url`, `--run-dir`, `--prices`, `--samples DIR` (repeatable;
+default `data/dfire/test/images`, `data/demo`, `data/benign`), `--results`, `--towers` (the first tower
+labels the reports), `--no-monitor`.
+
+- **Network toggle:** online, an ALERT is sent with a forecast and its bytes are counted. Offline, it is
+  queued in the outbox and nothing is sent. LOG and MONITOR stay on the device. Dispatch is simulated.
+- **Cloud estimate:** every image uploaded (its file size) and sent whole to a Qwen2.5-VL-class model.
+  Image tokens use Qwen's resize rule at vLLM's default `max_pixels` (12,845,056), so a 1920×1080 frame is
+  2,691 image tokens and a 448×448 crop is 256. Prompt-text and output tokens per call are the ones
+  measured on the Nano. This figure is an estimate and the page labels it as one.
+- **Prices** are user-supplied, the same as on the monitor: `config/cost_inputs.json` starts at zero, so
+  the page shows "set prices to see $" until you enter rates. Tokens, bytes and latency are measured.
+- Uploads must be JPEG, PNG, WebP or BMP, 15 MB at most. GPU calls are serialized, and each detector is
+  loaded on first use.
+
 ## Datasets and models
 
 Licenses below are as published by each source at the time of writing. **Verify each one before
@@ -221,6 +264,6 @@ Ultralytics enterprise license.
 
 ## Layout
 
-`sentinel/` runtime (pipeline, severity, escalation, outbox, dashboard, live metrics monitor) · `scripts/` training,
+`sentinel/` runtime (pipeline, severity, escalation, outbox, dashboard, live metrics monitor, demo web app) · `scripts/` training,
 evaluation, benchmark and setup · `config/` settings, towers, cost inputs · `tests/` unit tests
 (`pytest`) · `docs/plans/` design and implementation plan.
