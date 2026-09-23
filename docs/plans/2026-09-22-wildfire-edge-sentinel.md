@@ -1141,7 +1141,7 @@ git add sentinel/imaging.py tests/test_imaging.py && git commit -m "feat: contex
 
 ### Task 11: Context VLM client (`vlm_client.py`)
 
-It uses guided JSON output (a schema-constrained response), a tight token cap, and a fixed system prompt (so vLLM prefix caching kicks in). It retries once on bad JSON and returns no result immediately on timeout. The teacher labeling and eval scripts reuse the same client.
+It uses guided JSON output (a schema-constrained response), a tight token cap, and a fixed system prompt (so vLLM prefix caching kicks in). It retries once on bad JSON and returns no result immediately on timeout. The teacher labeling and eval scripts reuse the same client. Because `classify` swallows request errors, `ensure_served()` lets those scripts fail fast (exit with the served ids) when the model id is wrong or the server is down.
 
 **Files:**
 - Create: `sentinel/vlm_client.py`
@@ -1211,6 +1211,37 @@ def test_request_is_token_capped_and_schema_constrained():
     assert call["max_tokens"] <= 200
     assert call["temperature"] == 0
     assert call["response_format"]["type"] == "json_schema"
+
+
+class FakeModels:
+    def __init__(self, ids=(), error=None):
+        self.ids, self.error = list(ids), error
+
+    def list(self):
+        if self.error:
+            raise self.error
+        return SimpleNamespace(data=[SimpleNamespace(id=i) for i in self.ids])
+
+
+def test_ensure_served_passes_when_model_listed():
+    from sentinel.vlm_client import ensure_served
+    ensure_served(SimpleNamespace(models=FakeModels(["base", "context"])), "context", "http://x/v1")
+
+
+def test_ensure_served_exits_when_model_missing():
+    import pytest
+
+    from sentinel.vlm_client import ensure_served
+    with pytest.raises(SystemExit, match=r"'context' not served at http://x/v1; available: \['base'\]"):
+        ensure_served(SimpleNamespace(models=FakeModels(["base"])), "context", "http://x/v1")
+
+
+def test_ensure_served_exits_when_server_unreachable():
+    import pytest
+
+    from sentinel.vlm_client import ensure_served
+    with pytest.raises(SystemExit, match="http://x/v1"):
+        ensure_served(SimpleNamespace(models=FakeModels(error=ConnectionError("refused"))), "m", "http://x/v1")
 ```
 
 **Step 2: Run to verify it fails**
@@ -1279,12 +1310,29 @@ class ContextVLM:
             except ValidationError:
                 continue
         return None, tokens
+            tokens += resp.usage.prompt_tokens + resp.usage.completion_tokens
+            try:
+                return ContextResult.model_validate_json(resp.choices[0].message.content), tokens
+            except ValidationError:
+                continue
+        return None, tokens
+
+
+def ensure_served(client, model: str, base_url: str) -> None:
+    """Fail fast if `model` is not served: classify() swallows request errors, so a wrong id or a
+    down server would otherwise produce a results file full of parse failures."""
+    try:
+        ids = [m.id for m in client.models.list().data]
+    except Exception as exc:
+        raise SystemExit(f"cannot list models at {base_url} ({exc}); is the VLM server up?") from exc
+    if model not in ids:
+        raise SystemExit(f"model {model!r} not served at {base_url}; available: {ids}")
 ```
 
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_vlm_client.py -v`
-Expected: 5 passed
+Expected: 8 passed
 
 **Step 5: Live smoke test on the Nano** (after `git pull`)
 ```bash
@@ -1314,7 +1362,7 @@ A large local teacher VLM labels crops with the context schema, and the LoRA stu
 - Create: `scripts/teacher_label.py`
 - Test: `tests/test_teacher_label.py`
 
-**Step 1: Write the failing test.** Only the YOLO-label parsing is tested. It lives in `sentinel/labels.py` so the test can import it.
+**Step 1: Write the failing test.** The YOLO-label parsing is tested first; it lives in `sentinel/labels.py` so the test can import it. The last two tests cover `make_crops` (accepts .jpg/.jpeg/.png) and `write_labels` (counts rows, skips failed labels) from Step 5.
 
 ```python
 # tests/test_teacher_label.py
@@ -1329,6 +1377,40 @@ def test_yolo_boxes_to_pixels(tmp_path):
 
 def test_missing_label_file_means_no_boxes(tmp_path):
     assert yolo_boxes(tmp_path / "none.txt", 100, 50) == []
+
+
+def test_make_crops_accepts_jpg_jpeg_png(tmp_path):
+    import cv2
+    import numpy as np
+
+    from scripts.teacher_label import make_crops
+    src, out = tmp_path / "benign", tmp_path / "crops"
+    src.mkdir(); out.mkdir()
+    img = np.full((40, 60, 3), 128, np.uint8)
+    for name in ("a.jpg", "b.jpeg", "c.png", "d.PNG", "notes.txt"):
+        if name.endswith("txt"):
+            (src / name).write_text("x")
+        else:
+            cv2.imwrite(str(src / name), img)
+    crops = make_crops(src, src / "_no_labels", out, 100)
+    assert sorted(p.name.rsplit("_", 1)[1] for p in crops) == ["a.jpg", "b.jpg", "c.jpg", "d.jpg"]
+    assert all(p.exists() for p in crops)
+
+
+def test_write_labels_counts_rows_and_skips_failures(tmp_path):
+    import io
+    from pathlib import Path
+
+    from scripts.teacher_label import write_labels
+    from sentinel.schema import ContextResult
+    ctx = ContextResult(source_type="campfire", smoke_color="white", attended="yes",
+                        near_structures=False, near_road=False, size_estimate="small",
+                        description="Campfire.")
+    ftr, fho = io.StringIO(), io.StringIO()
+    pairs = [(Path(f"x{i}.jpg"), ctx if i % 2 else None) for i in range(10)]
+    assert write_labels(pairs, ftr, fho, total=10) == 5
+    assert len((ftr.getvalue() + fho.getvalue()).splitlines()) == 5
+    assert write_labels([(Path("y.jpg"), None)], ftr, fho, total=1) == 0
 ```
 
 **Step 2: Run to verify it fails**
@@ -1360,7 +1442,7 @@ def yolo_boxes(label_path: Path, w: int, h: int) -> list[tuple[float, float, flo
 **Step 4: Run to verify it passes**
 
 Run: `pytest tests/test_teacher_label.py -v`
-Expected: 2 passed
+Expected: the 2 label tests pass; after Step 5, 4 passed.
 
 **Step 5: Write `scripts/teacher_label.py`**
 
@@ -1377,11 +1459,13 @@ import cv2
 
 from sentinel.imaging import crop_box, to_jpeg
 from sentinel.labels import yolo_boxes
-from sentinel.vlm_client import ContextVLM
+from sentinel.vlm_client import ContextVLM, ensure_served
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
 
 def make_crops(images_dir: Path, labels_dir: Path, out_dir: Path, n: int, seed: int = 0) -> list[Path]:
-    imgs = sorted(images_dir.glob("*.jpg"))
+    imgs = sorted(p for p in images_dir.glob("*") if p.suffix.lower() in IMAGE_EXTS)
     random.Random(seed).shuffle(imgs)
     out = []
     for p in imgs[:n]:
@@ -1398,8 +1482,23 @@ def make_crops(images_dir: Path, labels_dir: Path, out_dir: Path, n: int, seed: 
     return out
 
 
+def write_labels(pairs, ftr, fho, total: int) -> int:
+    """Write (crop, ContextResult | None) pairs to train/heldout (15% hash split); returns rows written."""
+    written = 0
+    for i, (p, ctx) in enumerate(pairs):
+        if i % 100 == 0:
+            ftr.flush(); fho.flush()
+            print(f"{i}/{total} ({written} labeled)", flush=True)
+        if ctx is None:
+            continue
+        held = int(hashlib.md5(p.name.encode()).hexdigest(), 16) % 100 < 15
+        (fho if held else ftr).write(json.dumps({"image": str(p), "label": ctx.model_dump()}) + "\n")
+        written += 1
+    return written
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--images", default="data/dfire/train/images")
     ap.add_argument("--labels", default="data/dfire/train/labels")
     ap.add_argument("--benign", default="data/benign")
@@ -1408,6 +1507,8 @@ def main() -> None:
     ap.add_argument("--base-url", default="http://localhost:8001/v1")
     ap.add_argument("--workers", type=int, default=32)
     ap.add_argument("--out", default="data/teacher")
+    ap.add_argument("--append", action="store_true",
+                    help="append to train/heldout.jsonl instead of overwriting (e.g. topping up benign labels)")
     a = ap.parse_args()
 
     out = Path(a.out)
@@ -1418,20 +1519,18 @@ def main() -> None:
     print(f"{len(crops)} crops to label")
 
     teacher = ContextVLM(a.model, a.base_url, timeout_s=180, max_tokens=200)
+    ensure_served(teacher.client, a.model, a.base_url)
 
     def label(p: Path):
         return p, teacher.classify(p.read_bytes())[0]
 
+    mode = "a" if a.append else "w"
     with ThreadPoolExecutor(a.workers) as ex, \
-            open(out / "train.jsonl", "w") as ftr, open(out / "heldout.jsonl", "w") as fho:
-        for i, (p, ctx) in enumerate(ex.map(label, crops)):
-            if ctx is None:
-                continue
-            held = int(hashlib.md5(p.name.encode()).hexdigest(), 16) % 100 < 15
-            (fho if held else ftr).write(json.dumps({"image": str(p), "label": ctx.model_dump()}) + "\n")
-            if i % 100 == 0:
-                ftr.flush(); fho.flush()
-                print(f"{i}/{len(crops)}", flush=True)
+            open(out / "train.jsonl", mode) as ftr, open(out / "heldout.jsonl", mode) as fho:
+        written = write_labels(ex.map(label, crops), ftr, fho, len(crops))
+    if written == 0:
+        raise SystemExit("no labels written — check the teacher server")
+    print(f"wrote {written}/{len(crops)} labels to {out}")
 
 
 if __name__ == "__main__":
@@ -1447,7 +1546,7 @@ zrt serve hf:Qwen/Qwen2.5-VL-32B-Instruct-AWQ --host 0.0.0.0 --port 8001 \
 # new tmux window:
 python scripts/teacher_label.py --model "$(curl -s localhost:8001/v1/models | python -c 'import sys,json;print(json.load(sys.stdin)["data"][0]["id"])')" --n 200
 ```
-Expected: progress lines. Check that throughput is acceptable at `--n 200`, then rerun with `--n 2000`. Use a 72B-AWQ teacher only if the throughput allows. Also record the **teacher's** seconds per image for the distillation slide.
+Expected: progress lines, then `wrote N/M labels`. It exits at once if the model id is not listed at `/v1/models`, and exits non-zero if no label was written. Check that throughput is acceptable at `--n 200`, then rerun with `--n 2000`. Use a 72B-AWQ teacher only if the throughput allows. Also record the **teacher's** seconds per image for the distillation slide.
 
 **Step 7: Commit**
 ```bash
@@ -1877,7 +1976,10 @@ git push
 wc -l data/teacher/train.jsonl data/teacher/heldout.jsonl
 python -c "import json,collections;print(collections.Counter(json.loads(l)['label']['source_type'] for l in open('data/teacher/train.jsonl')))"
 ```
-Expected: ≥ 1,000 train rows and more than one source_type. If a benign class has fewer than 30 rows, add images to `data/benign` and rerun T12 on just those.
+Expected: ≥ 1,000 train rows and more than one source_type. If a benign class has fewer than 30 rows, put extra images (.jpg/.jpeg/.png) in a new subfolder such as `data/benign/topup` and label just those without overwriting the existing splits:
+```bash
+python scripts/teacher_label.py --model "<teacher id>" --n 0 --benign data/benign/topup --append
+```
 
 **Step 2: Write the failing test** (the pure example builder; no torch needed, only pillow)
 
@@ -3542,7 +3644,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sentinel.vlm_client import ContextVLM
+from sentinel.vlm_client import ContextVLM, ensure_served
 
 GROUP = {"wildland": "danger", "structure": "danger", "vehicle": "danger",
          "controlled_burn": "benign", "campfire": "benign", "bbq_chimney": "benign",
@@ -3610,6 +3712,7 @@ def main() -> None:
     check_output(out, a.force)
 
     vlm = ContextVLM(a.model, a.base_url, timeout_s=a.timeout)
+    ensure_served(vlm.client, a.model, a.base_url)
     with open(a.split) as f:
         rows = [json.loads(line) for line in f if line.strip()]
     result = {"name": a.name, "model": a.model, "split": a.split, **evaluate(rows, vlm.classify)}
@@ -3966,10 +4069,14 @@ def main() -> None:
         raise SystemExit(f"no clips in {a.clips}")
 
     from sentinel.detector import YoloDetector  # ultralytics is only needed on the Nano
-    from sentinel.vlm_client import ContextVLM
+    from sentinel.vlm_client import ContextVLM, ensure_served
 
+    if a.detector_only:
+        vlm = NullVLM()
+    else:
+        vlm = ContextVLM(s.vlm_model, s.vlm_base_url, s.vlm_timeout_s)
+        ensure_served(vlm.client, s.vlm_model, s.vlm_base_url)
     detector = YoloDetector(s.detector_weights, classes=s.detector_classes)
-    vlm = NullVLM() if a.detector_only else ContextVLM(s.vlm_model, s.vlm_base_url, s.vlm_timeout_s)
     result = bench(a.name, rows, s, detector, vlm, a.detector_only)
     result["config"] = {"detector_weights": s.detector_weights, "detector_classes": s.detector_classes,
                         "vlm_model": None if a.detector_only else s.vlm_model,

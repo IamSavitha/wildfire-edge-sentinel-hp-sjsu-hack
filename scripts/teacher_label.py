@@ -10,11 +10,13 @@ import cv2
 
 from sentinel.imaging import crop_box, to_jpeg
 from sentinel.labels import yolo_boxes
-from sentinel.vlm_client import ContextVLM
+from sentinel.vlm_client import ContextVLM, ensure_served
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
 
 def make_crops(images_dir: Path, labels_dir: Path, out_dir: Path, n: int, seed: int = 0) -> list[Path]:
-    imgs = sorted(images_dir.glob("*.jpg"))
+    imgs = sorted(p for p in images_dir.glob("*") if p.suffix.lower() in IMAGE_EXTS)
     random.Random(seed).shuffle(imgs)
     out = []
     for p in imgs[:n]:
@@ -31,8 +33,23 @@ def make_crops(images_dir: Path, labels_dir: Path, out_dir: Path, n: int, seed: 
     return out
 
 
+def write_labels(pairs, ftr, fho, total: int) -> int:
+    """Write (crop, ContextResult | None) pairs to train/heldout (15% hash split); returns rows written."""
+    written = 0
+    for i, (p, ctx) in enumerate(pairs):
+        if i % 100 == 0:
+            ftr.flush(); fho.flush()
+            print(f"{i}/{total} ({written} labeled)", flush=True)
+        if ctx is None:
+            continue
+        held = int(hashlib.md5(p.name.encode()).hexdigest(), 16) % 100 < 15
+        (fho if held else ftr).write(json.dumps({"image": str(p), "label": ctx.model_dump()}) + "\n")
+        written += 1
+    return written
+
+
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--images", default="data/dfire/train/images")
     ap.add_argument("--labels", default="data/dfire/train/labels")
     ap.add_argument("--benign", default="data/benign")
@@ -41,6 +58,8 @@ def main() -> None:
     ap.add_argument("--base-url", default="http://localhost:8001/v1")
     ap.add_argument("--workers", type=int, default=32)
     ap.add_argument("--out", default="data/teacher")
+    ap.add_argument("--append", action="store_true",
+                    help="append to train/heldout.jsonl instead of overwriting (e.g. topping up benign labels)")
     a = ap.parse_args()
 
     out = Path(a.out)
@@ -51,20 +70,18 @@ def main() -> None:
     print(f"{len(crops)} crops to label")
 
     teacher = ContextVLM(a.model, a.base_url, timeout_s=180, max_tokens=200)
+    ensure_served(teacher.client, a.model, a.base_url)
 
     def label(p: Path):
         return p, teacher.classify(p.read_bytes())[0]
 
+    mode = "a" if a.append else "w"
     with ThreadPoolExecutor(a.workers) as ex, \
-            open(out / "train.jsonl", "w") as ftr, open(out / "heldout.jsonl", "w") as fho:
-        for i, (p, ctx) in enumerate(ex.map(label, crops)):
-            if ctx is None:
-                continue
-            held = int(hashlib.md5(p.name.encode()).hexdigest(), 16) % 100 < 15
-            (fho if held else ftr).write(json.dumps({"image": str(p), "label": ctx.model_dump()}) + "\n")
-            if i % 100 == 0:
-                ftr.flush(); fho.flush()
-                print(f"{i}/{len(crops)}", flush=True)
+            open(out / "train.jsonl", mode) as ftr, open(out / "heldout.jsonl", mode) as fho:
+        written = write_labels(ex.map(label, crops), ftr, fho, len(crops))
+    if written == 0:
+        raise SystemExit("no labels written — check the teacher server")
+    print(f"wrote {written}/{len(crops)} labels to {out}")
 
 
 if __name__ == "__main__":

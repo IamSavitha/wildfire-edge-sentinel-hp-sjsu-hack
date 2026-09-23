@@ -59,3 +59,34 @@ def test_request_is_token_capped_and_schema_constrained():
     assert call["max_tokens"] <= 200
     assert call["temperature"] == 0
     assert call["response_format"]["type"] == "json_schema"
+
+
+class FakeModels:
+    def __init__(self, ids=(), error=None):
+        self.ids, self.error = list(ids), error
+
+    def list(self):
+        if self.error:
+            raise self.error
+        return SimpleNamespace(data=[SimpleNamespace(id=i) for i in self.ids])
+
+
+def test_ensure_served_passes_when_model_listed():
+    from sentinel.vlm_client import ensure_served
+    ensure_served(SimpleNamespace(models=FakeModels(["base", "context"])), "context", "http://x/v1")
+
+
+def test_ensure_served_exits_when_model_missing():
+    import pytest
+
+    from sentinel.vlm_client import ensure_served
+    with pytest.raises(SystemExit, match=r"'context' not served at http://x/v1; available: \['base'\]"):
+        ensure_served(SimpleNamespace(models=FakeModels(["base"])), "context", "http://x/v1")
+
+
+def test_ensure_served_exits_when_server_unreachable():
+    import pytest
+
+    from sentinel.vlm_client import ensure_served
+    with pytest.raises(SystemExit, match="http://x/v1"):
+        ensure_served(SimpleNamespace(models=FakeModels(error=ConnectionError("refused"))), "m", "http://x/v1")

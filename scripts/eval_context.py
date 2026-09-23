@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from sentinel.vlm_client import ContextVLM
+from sentinel.vlm_client import ContextVLM, ensure_served
 
 GROUP = {"wildland": "danger", "structure": "danger", "vehicle": "danger",
          "controlled_burn": "benign", "campfire": "benign", "bbq_chimney": "benign",
@@ -82,6 +82,7 @@ def main() -> None:
     check_output(out, a.force)
 
     vlm = ContextVLM(a.model, a.base_url, timeout_s=a.timeout)
+    ensure_served(vlm.client, a.model, a.base_url)
     with open(a.split) as f:
         rows = [json.loads(line) for line in f if line.strip()]
     result = {"name": a.name, "model": a.model, "split": a.split, **evaluate(rows, vlm.classify)}

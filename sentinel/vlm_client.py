@@ -56,3 +56,14 @@ class ContextVLM:
             except ValidationError:
                 continue
         return None, tokens
+
+
+def ensure_served(client, model: str, base_url: str) -> None:
+    """Fail fast if `model` is not served: classify() swallows request errors, so a wrong id or a
+    down server would otherwise produce a results file full of parse failures."""
+    try:
+        ids = [m.id for m in client.models.list().data]
+    except Exception as exc:
+        raise SystemExit(f"cannot list models at {base_url} ({exc}); is the VLM server up?") from exc
+    if model not in ids:
+        raise SystemExit(f"model {model!r} not served at {base_url}; available: {ids}")

@@ -153,10 +153,14 @@ def main() -> None:
         raise SystemExit(f"no clips in {a.clips}")
 
     from sentinel.detector import YoloDetector  # ultralytics is only needed on the Nano
-    from sentinel.vlm_client import ContextVLM
+    from sentinel.vlm_client import ContextVLM, ensure_served
 
+    if a.detector_only:
+        vlm = NullVLM()
+    else:
+        vlm = ContextVLM(s.vlm_model, s.vlm_base_url, s.vlm_timeout_s)
+        ensure_served(vlm.client, s.vlm_model, s.vlm_base_url)
     detector = YoloDetector(s.detector_weights, classes=s.detector_classes)
-    vlm = NullVLM() if a.detector_only else ContextVLM(s.vlm_model, s.vlm_base_url, s.vlm_timeout_s)
     result = bench(a.name, rows, s, detector, vlm, a.detector_only)
     result["config"] = {"detector_weights": s.detector_weights, "detector_classes": s.detector_classes,
                         "vlm_model": None if a.detector_only else s.vlm_model,
