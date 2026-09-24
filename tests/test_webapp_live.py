@@ -197,15 +197,26 @@ def test_config_reports_phone_alerts_without_the_topic(tmp_path, monkeypatch):
     client, *_ = make_live_app(tmp_path, n)
     text = client.get("/api/config").text
     c = json.loads(text)
-    assert c["phone"] == {"configured": True, "target": "ntfy.example.org/very…"}
+    assert c["phone"] == {"configured": True, "host": "ntfy.example.org"}
+    assert "very" not in json.dumps(c["phone"])
     assert c["live"]["tower"]["name"] == "Live camera" and c["live"]["min_frames"] == 3
     assert "very-secret" not in text
     assert "very-secret" not in client.get("/api/session").text
 
 
-def test_analyze_alert_is_pushed_once_per_request(tmp_path):
+def test_analyze_does_not_push_by_default(tmp_path):
     n = FakeNotifier()
     client, made, clock, _ = make_live_app(tmp_path, n)
+    img = {"image": ("x.jpg", jpeg(), "image/jpeg")}
+    r = client.post("/api/analyze", files=img, data={"pipelines": "after"}).json()
+    assert r["results"][0]["severity"] == "ALERT" and n.alerts == []
+    assert "delivery" not in r["results"][0]["escalation"]
+    assert client.get("/api/config").json()["deliver_image_alerts"] is False
+
+
+def test_analyze_alert_is_pushed_once_per_request(tmp_path):
+    n = FakeNotifier()
+    client, made, clock, _ = make_live_app(tmp_path, n, deliver_image_alerts=True)
     img = {"image": ("x.jpg", jpeg(), "image/jpeg")}
     r = client.post("/api/analyze", files=img, data={"pipelines": "before,after"}).json()
     assert [x["severity"] for x in r["results"]] == ["ALERT", "ALERT"]
@@ -218,7 +229,7 @@ def test_analyze_alert_is_pushed_once_per_request(tmp_path):
 
 def test_analyze_offline_alert_waits_for_the_link(tmp_path):
     n = FakeNotifier()
-    client, made, clock, _ = make_live_app(tmp_path, n)
+    client, made, clock, _ = make_live_app(tmp_path, n, deliver_image_alerts=True)
     client.post("/api/network", json={"online": False})
     img = {"image": ("x.jpg", jpeg(), "image/jpeg")}
     r = client.post("/api/analyze", files=img, data={"pipelines": "after"}).json()
@@ -229,7 +240,7 @@ def test_analyze_offline_alert_waits_for_the_link(tmp_path):
 
 
 def test_analyze_without_delivery_configured_is_unchanged(tmp_path):
-    client, made, clock, _ = make_live_app(tmp_path)
+    client, made, clock, _ = make_live_app(tmp_path, deliver_image_alerts=True)
     img = {"image": ("x.jpg", jpeg(), "image/jpeg")}
     r = client.post("/api/analyze", files=img, data={"pipelines": "after"}).json()
     assert "delivery" not in r["results"][0]["escalation"]
@@ -255,7 +266,8 @@ def test_cli_help_lists_live_flags(capsys):
     with pytest.raises(SystemExit):
         webapp_main(["--help"])
     out = capsys.readouterr().out
-    for flag in ("--live-recheck-s", "--live-lat", "--live-lon", "--dispatch-url", "--state-dir"):
+    for flag in ("--live-recheck-s", "--live-lat", "--live-lon", "--dispatch-url", "--state-dir",
+                 "--deliver-image-alerts"):
         assert flag in out
 
 

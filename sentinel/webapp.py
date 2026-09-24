@@ -222,10 +222,10 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                    notifier=None, dispatch_fn: Callable[[dict], None] | None = None,
                    outbox_path: str = ":memory:", live_recheck_s: float = 10.0,
                    live_lat: float | None = None, live_lon: float | None = None,
-                   flush_every_s: float = FLUSH_EVERY_S) -> FastAPI:
+                   flush_every_s: float = FLUSH_EVERY_S, deliver_image_alerts: bool = False) -> FastAPI:
     """notifier: phone pushes (NtfyNotifier or None); dispatch_fn: POST an ALERT to dispatch (or None).
-    ALERTs from the live camera, and from /api/analyze when either is set, are delivered for real
-    through a durable outbox at `outbox_path`."""
+    ALERTs from the live camera are delivered for real through a durable outbox at `outbox_path`;
+    ALERTs from /api/analyze (sample photos, uploads) only with deliver_image_alerts=True."""
     detectors = detectors or DETECTORS
     pipelines = pipelines or PIPELINES
     tower = tower or DEMO_TOWER
@@ -367,8 +367,8 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                 "online": link.online, "min_conf": min_conf, "truths": list(TRUTHS),
                 "tower": {"id": tower.id, "name": tower.name, "lat": tower.lat, "lon": tower.lon},
                 "phone": {"configured": notifier is not None,
-                          "target": getattr(notifier, "target", None) if notifier is not None else None},
-                "dispatch_configured": dispatch_fn is not None,
+                          "host": getattr(notifier, "host", None) if notifier is not None else None},
+                "dispatch_configured": dispatch_fn is not None, "deliver_image_alerts": deliver_image_alerts,
                 "live": {"tower": {"id": live_tower.id, "name": live_tower.name, "lat": live_tower.lat,
                                    "lon": live_tower.lon},
                          "detector": live_pipe["detector"], "detector_weights": live_spec["weights"],
@@ -450,7 +450,7 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                 r.pop("report", None)       # the text and thumbnail are returned separately
             out.append(r)
         session.record_request(online)
-        if alerts and delivery.configured:
+        if alerts and deliver_image_alerts and delivery.configured:
             deliver_one(alerts)
         return out
 
@@ -628,6 +628,9 @@ def main(argv=None):
     ap.add_argument("--dispatch-url", help="also POST each ALERT to this dispatch endpoint "
                                            "(e.g. scripts/dispatch_stub.py); default: phone only")
     ap.add_argument("--state-dir", default="data", help="where the live alert outbox lives (live_outbox.db)")
+    ap.add_argument("--deliver-image-alerts", action="store_true",
+                    help="also push ALERTs from the single-image tab (samples/uploads) to the phone/dispatch; "
+                         "default: live camera only")
     args = ap.parse_args(argv)
 
     detectors = detector_specs(args.before_weights, args.after_weights, args.after_imgsz)
@@ -649,7 +652,7 @@ def main(argv=None):
                           fetch_json, system_stats)
     from sentinel.notify import NtfyNotifier
     notifier = NtfyNotifier.from_env()     # NTFY_TOPIC_URL (+ NTFY_TOKEN); the URL is never printed
-    print(f"phone alerts: {'configured (' + notifier.target + ')' if notifier else 'not configured'}", flush=True)
+    print(f"phone alerts: {'configured (' + notifier.host + ')' if notifier else 'not configured'}", flush=True)
     dispatch_fn = None
     if args.dispatch_url:
         from functools import partial
@@ -662,7 +665,8 @@ def main(argv=None):
                          vlm_base_url=args.vlm_base_url, vlm_timeout_s=args.vlm_timeout,
                          notifier=notifier, dispatch_fn=dispatch_fn,
                          outbox_path=str(Path(args.state_dir) / "live_outbox.db"),
-                         live_recheck_s=args.live_recheck_s, live_lat=args.live_lat, live_lon=args.live_lon)
+                         live_recheck_s=args.live_recheck_s, live_lat=args.live_lat, live_lon=args.live_lon,
+                         deliver_image_alerts=args.deliver_image_alerts)
     import uvicorn
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
