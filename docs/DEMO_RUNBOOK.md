@@ -9,27 +9,31 @@ Version on stage: **`v1.3.0-joint`** (joint detector at 960 px + LoRA-distilled 
    ```bash
    ssh hp11@100.109.162.35 'cd ~/sentinel && ./scripts/start_demo.sh'
    ```
-   It must print `before … OK` and `after … OK`.
+   It must print `before … OK`, `after … OK` and `incident map: HTTP 200`.
 3. **Open the tunnel on the laptop** (leave this terminal open):
    ```bash
-   ssh -N -L 8095:localhost:8095 -L 8090:localhost:8090 hp11@100.109.162.35
+   ssh -N -L 8095:localhost:8095 -L 8090:localhost:8090 -L 8100:localhost:8100 hp11@100.109.162.35
    ```
-4. Open **http://localhost:8095** (demo app) and **http://localhost:8090** (live model metrics).
+4. Open **http://localhost:8095** (demo app), **http://localhost:8090** (live model metrics) and **http://localhost:8100** (incident map).
 5. In the demo app, click **Reset session** so the economics start from zero, and enter per-million-token prices only if you have current published rates to cite.
-6. **Backup:** have the screen recording of a full run ready in case the link drops.
+6. In the incident map, open **Demo guide → Load demo scenarios** now: the photos run in seconds, but the two live tower watches (Beaver, Junction) replay for a few minutes. Leave the dispatch link down.
+7. **Backup:** have the screen recording of a full run ready in case the link drops.
 
 ## 2. The 5-minute story
 
 | Minute | Show | Say |
 |---|---|---|
 | 0:00 | Title / problem | "Lookout towers sit where the network is weak. Cloud-only AI goes blind when the link drops and pays for every frame. We moved the whole decision onto an HP ZGX Nano at the tower." |
-| 0:45 | Demo app, left pane — a **FIgLib tower frame 20 min after ignition** (sample `fb755c1466b0` or `c10714c65583`), both passes | "Same frame, before and after fine-tuning on the device. The off-the-shelf models see nothing. After fine-tuning, the detector finds the plume and the local VLM calls it wildland." |
-| 1:45 | A **D-Fire smoke + fire image** (`17a6910bc086`, `125fdbae2090` or `ca734ddea5b5`) | "BEFORE ignores it; AFTER goes straight to ALERT with a dispatch-ready report written on the device." |
-| 2:30 | A **no-fire image** (`90ccfd0b38c5` or `2454af4de0a2`) | "No detection, no model call, zero tokens — the cascade only wakes the VLM when it must." |
-| 3:00 | Toggle **Offline**, run a fire image again | "Link down: the edge still decides, and the alert waits in the outbox. A cloud-only system would make no decision at all." Toggle **Online**: "It goes out within seconds, about 1 KB, before the forecast." |
-| 3:45 | Right pane + http://localhost:8090 | "Tokens used vs a cloud VLM on every frame, bytes sent vs uploading images, live latency per model." |
+| 0:40 | Demo app, left pane — a **FIgLib tower frame 20 min after ignition** (sample `fb755c1466b0` or `c10714c65583`), both passes | "Same frame, before and after fine-tuning on the device. The off-the-shelf models see nothing. After fine-tuning, the detector finds the plume and the local VLM calls it wildland." |
+| 1:30 | A **D-Fire smoke + fire image** (`17a6910bc086`, `125fdbae2090` or `ca734ddea5b5`) | "BEFORE ignores it; AFTER goes straight to ALERT with a dispatch-ready report written on the device." |
+| 2:05 | A **no-fire image** (`90ccfd0b38c5` or `2454af4de0a2`) | "No detection, no model call, zero tokens — the cascade only wakes the VLM when it must." |
+| 2:25 | Toggle **Offline**, run a fire image again | "Link down: the edge still decides, and the alert waits in the outbox. A cloud-only system would make no decision at all." Toggle **Online**: "It goes out within seconds, about 1 KB, before the forecast." |
+| 3:00 | **Incident map** (http://localhost:8100): open the triangulated **Junction Fire** incident (wind arrow + downwind cone), press **Restore link**, then **Ask Sentinel** "What needs attention now?" | "Same models, a network view. Each tower only knows a direction; where two towers' lines cross is the fire. The wind comes from the tower's own station, so the cone works offline. Restore the link: only the waiting ALERTs go out. And a ranger can ask the on-device model, which answers from this log only." |
+| 3:50 | Right pane + http://localhost:8090 | "Tokens used vs a cloud VLM on every frame, bytes sent vs uploading images, live latency per model." |
 | 4:15 | Results slide (`results/before_after.md`) | The numbers below. |
 | 4:45 | Close | "Trained, served and measured on one ZGX Nano; the cloud only when it adds something the tower can't produce." |
+
+The incident map (triangulation, wind, live watch, Ask Sentinel) was built by Kruthika Virupakshappa.
 
 ## 3. The numbers (all measured on the Nano)
 
@@ -63,4 +67,5 @@ Version on stage: **`v1.3.0-joint`** (joint detector at 960 px + LoRA-distilled 
 | Page won't load | Tunnel dropped: re-run the `ssh -N -L …` command; check `tailscale ping`. |
 | AFTER shows "VLM not served" | `ssh hp11@100.109.162.35 'cd ~/sentinel && ./scripts/start_demo.sh'` |
 | Everything slow | Another job on the Nano is using the GPU: `ssh hp11@… 'nvidia-smi; tmux ls'` |
+| Incident map (8100) won't load or shows no incidents | `ssh hp11@… 'tmux ls; tail -20 ~/sentinel/incidentmap-core.log'` then re-run `start_demo.sh` (it reuses any instance already on 8100). Map blank: `~/sentinel-assets` missing (`scripts/setup_map_assets.sh`, needs internet). Watch "recording not on this device": `scripts/fetch_figlib.sh`. Otherwise skip the segment. |
 | Link to the Nano is down | Play the backup recording; talk through `results/before_after.md`. |
