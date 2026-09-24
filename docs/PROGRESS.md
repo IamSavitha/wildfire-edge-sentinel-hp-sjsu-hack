@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 Nano time (ICT) · **Release for the demo: `v1.5.0-live-camera`** · runbook: [DEMO_RUNBOOK.md](DEMO_RUNBOOK.md) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 Nano time (ICT) · **Release for the demo: `v1.5.0-live-camera`** · ⏸ **All services paused on the Nano** (demo app, incident map, metrics, model server) — resume with `ssh hp11@100.109.162.35 'cd ~/sentinel && ./scripts/start_demo.sh'` · runbook: [DEMO_RUNBOOK.md](DEMO_RUNBOOK.md) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
