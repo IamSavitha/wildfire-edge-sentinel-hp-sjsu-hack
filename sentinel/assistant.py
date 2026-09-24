@@ -216,7 +216,7 @@ class Assistant:
                     selected=(sel["name"] if sel else "none selected"), known=known)},
                  {"role": "user", "content": question}], schema=PLAN_SCHEMA, max_tokens=200)
             usage.update(prompt_tokens=pi, completion_tokens=po, model_calls=1)
-            calls = json.loads(plan_txt).get("calls", [])[:MAX_CALLS]
+            calls = [c for c in json.loads(plan_txt).get("calls") or [] if isinstance(c, dict)][:MAX_CALLS]
         except Exception as exc:  # noqa: BLE001 - fall back to a sensible default plan
             log.warning("planning failed: %s", exc)
             calls = [{"tool": "attention_now"}]
@@ -228,7 +228,12 @@ class Assistant:
         for c in calls:
             name = c.get("tool")
             args = {k: v for k, v in c.items() if k != "tool" and v not in (None, "")}
-            results.append({"tool": name, "args": args, "result": self.tool(name, args, selected)})
+            try:
+                res = self.tool(name, args, selected)
+            except Exception as exc:  # noqa: BLE001 - a bad argument from the model must not sink the answer
+                log.warning("tool %s%s failed: %s", name, args, exc)
+                res = {"error": str(exc)[:200]}
+            results.append({"tool": name, "args": args, "result": res})
 
         ids = []
         for r in results:

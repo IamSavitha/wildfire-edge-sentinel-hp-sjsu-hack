@@ -105,3 +105,19 @@ def test_falls_back_when_the_model_is_down(store):
     r = a.ask("anything?")
     assert r["calls"][0]["tool"] == "attention_now" and r["source"] == "facts_only"
     assert "plan_error" in r["usage"]
+
+
+def test_bad_plan_calls_are_skipped_or_reported_not_raised(store):
+    a, _ = make(store, ["attention_now", call("summarize_period", hours=1e12), call("list_incidents", county=5),
+                        call("list_incidents", days=7)])
+    r = a.ask("anything odd?")
+    by_tool = [(c["tool"], c["result"]) for c in r["calls"]]
+    assert [t for t, _ in by_tool] == ["summarize_period", "list_incidents", "list_incidents"]   # the string is skipped
+    assert "error" in by_tool[0][1] and "error" in by_tool[1][1] and len(by_tool[1][1]["error"]) <= 200
+    assert by_tool[2][1]["count"] == 3 and r["answer"] == "- Answer from facts."
+
+
+def test_a_plan_with_only_non_dict_calls_falls_back_to_attention_now(store):
+    a, _ = make(store, ["attention_now", 7])
+    r = a.ask("what now?")
+    assert [c["tool"] for c in r["calls"]] == ["attention_now"] and r["calls"][0]["result"]["ranked"]
