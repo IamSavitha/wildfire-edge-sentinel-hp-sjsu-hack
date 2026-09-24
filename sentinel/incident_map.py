@@ -238,6 +238,10 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
              "bytes_up": 0, "alerts_sent": 0, "alerts_queued": 0, "forecast_fetches": 0}
     stats_lock = threading.Lock()
     gpu_lock = threading.Lock()
+    # Every read-modify-save of an incident (watch step, report, PATCH, link flush, reset) holds inc_lock, so a
+    # watch step that is waiting on the VLM can't save a stale copy over a change made meanwhile. Order:
+    # inc_lock may be held while taking gpu_lock (watch step), never the reverse.
+    inc_lock = threading.RLock()
     cache: dict = {}
 
     def bump(**kw):
@@ -456,25 +460,26 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         loc = locate(cam, gps, form_ll, r["best"], r["width"])
         obs = observation(cam, loc, r["severity"], r["context"], r["report"], r["thumbnail_b64"],
                           (r["best"] or {}).get("conf"), info, r["vlm_status"], name)
-        inc, created = commit(obs, now)
-        boxes = [SimpleNamespace(box=d["box"], conf=d["conf"], cls=d.get("cls", "smoke")) for d in r["detections"]]
-        analysis = {k: r.get(k) for k in ("vlm_status", "vlm_ms", "tokens", "tokens_in", "tokens_out", "sent_size",
-                                          "crop_image_tokens", "context", "vlm_input")}
-        analysis.update(severity=r["severity"], report_text=inc.get("report_text"), escalation=inc.get("escalation"),
-                        why="single photo reported: detector, then the VLM on the strongest box")
-        n = save_frame(inc, image, boxes, {"t": now, "offset_s": info.get("offset_s"), "conf": (r["best"] or {}).get("conf", 0),
-                                           "smoke": r["best"] is not None, "camera_id": cam["id"] if cam else None,
-                                           "camera_name": cam["name"] if cam else "field report",
-                                           "detect_ms": round(r["detect_ms"], 1), "source": info.get("name"),
-                                           "detector": det_name,
-                                           "analysis": analysis})
-        if demo:
-            inc["demo"] = demo
-        inc.setdefault("updates", []).append({"t": now, "kind": "report", "severity": r["severity"],
-                                              "source_type": obs["source_type"], "trend": None,
-                                              "text": f"single frame reported ({info.get('name') or 'upload'}) · "
-                                                      f"{obs['source_type'].replace('_', ' ')} · {r['severity']}"})
-        store.save(inc)
+        with inc_lock:
+            inc, created = commit(obs, now)
+            boxes = [SimpleNamespace(box=d["box"], conf=d["conf"], cls=d.get("cls", "smoke")) for d in r["detections"]]
+            analysis = {k: r.get(k) for k in ("vlm_status", "vlm_ms", "tokens", "tokens_in", "tokens_out", "sent_size",
+                                              "crop_image_tokens", "context", "vlm_input")}
+            analysis.update(severity=r["severity"], report_text=inc.get("report_text"), escalation=inc.get("escalation"),
+                            why="single photo reported: detector, then the VLM on the strongest box")
+            n = save_frame(inc, image, boxes, {"t": now, "offset_s": info.get("offset_s"), "conf": (r["best"] or {}).get("conf", 0),
+                                               "smoke": r["best"] is not None, "camera_id": cam["id"] if cam else None,
+                                               "camera_name": cam["name"] if cam else "field report",
+                                               "detect_ms": round(r["detect_ms"], 1), "source": info.get("name"),
+                                               "detector": det_name,
+                                               "analysis": analysis})
+            if demo:
+                inc["demo"] = demo
+            inc.setdefault("updates", []).append({"t": now, "kind": "report", "severity": r["severity"],
+                                                  "source_type": obs["source_type"], "trend": None,
+                                                  "text": f"single frame reported ({info.get('name') or 'upload'}) · "
+                                                          f"{obs['source_type'].replace('_', ' ')} · {r['severity']}"})
+            store.save(inc)
         return {"image": info, "result": result, "incident": incident_view(inc, 1.0), "created": created, "frame_n": n}
 
     # ------------------------------------------------------------ continuous monitoring (watch)
@@ -781,16 +786,20 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
                 if s.interval_s and s.idx in starts and s.idx:
                     if s.stop.wait(s.interval_s):
                         break
-                watch_step(s)
+                with inc_lock:
+                    if s.stop.is_set():             # stopped (or reset) while waiting for the lock
+                        break
+                    watch_step(s)
             s.state = "stopped" if s.stop.is_set() else "done"
             if s.state == "done" and s.time_mode == "recorded":
-                for iid in s.incident_ids:          # a replayed recording is history, not a live fire
-                    inc = store.get(iid)
-                    if inc:
-                        inc["status"] = "resolved"
-                        inc.setdefault("updates", []).append({"t": inc["updated_at"], "kind": "closed",
-                                                              "text": "recording ended: archived as history"})
-                        store.save(inc)
+                with inc_lock:
+                    for iid in s.incident_ids:          # a replayed recording is history, not a live fire
+                        inc = store.get(iid)
+                        if inc:
+                            inc["status"] = "resolved"
+                            inc.setdefault("updates", []).append({"t": inc["updated_at"], "kind": "closed",
+                                                                  "text": "recording ended: archived as history"})
+                            store.save(inc)
         except Exception as exc:  # noqa: BLE001
             log.exception("watch %s failed", s.id)
             s.state, s.error = "error", f"{type(exc).__name__}: {exc}"[:300]
@@ -1002,6 +1011,10 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
 
     @app.patch("/api/incidents/{incident_id}")
     def patch_incident(incident_id: str, p: IncidentPatch):
+        with inc_lock:
+            return apply_patch(incident_id, p)
+
+    def apply_patch(incident_id: str, p: IncidentPatch):
         inc = store.get(incident_id)
         if inc is None:
             raise HTTPException(404, "unknown incident")
@@ -1031,10 +1044,11 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
 
     @app.post("/api/network")
     def set_network(s: NetworkState):
-        was = state["online"]
-        state["online"] = s.online
-        sent = flush_outbox() if s.online and not was else 0
-        return {"online": state["online"], "flushed": sent}
+        with inc_lock:
+            was = state["online"]
+            state["online"] = s.online
+            sent = flush_outbox() if s.online and not was else 0
+            return {"online": state["online"], "flushed": sent}
 
     # ------------------------------------------------------------ watch endpoints
 
@@ -1144,9 +1158,9 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
     def reset():
         for w in watches.values():
             w.stop.set()
-        store.clear()
-        import shutil
-        shutil.rmtree(frames_dir, ignore_errors=True)
+        with inc_lock:
+            store.clear()
+            shutil.rmtree(frames_dir, ignore_errors=True)
         with stats_lock:
             for k in stats:
                 stats[k] = 0

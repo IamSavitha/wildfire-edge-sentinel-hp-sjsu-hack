@@ -327,7 +327,7 @@ class ScriptedDetector:
         return [Detection(box=(300, 50, 300 + w, 50 + w), conf=0.8, cls="smoke")]
 
 
-def watch_env(tmp_path, n_frames=14, ctx=None):
+def watch_env(tmp_path, n_frames=14, ctx=None, vlm=FakeVLM):
     seq = tmp_path / "data" / "demo" / "fire_x"
     seq.mkdir(parents=True, exist_ok=True)
     for i in range(n_frames):
@@ -337,7 +337,7 @@ def watch_env(tmp_path, n_frames=14, ctx=None):
                                        description="Grey smoke on a slope.")
     return create_map_app(cameras=CAMS, assets_dir=tmp_path / "assets", data_dir=tmp_path / "data",
                           detector_weights="w.pt", detector_factory=lambda w: ScriptedDetector(),
-                          vlm_factory=FakeVLM, model_lister=lambda: ["context"],
+                          vlm_factory=vlm, model_lister=lambda: ["context"],
                           forecast_fn=lambda la, lo: FORECAST, counties=COUNTIES, clock=Clock())
 
 
@@ -622,3 +622,35 @@ def test_a_failing_demo_step_is_marked_and_the_rest_still_run(tmp_path):
     assert d["state"] == "done" and d["error"] is None
     assert gone["status"] == "error" and "missing.jpg" in gone["note"]
     assert a["status"] == "done" and a["severity"] == "ALERT" and link["status"] == "ready"
+
+
+def test_link_restored_during_a_watch_vlm_call_is_not_reverted_by_the_watch(tmp_path):
+    """The watch holds the incident while its VLM call runs; restoring the link at that moment must
+    still leave the queued ALERT sent (the watch step must not save its stale copy over it)."""
+    import threading
+    entered, release = threading.Event(), threading.Event()
+
+    class SlowVLM(FakeVLM):
+        calls = 0
+
+        def classify(self, jpeg_bytes):
+            SlowVLM.calls += 1
+            if SlowVLM.calls == 3:          # the batch after the ALERT was queued
+                entered.set()
+                release.wait(5)
+            return super().classify(jpeg_bytes)
+    app = watch_env(tmp_path, vlm=SlowVLM)
+    out = []
+    with TestClient(app) as c:
+        c.post("/api/watch", json={"recording": "fire_x", "interval_s": 0, "batch_frames": 4,
+                                   "time_mode": "live", "start_offset_s": None})
+        assert entered.wait(5)
+        t = threading.Thread(target=lambda: out.append(c.post("/api/network", json={"online": True}).json()))
+        t.start()
+        t.join(0.3)
+        release.set()
+        t.join(5)
+        [s] = wait_done(c)
+        inc = c.get(f"/api/incidents/{s['incident_ids'][0]}").json()
+    assert out == [{"online": True, "flushed": 1}]
+    assert inc["severity"] == "ALERT" and inc["escalation"]["decision"] == "sent"
