@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Bring the full demo up on the Nano (idempotent): base7b + LoRA adapter, live metrics (8090), demo app (8095).
+# Bring the full demo up on the Nano (idempotent): base7b + LoRA adapter, live metrics (8090), demo app (8095),
+# incident map (8100; an instance already on 8100 is reused).
 # Usage on the Nano:  cd ~/sentinel && ./scripts/start_demo.sh
-# Then on the laptop: ssh -N -L 8095:localhost:8095 -L 8090:localhost:8090 hp11@<nano-ip>
+# Then on the laptop: ssh -N -L 8095:localhost:8095 -L 8090:localhost:8090 -L 8100:localhost:8100 hp11@<nano-ip>
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SOCK=/opt/hp/zrt/run/vllm-base7b.sock
@@ -9,8 +10,9 @@ ADAPTER="$PWD/adapters/context"
 DETECTOR=models/joint_yolo.pt   # v1.3.0-joint (tower 0.718 / D-Fire 0.748); runs at 960 px
 
 say() { printf '\n== %s\n' "$*"; }
+listening() { ss -ltnH "sport = :$1" 2>/dev/null | grep -q . || (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 
-say "1/4 VLM: base7b + LoRA adapter 'context'"
+say "1/5 VLM: base7b + LoRA adapter 'context'"
 if curl -s -m 5 --unix-socket "$SOCK" http://localhost/v1/models 2>/dev/null | grep -q '"context"'; then
   echo "already serving base7b + context"
 else
@@ -24,16 +26,27 @@ else
 fi
 curl -s -m 5 --unix-socket "$SOCK" http://localhost/v1/models | grep -q '"context"' || { echo "VLM not ready"; exit 1; }
 
-say "2/4 Live metrics dashboard (port 8090)"
+say "2/5 Live metrics dashboard (port 8090)"
 tmux has-session -t monitor 2>/dev/null || \
   tmux new-session -d -s monitor "cd $PWD && . .venv/bin/activate && python -m sentinel.monitor --port 8090 > monitor.log 2>&1"
 
-say "3/4 Demo app (port 8095): BEFORE = YOLO-World + base7b, AFTER = $DETECTOR + LoRA"
+say "3/5 Demo app (port 8095): BEFORE = YOLO-World + base7b, AFTER = $DETECTOR + LoRA"
 tmux has-session -t webapp 2>/dev/null || \
   tmux new-session -d -s webapp "cd $PWD && . .venv/bin/activate && python -m sentinel.webapp --port 8095 \
     --vlm-base-url unix://$SOCK --after-weights $DETECTOR > webapp.log 2>&1"
 
-say "4/4 Health check"
+say "4/5 Incident map (port 8100): tower frames through $DETECTOR, own state dir"
+if listening 8100; then
+  echo "incident map already running on 8100 (reusing it)"
+else
+  tmux has-session -t incidentmap-core 2>/dev/null || \
+    tmux new-session -d -s incidentmap-core "cd $PWD && . .venv/bin/activate && python -m sentinel.incident_map \
+      --port 8100 --state-dir $HOME/sentinel-assets/state-core --vlm-base-url unix://$SOCK \
+      --detector-weights $PWD/$DETECTOR > incidentmap-core.log 2>&1"
+  for _ in $(seq 1 20); do listening 8100 && break; sleep 3; done
+fi
+
+say "5/5 Health check"
 for _ in $(seq 1 30); do curl -s -m 5 localhost:8095/api/config >/dev/null 2>&1 && break; sleep 3; done
 curl -s -m 5 localhost:8095/api/config | python3 -c "
 import json, sys
@@ -42,6 +55,7 @@ for p in d['pipelines']:
     if not p.get('optional'):
         print(f\"  {p['name']:6} detector={p['detector_weights']:28} vlm={p['vlm']:8} {'OK' if p['vlm_served'] and p['detector_available'] else 'NOT READY'}\")"
 curl -s -m 5 -o /dev/null -w "  metrics dashboard: HTTP %{http_code}\n" localhost:8090/
+curl -s -m 5 -o /dev/null -w "  incident map: HTTP %{http_code}\n" localhost:8100/ || true
 echo
-echo "Ready. On the laptop: ssh -N -L 8095:localhost:8095 -L 8090:localhost:8090 hp11@<nano-ip>"
-echo "Demo app: http://localhost:8095   Live metrics: http://localhost:8090"
+echo "Ready. On the laptop: ssh -N -L 8095:localhost:8095 -L 8090:localhost:8090 -L 8100:localhost:8100 hp11@<nano-ip>"
+echo "Demo app: http://localhost:8095   Live metrics: http://localhost:8090   Incident map: http://localhost:8100"
