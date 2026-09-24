@@ -178,6 +178,48 @@
   form.prices label { display:flex; flex-direction:column; gap:4px; font-size:12.5px; color:var(--fg2); }
   form.prices input { width:100%; }
   @media (max-width:520px) { .big { font-size:20px; } main { padding:12px 16px; } .vs { grid-template-columns:minmax(0,1fr); } }
+
+  /* tabs */
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--grid); overflow-x:auto; }
+  .tabs button { background:transparent; border:0; border-bottom:2px solid transparent; border-radius:6px 6px 0 0;
+                 padding:8px 12px; font-weight:600; color:var(--fg2); white-space:nowrap; }
+  .tabs button[aria-selected="true"] { color:var(--fg); border-bottom-color:var(--accent); }
+  .tabpanel { display:flex; flex-direction:column; gap:14px; min-width:0; }
+  .tabpanel[hidden] { display:none; }
+
+  /* live camera */
+  .livewrap { position:relative; margin-top:12px; background:#000; border-radius:8px; overflow:hidden; aspect-ratio:16/9; }
+  .livewrap video { display:block; width:100%; height:100%; object-fit:contain; }
+  .livewrap canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  .live-idle { position:absolute; inset:0; margin:0; padding:16px; display:flex; align-items:center; justify-content:center;
+               text-align:center; color:#c3c2b7; font-size:13px; }
+  .live-idle[hidden] { display:none; }
+  #live-msg { font-size:13px; color:var(--fg2); margin:8px 0 0; min-height:1em; }
+  #live-msg.err { color:var(--critical); }
+  .strip { display:grid; grid-template-columns:repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap:8px; }
+  .strip > div { background:var(--sunken); border-radius:6px; padding:8px; min-width:0; }
+  .strip small { display:block; color:var(--fg2); font-size:12px; }
+  .strip strong { font-size:15px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+  .strip .wide { grid-column:1 / -1; }
+  .dots { display:inline-flex; gap:4px; vertical-align:-1px; margin-right:6px; }
+  .dots i { width:11px; height:11px; border-radius:50%; border:1.5px solid var(--axis); }
+  .dots i.on { background:var(--box); border-color:var(--box); }
+  .banner { display:flex; gap:12px; align-items:flex-start; border:2px solid var(--critical); background:var(--surface);
+            border-radius:10px; padding:12px; }
+  .banner[hidden] { display:none; }
+  .banner img { width:104px; border-radius:6px; flex:none; }
+  .banner > div { min-width:0; flex:1; }
+  .banner strong { font-size:15px; }
+  .banner .btn.ghost { flex:none; }
+  .dlv { display:inline-block; font-weight:700; font-size:12px; padding:1px 7px; border-radius:4px; border:1px solid var(--axis); }
+  .dlv.ok { border-color:var(--good); color:var(--good); }
+  .dlv.queued { border-color:var(--warning); }
+  .dlv.bad { border-color:var(--critical); color:var(--critical); }
+  ul.evlist { list-style:none; margin:0; padding:0; display:grid; gap:10px; }
+  ul.evlist li { display:flex; gap:10px; align-items:flex-start; min-width:0; }
+  ul.evlist li > div { min-width:0; }
+  ul.evlist img { width:72px; border-radius:4px; flex:none; }
+  @media (max-width:390px) { .banner { flex-direction:column; } .banner img { width:100%; max-width:220px; } }
 </style>
 </head>
 <body>
@@ -194,7 +236,12 @@
   <!-- ============ LEFT: try the models ============ -->
   <section class="pane" aria-labelledby="left-h">
     <div class="pane-head"><h2 id="left-h">Try the models</h2><span class="hint" id="served-note"></span></div>
+    <div class="tabs" role="tablist" aria-label="Input">
+      <button type="button" role="tab" id="tab-btn-image" aria-selected="true" aria-controls="tab-image">Single image</button>
+      <button type="button" role="tab" id="tab-btn-live" aria-selected="false" aria-controls="tab-live" tabindex="-1">Live camera</button>
+    </div>
 
+    <div class="tabpanel" id="tab-image" role="tabpanel" aria-labelledby="tab-btn-image">
     <div class="card">
       <h3><span class="num">01</span> Select an image</h3>
       <div class="picker">
@@ -244,6 +291,44 @@
 
     <div id="results" class="results" aria-live="polite">
       <div class="placeholder">Results appear here: one card per pass, side by side.</div>
+    </div>
+    </div>
+
+    <div class="tabpanel" id="tab-live" role="tabpanel" aria-labelledby="tab-btn-live" hidden>
+      <div class="card">
+        <h3><span class="num">L1</span> Camera</h3>
+        <p class="hint" id="live-about">Frames go through the AFTER cascade as a live tower: the detector on every frame, the
+          persistence gate (smoke in 3 frames in a row), one VLM call per event, a trend re-check, and one ALERT per fire.</p>
+        <div class="row">
+          <label for="cam">Camera <select id="cam"><option value="">Default camera</option></select></label>
+          <label for="live-interval">Every <select id="live-interval">
+            <option value="1000">1 s</option><option value="1500" selected>1.5 s</option><option value="2000">2 s</option></select></label>
+          <button class="btn" id="live-start" type="button">Start</button>
+        </div>
+        <div class="livewrap">
+          <video id="live-video" playsinline muted aria-label="Camera preview"></video>
+          <canvas id="live-overlay" aria-hidden="true"></canvas>
+          <p class="live-idle" id="live-idle">Camera off. Press Start and allow camera access.</p>
+        </div>
+        <div class="row">
+          <button class="btn ghost" id="notify-test" type="button">Send test alert</button>
+          <button class="btn ghost" id="live-reset" type="button">Reset live</button>
+          <span class="hint" id="phone-note"></span>
+        </div>
+        <p id="live-msg" role="status" aria-live="polite"></p>
+      </div>
+
+      <div class="banner" id="live-banner" role="alert" hidden></div>
+
+      <div class="card">
+        <h3><span class="num">L2</span> What the edge decides</h3>
+        <div class="strip" id="live-strip"><div class="wide"><small>Status</small><strong>Not started</strong></div></div>
+      </div>
+
+      <div class="card">
+        <h3>Recent live events</h3>
+        <div id="live-events"><p class="hint">No events yet.</p></div>
+      </div>
     </div>
   </section>
 
@@ -485,6 +570,7 @@
         ${(e.decision === "sent" || e.decision === "queued") ? `<img src="data:image/jpeg;base64,${esc(r.thumbnail_b64)}" alt="Thumbnail sent with the alert">` : ""}
         <div><span class="decision ${esc(e.decision)}">${esc((e.decision || "").toUpperCase())}</span>
           ${e.decision === "sent" ? ` ${bytes(e.bytes_up)} up` : e.decision === "queued" ? ` ${bytes(e.payload_bytes)} waiting` : " 0 B up"}
+          ${e.delivery ? dlvBadge(e.delivery) : ""}
           <p class="note">${esc(e.note)}</p></div></div>`;
     const tokIO = isNum(r.tokens_in) ? ` <small>${int(r.tokens_in)} in · ${int(r.tokens_out)} out</small>` : "";
     return `<article class="card result">
@@ -528,6 +614,300 @@
       setStatus("Run failed: " + e.message, true);
     } finally { $("run").disabled = false; }
   });
+
+
+  // ---------------- tabs ----------------
+  const TABS = [["tab-btn-image", "tab-image"], ["tab-btn-live", "tab-live"]];
+  function showTab(btnId) {
+    for (const [b, panel] of TABS) {
+      const on = b === btnId;
+      $(b).setAttribute("aria-selected", String(on)); $(b).tabIndex = on ? 0 : -1; $(panel).hidden = !on;
+    }
+    try { localStorage.setItem("sentinel.tab", btnId); } catch (e) {}
+    if (btnId === "tab-btn-live") { listCams(); drawBoxes(live.last); }
+  }
+  TABS.forEach(([b], i) => {
+    $(b).addEventListener("click", () => showTab(b));
+    $(b).addEventListener("keydown", (ev) => {
+      if (ev.key !== "ArrowRight" && ev.key !== "ArrowLeft") return;
+      const next = TABS[(i + (ev.key === "ArrowRight" ? 1 : TABS.length - 1)) % TABS.length][0];
+      showTab(next); $(next).focus();
+    });
+  });
+
+  // ---------------- live camera ----------------
+  const live = { running: false, inflight: false, timer: null, sent: 0, busy: 0, errors: 0, last: null, banner: null,
+                 stream: "s" + Math.random().toString(36).slice(2, 10), cam: null };
+  const capture = document.createElement("canvas");
+  const hasCamera = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+
+  function setLiveMsg(msg, err = false) { $("live-msg").textContent = msg; $("live-msg").className = err ? "err" : ""; }
+
+  function dlvInfo(dv) {
+    if (!dv) return null;
+    if (dv.state === "queued") return { cls: "queued", text: "Queued — link offline" };
+    if (dv.state === "retrying") return { cls: "bad", text: "Delivery failed — retrying" };
+    if (dv.state === "sending") return { cls: "queued", text: "Sending…" };
+    if (dv.phone === "sent") return { cls: "ok", text: "Sent to phone ✓" };
+    if (dv.phone === "suppressed") return { cls: "queued", text: "Suppressed (rate limit)" };
+    if (dv.dispatch === "sent") return { cls: "ok", text: "Sent to dispatch ✓ (phone alerts off)" };
+    return { cls: "", text: "Delivered (simulated: phone alerts not configured)" };
+  }
+  function dlvBadge(dv) { const i = dlvInfo(dv); return i ? `<span class="dlv ${i.cls}">${esc(i.text)}</span>` : ""; }
+
+  function paintPhone() {
+    const ph = config && config.phone;
+    $("phone-note").textContent = !ph ? "" : ph.configured ? `Phone alerts: on (${ph.target})`
+      : "Phone alerts: not configured (NTFY_TOPIC_URL; see the runbook)";
+    $("notify-test").disabled = !!(ph && !ph.configured);
+    const lv = config && config.live;
+    if (lv && !lv.detector_available) setLiveMsg(`Live detector weights not found on the server: ${lv.detector_weights}`, true);
+  }
+
+  async function listCams(selectId) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    let devs = [];
+    try { devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput"); } catch (e) { return; }
+    const sel = $("cam"), keep = selectId || sel.value;
+    // labels are empty until the page has camera permission
+    sel.innerHTML = `<option value="">Default camera</option>` + devs.filter((d) => d.deviceId).map((d, i) =>
+      `<option value="${esc(d.deviceId)}">${esc(d.label || "Camera " + (i + 1))}</option>`).join("");
+    if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  }
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener("devicechange", () => listCams());   // e.g. an iPhone via Continuity Camera
+  }
+
+  function cameraError(e) {
+    const n = e && e.name;
+    if (n === "NotAllowedError" || n === "SecurityError") return "Camera permission denied. Allow the camera for this site in the browser, and on macOS in System Settings → Privacy & Security → Camera.";
+    if (n === "NotFoundError" || n === "OverconstrainedError") return "No such camera. Pick another one, or connect a webcam / bring the iPhone close for Continuity Camera.";
+    if (n === "NotReadableError") return "The camera is in use by another app (close FaceTime, Zoom, Photo Booth…) and try again.";
+    return "Could not open the camera: " + ((e && e.message) || n || "unknown error");
+  }
+
+  async function openCamera() {
+    const id = $("cam").value;
+    const video = { width: { ideal: 1280 }, height: { ideal: 720 } };
+    if (id) video.deviceId = { exact: id };
+    const stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+    closeCamera();
+    live.cam = stream;
+    const v = $("live-video");
+    v.srcObject = stream;
+    await v.play();
+    $("live-idle").hidden = true;
+    const track = stream.getVideoTracks()[0];
+    const st = track && track.getSettings ? track.getSettings() : {};
+    await listCams(st.deviceId);
+    return track ? track.label : "";
+  }
+  function closeCamera() {
+    if (live.cam) live.cam.getTracks().forEach((t) => t.stop());
+    live.cam = null;
+    $("live-video").srcObject = null;
+  }
+
+  async function startLive() {
+    if (!hasCamera) { setLiveMsg(noCameraMsg(), true); return; }
+    $("live-start").disabled = true;
+    setLiveMsg("Opening the camera…");
+    try {
+      const label = await openCamera();
+      live.running = true;
+      $("live-start").textContent = "Stop";
+      setLiveMsg(`Streaming ${label ? "from " + label : ""} · one frame every ${(+$("live-interval").value / 1000)} s.`);
+      scheduleLive(0);
+    } catch (e) { setLiveMsg(cameraError(e), true); }
+    finally { $("live-start").disabled = false; }
+  }
+  function stopLive(msg = "Stopped.") {
+    live.running = false;
+    clearTimeout(live.timer);
+    closeCamera();
+    $("live-idle").hidden = false;
+    $("live-start").textContent = "Start";
+    drawBoxes(null);
+    setLiveMsg(msg);
+  }
+  function noCameraMsg() {
+    return window.isSecureContext === false
+      ? "This page is not a secure origin, so the browser blocks the camera. Open it as http://localhost:8095 through the SSH tunnel (not http://<nano-ip>:8095)."
+      : "This browser does not expose a camera API (navigator.mediaDevices). Use a current Chrome, Safari or Firefox.";
+  }
+
+  $("live-start").addEventListener("click", () => live.running ? stopLive() : startLive());
+  $("cam").addEventListener("change", async () => {
+    if (!live.running) return;
+    try { const label = await openCamera(); setLiveMsg(`Switched to ${label || "the selected camera"}.`); }
+    catch (e) { stopLive(cameraError(e)); }
+  });
+
+  function scheduleLive(delay) {
+    clearTimeout(live.timer);
+    if (live.running) live.timer = setTimeout(tickLive, Math.max(0, delay));
+  }
+  function grabFrame() {
+    const v = $("live-video");
+    if (!v.videoWidth || !v.videoHeight) return Promise.resolve(null);
+    const s = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
+    capture.width = Math.round(v.videoWidth * s); capture.height = Math.round(v.videoHeight * s);
+    capture.getContext("2d").drawImage(v, 0, 0, capture.width, capture.height);
+    return new Promise((res) => capture.toBlob(res, "image/jpeg", 0.85));
+  }
+  async function tickLive() {
+    if (!live.running || live.inflight) return;     // never more than one frame in flight
+    const interval = +$("live-interval").value, t0 = performance.now();
+    live.inflight = true;
+    try {
+      const blob = await grabFrame();
+      if (!blob) return;
+      const r = await fetch("/api/live/frame?stream=" + encodeURIComponent(live.stream), {
+        method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob, cache: "no-store", signal: timeout(120000) });
+      if (r.status === 202) { live.busy++; return; }
+      if (!r.ok) {
+        let msg = "HTTP " + r.status;
+        try { const j = await r.json(); if (j.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch (e) {}
+        live.errors++; setLiveMsg("Frame rejected: " + msg, true); return;
+      }
+      const d = await r.json();
+      live.sent++;
+      if ($("live-msg").className === "err") setLiveMsg("");
+      renderLiveFrame(d);
+    } catch (e) {
+      live.errors++; setLiveMsg("Server unreachable: " + e.message, true);
+    } finally {
+      live.inflight = false;
+      paintCounts();
+      scheduleLive(interval - (performance.now() - t0));
+    }
+  }
+
+  function drawBoxes(d) {
+    const v = $("live-video"), c = $("live-overlay");
+    const cw = v.clientWidth, ch = v.clientHeight, dpr = window.devicePixelRatio || 1;
+    if (!cw || !ch) return;
+    c.width = Math.round(cw * dpr); c.height = Math.round(ch * dpr);
+    const g = c.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, cw, ch);
+    if (!d || !d.frame || !live.running) return;
+    const fw = d.frame.width, fh = d.frame.height, s = Math.min(cw / fw, ch / fh);
+    const ox = (cw - fw * s) / 2, oy = (ch - fh * s) / 2;   // the video is letterboxed (object-fit: contain)
+    const css = getComputedStyle(document.documentElement);
+    const strong = css.getPropertyValue("--box").trim() || "#e5484d", weak = css.getPropertyValue("--box-weak").trim() || "#8a887f";
+    g.font = "600 12px system-ui, -apple-system, sans-serif";
+    for (const det of (d.detections || []).slice(0, 30)) {
+      const [x1, y1, x2, y2] = det.box;
+      const x = ox + x1 * s, y = oy + y1 * s, w = Math.max(1, (x2 - x1) * s), h = Math.max(1, (y2 - y1) * s);
+      g.lineWidth = 2.5; g.strokeStyle = det.above_gate ? strong : weak; g.setLineDash(det.above_gate ? [] : [5, 4]);
+      g.strokeRect(x, y, w, h);
+      const label = `${det.cls} ${det.conf.toFixed(2)}`, ty = y > 16 ? y - 4 : y + 14;
+      g.setLineDash([]); g.lineWidth = 3; g.strokeStyle = "#000"; g.strokeText(label, x + 2, ty);
+      g.fillStyle = "#fff"; g.fillText(label, x + 2, ty);
+    }
+  }
+  window.addEventListener("resize", () => drawBoxes(live.last));
+
+  function paintCounts() {
+    const el = $("live-frames");
+    if (el) el.textContent = `${int(live.sent)}${live.busy ? ` · ${int(live.busy)} skipped` : ""}${live.errors ? ` · ${int(live.errors)} failed` : ""}`;
+  }
+
+  function renderLiveFrame(d) {
+    live.last = d;
+    drawBoxes(d);
+    const g = d.gate || { streak: 0, needed: 3, min_conf: 0.4 }, ev = d.event, latched = d.latched || {};
+    const latest = (d.events || [])[0];
+    let gate;
+    if (ev) gate = "Event open: gate done";
+    else if (latched.active) gate = `Latched</strong><p class="note">This fire already alerted; re-arms ${Math.ceil(latched.clears_in_s || 0)} s after the smoke is gone.</p><strong>`;
+    else gate = `<span class="dots" aria-hidden="true">${Array.from({ length: g.needed }, (_, i) => `<i class="${i < g.streak ? "on" : ""}"></i>`).join("")}</span>smoke seen in ${int(g.streak)}/${int(g.needed)} frames`;
+    let status;
+    if (ev) status = ev.status === "monitoring"
+      ? `Monitoring: re-check ${int(ev.rechecks + 1)}/${int(ev.max_rechecks)} in ${Math.ceil(ev.next_check_in_s)} s`
+      : "Classifying…";
+    else if (latched.active) status = "Alerted (one ALERT per fire)";
+    else status = g.streak ? "Watching the plume" : "Watching";
+    const sev = ev ? ev.severity : (latched.active && latest ? latest.severity : null);
+    const verdict = ev && ev.source_type ? ev : (latched.active && latest ? latest : null);
+    const vlmNow = d.vlm && d.vlm.status ? { ok: "called now", failed: "call failed: detector-only fallback",
+      unavailable: "not served: detector-only fallback" }[d.vlm.status] || d.vlm.status : null;
+    const t = d.timings || {};
+    $("live-strip").innerHTML = `
+      <div><small>Frames sent</small><strong id="live-frames"></strong></div>
+      <div><small>Persistence gate (≥ ${esc((g.min_conf || 0.4).toFixed(2))})</small><strong>${gate}</strong></div>
+      <div><small>Event</small><strong>${esc(status)}</strong></div>
+      <div><small>Severity so far</small><strong>${sev ? `<span class="sev ${esc(sev)}">${esc(sev)}</span>` : DASH}</strong></div>
+      <div class="wide"><small>VLM verdict${vlmNow ? ` · ${esc(vlmNow)}` : ""}</small><strong>${verdict
+        ? `${esc(pretty(verdict.source_type || "unknown"))}${verdict.trend ? ` · trend ${esc(verdict.trend)}` : ""}</strong><p class="note">${esc(verdict.description || "")}</p>`
+        : `${DASH}</strong><p class="note">The VLM runs once, when the gate opens an event.</p>`}</div>
+      <div><small>Detector · VLM</small><strong>${ms(t.detect_ms)} · ${isNum(t.vlm_ms) ? ms(t.vlm_ms) : "not called"}</strong></div>
+      <div><small>Link</small><strong><span class="status ${d.online ? "ok" : "bad"}">${d.online ? "online" : "offline"}</span></strong></div>`;
+    paintCounts();
+    if (d.new_alert) { live.banner = d.new_alert; paintBanner(); }
+    const closed = (d.new_events || []).filter((e) => e.severity !== "ALERT");
+    if (closed.length) setLiveMsg(`Event closed as ${closed.map((e) => e.severity).join(", ")}: kept on the device, nothing sent.`);
+    renderLiveEvents(d.events || []);
+    if (d.delivery) applyDelivery(d.delivery);
+  }
+
+  function renderLiveEvents(events) {
+    live.events = events;
+    $("live-events").innerHTML = events.length ? `<ul class="evlist">${events.map((e) => `<li>
+        <img src="data:image/jpeg;base64,${esc(e.thumbnail_b64)}" alt="Detection crop">
+        <div><span class="sev ${esc(e.severity)}">${esc(e.severity)}</span> ${esc(pretty(e.source_type || "unknown"))}
+          · ${esc(new Date(e.opened_at * 1000).toLocaleTimeString())} ${e.delivery ? dlvBadge(e.delivery) : ""}
+          <p class="note">${esc(e.report_text || "")}</p></div></li>`).join("")}</ul>`
+      : `<p class="hint">No events yet.</p>`;
+  }
+
+  function paintBanner() {
+    const a = live.banner, el = $("live-banner");
+    if (!a) { el.hidden = true; el.innerHTML = ""; return; }
+    el.hidden = false;
+    el.innerHTML = `<img src="data:image/jpeg;base64,${esc(a.thumbnail_b64)}" alt="Snapshot sent with the alert">
+      <div><strong>🔥 WILDFIRE ALERT: ${esc(pretty(a.source_type || "unknown"))}</strong> ${dlvBadge(a.delivery)}
+        <p class="note">${esc(a.report_text || "")}</p></div>
+      <button class="btn ghost" type="button" id="banner-close" aria-label="Dismiss the alert banner">✕</button>`;
+    $("banner-close").onclick = () => { live.banner = null; paintBanner(); };
+  }
+
+  // queued alerts are delivered later (link back online, retries): refresh their badges
+  function applyDelivery(dv) {
+    const byId = new Map((dv.events || []).map((e) => [e.event_id, e]));
+    let changed = false;
+    if (live.banner && byId.has(live.banner.id)) {
+      const e = byId.get(live.banner.id);
+      if (JSON.stringify(e) !== JSON.stringify(live.banner.delivery)) { live.banner.delivery = e; paintBanner(); }
+    }
+    for (const ev of live.events || []) {
+      if (ev.delivery && byId.has(ev.id) && JSON.stringify(byId.get(ev.id)) !== JSON.stringify(ev.delivery)) {
+        ev.delivery = byId.get(ev.id); changed = true;
+      }
+    }
+    if (changed) renderLiveEvents(live.events);
+  }
+
+  $("notify-test").addEventListener("click", async () => {
+    $("notify-test").disabled = true;
+    try {
+      const r = await postJSON("/api/notify/test", {});
+      setLiveMsg(r.status === "sent" ? "Test push sent ✓ Check the phone."
+        : `Suppressed by the rate limit (at most one push every ${Math.round(r.phone.min_interval_s || 30)} s). Try again shortly.`);
+    } catch (e) { setLiveMsg("Test push failed: " + e.message, true); }
+    finally { $("notify-test").disabled = false; }
+  });
+  $("live-reset").addEventListener("click", async () => {
+    try {
+      const d = await postJSON("/api/live/reset", {});
+      live.banner = null; paintBanner(); live.sent = live.busy = live.errors = 0;
+      renderLiveFrame(d);
+      setLiveMsg("Live pipeline reset: gate, open event and the one-ALERT-per-fire latch are cleared.");
+    } catch (e) { setLiveMsg("Reset failed: " + e.message, true); }
+  });
+  if (!hasCamera) { setLiveMsg(noCameraMsg(), true); $("live-start").disabled = true; }
+  try { if (localStorage.getItem("sentinel.tab") === "tab-btn-live") showTab("tab-btn-live"); } catch (e) {}
 
   // ---------------- right pane ----------------
   const pipeLabel = (name) => (config && config.pipelines.find((p) => p.name === name) || {}).label || name;
@@ -599,7 +979,9 @@
       <div><small>Alerts sent</small><strong>${int(n.alerts_sent)}</strong></div>
       <div><small>Alerts queued in outbox</small><strong>${int(n.alerts_queued)}</strong></div>
       <div><small>Bytes sent upstream</small><strong>${bytes(up)}</strong></div>
-      <div><small>Images a cloud-only system could not process</small><strong>${int(n.cloud_only_blind)}</strong></div>`;
+      <div><small>Images a cloud-only system could not process</small><strong>${int(n.cloud_only_blind)}</strong></div>
+      ${d.delivery ? `<div><small>Real alerts delivered · waiting in outbox</small><strong>${int(d.delivery.delivered)} · ${int(d.delivery.pending)}</strong></div>
+      <div><small>Phone pushes sent · suppressed</small><strong>${d.delivery.phone.configured ? `${int(d.delivery.phone.sent)} · ${int(d.delivery.phone.suppressed)}` : "off"}</strong></div>` : ""}`;
   }
 
   function renderLive(live) {
@@ -663,13 +1045,14 @@
     if (!pricesLoaded && d.prices) { fillPrices(d.prices); pricesLoaded = true; }
     if (typeof d.online === "boolean" && d.online !== online) { online = d.online; paintNet(); }
     renderKpis(d.session); renderEcon(d); renderNetwork(d);
+    if (d.delivery) applyDelivery(d.delivery);
     if ("live" in d) renderLive(d.live);
     $("h-ts").textContent = new Date().toLocaleTimeString();
   }
 
   async function loadConfig() {
     config = await getJSON("/api/config");
-    online = config.online; paintNet(); renderPasses(); renderBench();
+    online = config.online; paintNet(); renderPasses(); renderBench(); paintPhone();
   }
   async function refresh() {
     try { renderSession(await getJSON("/api/session", { timeoutMs: 5000 })); }
