@@ -25,7 +25,7 @@ Version on stage: **`v1.3.0-joint`** (joint detector at 960 px + LoRA-distilled 
 
 **Once, on the phone:** install the **ntfy** app (iOS App Store / Google Play) and subscribe to a *long random*
 topic on `ntfy.sh` (anyone who knows the topic can read the alerts), e.g. from `openssl rand -hex 16`.
-Allow notifications; on iOS also allow Critical/Time-Sensitive alerts for ntfy so priority 5 buzzes through Focus.
+Allow notifications for ntfy, and make sure no Focus / Do Not Disturb mode silences it during the demo.
 
 **Once, on the Nano** (the topic never goes into the repo, a log or a slide):
 ```bash
@@ -113,4 +113,4 @@ The incident map (triangulation, wind, live watch, Ask Sentinel) was built by Kr
 | Phone does not buzz; banner says "Delivered (simulated…)" | The app has no topic: check `start_demo.sh` prints `configured`; if the webapp was already running, `tmux kill-session -t webapp` and re-run. |
 | Banner "Delivery failed — retrying" | ntfy unreachable from the Nano (`curl -sI https://ntfy.sh` on the Nano). The alert stays in the outbox and goes out when it answers; keep talking, it retries every few seconds. |
 | Banner "Suppressed (rate limit)" | Less than 30 s since the last push (a test push counts). Wait, **Reset live**, repeat. |
-| Phone gets pushes but silently | ntfy app: set the topic's notification priority/sound; iOS: allow Time-Sensitive notifications, check Focus. |
+| Phone gets pushes but silently | ntfy app: check the topic's notification sound/priority settings; turn off Focus / Do Not Disturb. |
