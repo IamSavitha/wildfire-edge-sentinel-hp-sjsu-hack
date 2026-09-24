@@ -53,3 +53,11 @@ def test_classes_require_yolo_world_model():
 
     with pytest.raises(ValueError, match="YOLO-World"):
         YoloDetector("models/smoke_yolo.pt", classes=["smoke", "fire"], model=PlainModel())
+
+
+def test_imgsz_for_matches_the_training_resolution():
+    from sentinel.detector import imgsz_for
+    from sentinel import webapp
+    assert imgsz_for("models/joint_yolo.pt") == imgsz_for("/home/u/sentinel/models/tower_yolo.pt") == 960
+    assert imgsz_for("models/smoke_yolo.pt") == imgsz_for("yolov8s-worldv2.pt") == 640
+    assert webapp.imgsz_for is imgsz_for          # one definition, shared by the webapp and the incident map

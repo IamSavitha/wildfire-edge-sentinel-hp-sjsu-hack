@@ -1,0 +1,1120 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel Officer Console</title>
+<link rel="stylesheet" href="/assets/lib/maplibre-gl.css">
+<script src="/assets/lib/maplibre-gl.js"></script>
+<script src="/assets/lib/pmtiles.js"></script>
+<script src="/assets/lib/basemaps.js"></script>
+<style>
+:root {
+  --bg: #f5f1e8; --panel: #fffdf8; --ink: #1f2a22; --muted: #5d6b61; --line: #e3dccd; --soft: #efe9dc;
+  --forest: #1f4d36; --forest-2: #2c6a4a; --head-ink: #fbf7ee; --ember: #d9480f;
+  --alert: #d32f2f; --monitor: #f08c00; --log: #8d7b52; --closed: #9aa39c; --ok: #2b8a3e; --queued: #c05600;
+  --cam: #1c5d99; --wedge: #e8590c; --cone: #d32f2f;
+  --shadow: 0 1px 2px rgba(31,42,34,.08), 0 6px 20px rgba(31,42,34,.10);
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow-x: hidden; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+       display: grid; grid-template-rows: auto auto 1fr; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.muted { color: var(--muted); }
+
+/* ------------------------------------------------ header */
+header { background: linear-gradient(180deg, var(--forest), #193f2c); color: var(--head-ink); display: flex; align-items: center;
+         gap: 18px; padding: 12px 20px; min-height: 76px; }
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 260px; }
+.brand > div { min-width: 0; }
+.brand svg { flex: none; }
+.brand h1 { font-size: 22px; margin: 0; letter-spacing: .2px; white-space: nowrap; }
+.brand p { margin: 1px 0 0; font-size: 13px; opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+header .spacer { flex: 0 1 0; }
+header { flex-wrap: wrap; row-gap: 8px; }
+.link { display: flex; align-items: center; gap: 10px; border-radius: 12px; padding: 8px 10px 8px 14px;
+        background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.18); }
+.link .dot { width: 11px; height: 11px; border-radius: 50%; flex: none; box-shadow: 0 0 0 3px rgba(255,255,255,.08); }
+.link.up .dot { background: #51cf66; } .link.down .dot { background: #ff6b6b; }
+.link .lt b { display: block; font-size: 14px; }
+.link .lt span { font-size: 12px; opacity: .8; }
+.link .btn { color: var(--ink); white-space: nowrap; }
+.link, .hbtn { flex: none; }
+.hbtn { border: 1px solid rgba(255,255,255,.35); background: rgba(255,255,255,.06); color: var(--head-ink);
+        border-radius: 10px; padding: 9px 14px; font-weight: 600; white-space: nowrap; }
+.hbtn:hover { background: rgba(255,255,255,.14); }
+.hbtn.primary { background: var(--ember); border-color: var(--ember); }
+.hbtn.primary:hover { background: #c2410c; }
+.hbtn.round { width: 40px; padding: 9px 0; }
+
+/* ------------------------------------------------ stats */
+.stats { display: flex; background: var(--panel); border-bottom: 1px solid var(--line); overflow-x: auto; }
+.group { display: flex; border-right: 1px solid var(--line); }
+.group > .gl { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+               color: var(--muted); padding: 6px 4px; background: var(--soft); text-align: center; }
+.stat { padding: 10px 12px; min-width: 92px; }
+.stat .v { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; white-space: nowrap; }
+.stat.alert .v { color: var(--alert); } .stat.monitor .v { color: var(--monitor); } .stat.queued .v { color: var(--queued); }
+.stat.good .v { color: var(--ok); }
+
+/* ------------------------------------------------ layout */
+main { display: grid; grid-template-columns: 380px 1fr; min-height: 0; }
+aside { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
+.tabs { display: flex; border-bottom: 1px solid var(--line); background: var(--soft); }
+.tab { flex: 1; border: 0; background: transparent; padding: 11px 2px; font-size: 12.5px; white-space: nowrap; font-weight: 600; color: var(--muted); border-bottom: 3px solid transparent; }
+.tab.on { color: var(--forest); border-bottom-color: var(--forest); background: var(--panel); }
+.pane { display: none; flex: 1; min-height: 0; flex-direction: column; }
+.pane.on { display: flex; }
+.scroll { overflow-y: auto; flex: 1; min-height: 0; }
+.bar { padding: 10px 12px; border-bottom: 1px solid var(--line); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 3px 11px; font-size: 12px; }
+.chip.on { background: var(--forest); color: #fff; border-color: var(--forest); }
+.empty { padding: 22px 16px; color: var(--muted); }
+
+.card .thumb { grid-column: 2; width: 100%; max-height: 120px; object-fit: cover; border-radius: 6px; margin-top: 4px; background: #111; }
+.demo-step { padding: 12px; border-bottom: 1px solid var(--line); display: grid; gap: 6px; }
+.demo-step .hd { display: flex; gap: 8px; align-items: baseline; }
+.demo-step .num { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--forest); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.demo-step .exp { font-size: 12px; } .demo-step img { width: 100%; border-radius: 6px; max-height: 150px; object-fit: cover; }
+.match { font-size: 11px; font-weight: 700; } .match.ok { color: var(--ok); } .match.diff { color: var(--queued); }
+.demo-badge { font-size: 10px; font-weight: 700; letter-spacing: .5px; color: #6a5f9b; border: 1px solid #cfc8ea; background: #f3f0fd; border-radius: 4px; padding: 1px 6px; }
+.card { padding: 11px 12px; border-bottom: 1px solid var(--line); cursor: pointer; display: grid; grid-template-columns: 30px 1fr; gap: 2px 10px; }
+.card:hover { background: #faf6ec; }
+.card.sel { background: #fff4e6; box-shadow: inset 4px 0 0 var(--ember); }
+.card .ic { grid-row: span 3; padding-top: 2px; }
+.card .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.card .name { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.card .meta { color: var(--muted); font-size: 12px; }
+.card .upd { font-size: 12px; color: var(--ink); }
+.sev { font-size: 10px; font-weight: 800; letter-spacing: .6px; padding: 2px 7px; border-radius: 4px; color: #fff; }
+.sev.ALERT { background: var(--alert); } .sev.MONITOR { background: var(--monitor); } .sev.LOG { background: var(--log); }
+.tag { font-size: 11px; padding: 1px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; background: #fff; }
+.tag.queued { color: var(--queued); border-color: #f3c9a4; background: #fff4e6; }
+.tag.sent { color: var(--ok); border-color: #b2dfbe; background: #ebfbee; }
+.tag.live { color: #fff; background: var(--forest-2); border-color: var(--forest-2); }
+
+/* ------------------------------------------------ map & floats */
+#mapwrap { position: relative; min-height: 0; }
+#map { position: absolute; inset: 0; }
+.float { position: absolute; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+#controls { top: 12px; left: 12px; padding: 10px 12px; display: grid; gap: 7px; font-size: 13px; }
+#controls label { display: flex; gap: 7px; align-items: center; }
+#controls .seg { display: flex; gap: 6px; align-items: center; }
+#legend { bottom: 30px; left: 12px; padding: 10px 12px; font-size: 12px; display: grid; gap: 5px; max-width: 280px; }
+#legend .li { display: flex; gap: 8px; align-items: center; }
+#legend .sw { width: 16px; height: 12px; border-radius: 2px; flex: none; }
+#legendToggle { border: 0; background: none; color: var(--muted); font-size: 12px; text-align: left; padding: 0; }
+#banner { top: 12px; left: 50%; transform: translateX(-50%); padding: 9px 14px; display: none; font-weight: 600; background: #fff4e6; border-color: #f3c9a4; }
+#banner.show { display: block; }
+.toast { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); background: var(--forest); color: #fff;
+         padding: 10px 16px; border-radius: 10px; box-shadow: var(--shadow); display: none; max-width: 80%; z-index: 5; }
+.toast.show { display: block; }
+
+#detail { top: 12px; right: 12px; width: 380px; max-height: calc(100% - 130px); overflow-y: auto; display: none; }
+#detail.show { display: block; }
+#detail .dh { display: flex; gap: 10px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line);
+              position: sticky; top: 0; background: var(--panel); z-index: 1; }
+#detail .dh h3 { margin: 0; font-size: 16px; flex: 1; }
+.x { border: 0; background: transparent; font-size: 20px; line-height: 1; color: var(--muted); }
+#detail img.frame { width: 100%; display: block; background: #000; }
+.sec { padding: 11px 14px; border-bottom: 1px solid var(--line); }
+.sec h4 { margin: 0 0 7px; font-size: 11px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+dl { display: grid; grid-template-columns: 112px 1fr; gap: 4px 10px; margin: 0; font-size: 13px; }
+dt { color: var(--muted); } dd { margin: 0; font-variant-numeric: tabular-nums; }
+.note { color: var(--muted); font-size: 12px; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 6px 11px; font-size: 13px; font-weight: 550; }
+.btn:hover { border-color: #cfc5b0; background: #fbf8f1; }
+.btn.primary { background: var(--forest); color: #fff; border-color: var(--forest); }
+.btn.primary:hover { background: var(--forest-2); }
+.btn.ember { background: var(--ember); color: #fff; border-color: var(--ember); }
+.btn:disabled { opacity: .55; cursor: default; }
+.help { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; border: 1px solid currentColor;
+        font-size: 10px; font-weight: 700; cursor: help; color: var(--muted); flex: none; }
+ol.tl { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+ol.tl li { display: grid; grid-template-columns: 64px 1fr; gap: 8px; font-size: 12.5px; }
+ol.tl time { color: var(--muted); font-variant-numeric: tabular-nums; }
+.player { background: #111; position: relative; }
+.player img { width: 100%; display: block; min-height: 180px; object-fit: contain; background: #111; cursor: zoom-in; }
+.player .open { position: absolute; right: 8px; top: 8px; background: rgba(0,0,0,.6); color: #fff; border: 0; border-radius: 6px; padding: 4px 9px; font-size: 12px; }
+.player .cap { position: absolute; left: 8px; bottom: 8px; background: rgba(0,0,0,.62); color: #fff; font-size: 11.5px;
+               padding: 3px 8px; border-radius: 6px; }
+.player .cap b.smoke { color: #ffb4a2; }
+.pctl { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--soft); }
+.pctl input[type=range] { flex: 1; }
+.pctl .btn { padding: 3px 9px; }
+.camchips { display: flex; gap: 5px; flex-wrap: wrap; padding: 6px 12px 0; }
+.camgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.camgrid figure { margin: 0; }
+.camgrid figcaption { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; gap: 4px; }
+canvas.spark { width: 100%; height: 64px; display: block; background: #fbf8f1; border: 1px solid var(--line); border-radius: 6px; }
+pre.report { white-space: pre-wrap; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; }
+
+/* ------------------------------------------------ watch */
+.wform { padding: 12px; display: grid; gap: 8px; border-bottom: 1px solid var(--line); }
+.field { display: grid; gap: 3px; min-width: 0; }
+.two > *, .wform > * { min-width: 0; }
+.field select { width: 100%; min-width: 0; }
+.field > span { font-size: 12px; color: var(--muted); }
+.field input, .field select, .field textarea { border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; background: #fff; }
+.wcard { padding: 12px; border-bottom: 1px solid var(--line); display: grid; gap: 7px; }
+.wcard img { width: 100%; border-radius: 6px; background: #000; display: block; min-height: 80px; }
+.prog { height: 6px; border-radius: 3px; background: var(--soft); overflow: hidden; }
+.prog i { display: block; height: 100%; background: var(--forest-2); }
+
+/* ------------------------------------------------ assistant */
+#chat { padding: 12px; display: grid; gap: 12px; align-content: start; }
+.msg { border-radius: 12px; padding: 10px 12px; }
+.msg.q { background: var(--forest); color: #fff; justify-self: end; max-width: 88%; }
+.msg.a { background: #fff; border: 1px solid var(--line); }
+.msg.a ul { margin: 4px 0; padding-left: 18px; }
+.msg.a p { margin: 4px 0; }
+.msg .foot { margin-top: 8px; font-size: 11.5px; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 6px; }
+.msg .foot b { color: var(--ok); }
+.msg details { font-size: 12px; margin-top: 4px; }
+.msg details pre { white-space: pre-wrap; max-height: 220px; overflow: auto; font-size: 11px; background: var(--soft); padding: 6px; border-radius: 6px; }
+.quick { padding: 10px 12px; display: flex; gap: 6px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+.quick button { border: 1px solid #cfe3d6; background: #eef7f1; color: var(--forest); border-radius: 999px; padding: 4px 11px; font-size: 12.5px; }
+.ask { display: flex; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--line); background: var(--soft); }
+.ask input { flex: 1; border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; background: #fff; }
+.thinking { display: inline-flex; gap: 4px; }
+.thinking i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: b 1s infinite; }
+.thinking i:nth-child(2) { animation-delay: .15s; } .thinking i:nth-child(3) { animation-delay: .3s; }
+@keyframes b { 0%, 80%, 100% { opacity: .25 } 40% { opacity: 1 } }
+
+/* ------------------------------------------------ large analysis view */
+#anaDlg { width: min(1180px, calc(100vw - 16px)); max-width: calc(100vw - 16px); max-height: 94vh; padding: 0;
+          overflow: hidden; box-sizing: border-box; }
+#anaDlg .ah { position: relative; z-index: 2; background: var(--panel); display: flex; flex-wrap: wrap; gap: 8px 10px;
+              align-items: center; padding: 12px 58px 12px 16px; border-bottom: 1px solid var(--line); }
+#anaDlg .ah > div { flex: 1 1 220px; }
+#anaClose { position: absolute; top: 10px; right: 12px; width: 36px; height: 36px; border-radius: 8px;
+            background: var(--soft) !important; color: var(--ink) !important; font-size: 22px !important; }
+#anaClose:hover { background: var(--line) !important; }
+#anaDlg .ah h3 { margin: 0; font-size: 17px; }
+#anaDlg .ah .sub { color: var(--muted); font-size: 12.5px; }
+#anaBody { overflow-y: auto; max-height: calc(94vh - 62px); scroll-behavior: smooth; }
+.bigimg { background: #111; display: grid; place-items: center; }
+.bigimg img { max-width: 100%; max-height: 72vh; display: block; }
+.anagrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; padding: 16px; }
+.acard { min-width: 0; overflow-wrap: anywhere; }
+.acard { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: #fff; }
+.acard h4 { margin: 0 0 8px; font-size: 11.5px; letter-spacing: .7px; text-transform: uppercase; color: var(--muted); }
+.acard .lead { background: var(--soft); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
+.dchip { display: inline-block; border: 1.5px solid var(--alert); color: var(--ink); border-radius: 6px; padding: 1px 7px; margin: 2px 3px 2px 0; font-size: 12.5px; }
+.dchip.weak { border: 1px dashed #b8b2a4; color: var(--muted); }
+.verdict-ok { color: var(--ok); font-weight: 650; } .verdict-bad { color: var(--alert); font-weight: 650; }
+.quote { font-style: italic; margin-top: 8px; }
+.ecard { display: flex; gap: 10px; align-items: flex-start; }
+.ecard img { width: 96px; border-radius: 6px; }
+.span2 { grid-column: 1 / -1; }
+.cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cmp div { border-radius: 8px; padding: 8px 10px; background: var(--soft); }
+.cmp b { font-size: 18px; display: block; }
+.photos { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; max-height: 190px; overflow-y: auto; }
+.photos img { width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 5px; cursor: pointer; border: 2px solid transparent; }
+.photos img.on { border-color: var(--ember); }
+.srcTabs { display: flex; gap: 6px; }
+@media (max-width: 900px) { .anagrid { grid-template-columns: minmax(0, 1fr); } .photos { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 760px) { #anaTop, #anaDown { display: none; } }
+@media (max-width: 1280px) { .brand p { display: none; } .brand h1 { font-size: 20px; } }
+@media (max-width: 1100px) { .link .lt span { display: none; } .hbtn.primary { padding: 9px 11px; } }
+dialog { border: 0; border-radius: 14px; padding: 0; width: min(580px, calc(100vw - 32px)); background: var(--panel); color: var(--ink); box-shadow: var(--shadow); }
+dialog::backdrop { background: rgba(31,42,34,.4); }
+dialog form, dialog .body { display: grid; gap: 10px; padding: 16px 18px; }
+dialog h3 { margin: 0; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+#preview { width: 100%; max-height: 220px; object-fit: contain; background: #000; border-radius: 8px; display: none; }
+.or { text-align: center; color: var(--muted); font-size: 12px; }
+.glossary dt { font-weight: 650; color: var(--ink); }
+.glossary { grid-template-columns: 150px 1fr; gap: 8px 12px; }
+.maplibregl-popup-content { font-size: 12px; border-radius: 8px; }
+
+@media (max-width: 900px) {
+  header { flex-wrap: wrap; }
+  .brand p { display: none; }
+  main { grid-template-columns: 1fr; grid-template-rows: 50vh 1fr; }
+  aside { order: 2; border-right: 0; border-top: 1px solid var(--line); }
+  #detail { left: 12px; width: auto; }
+  #legend { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="10" fill="#fbf7ee"/>
+      <path d="M20 6c1 5 7 8 7 15a7 7 0 0 1-14 0c0-4 2-6 4-8 0 3 1 5 3 5-1-4 0-8 0-12z" fill="#d9480f"/>
+      <path d="M20 19c1 2 3 3 3 6a3 3 0 0 1-6 0c0-2 2-3 3-6z" fill="#ffd43b"/></svg>
+    <div><h1>Wildfire Edge Sentinel</h1>
+      <p>Forest officer console · every frame analysed on the tower's own computer · works with no internet</p></div>
+  </div>
+  <span class="spacer"></span>
+  <div class="link down" id="link">
+    <span class="dot"></span>
+    <div class="lt"><b id="linkTxt">Dispatch link down</b><span id="linkSub">Alerts wait safely on this device</span></div>
+    <button class="btn" id="linkBtn" style="padding:5px 10px">Restore link</button>
+  </div>
+  <button class="hbtn primary" id="reportBtn">+ Report sighting</button>
+  <button class="hbtn round" id="helpBtn" title="How to read this page" aria-label="Help">?</button>
+</header>
+<div class="stats" id="stats"></div>
+<main>
+  <aside>
+    <div class="tabs">
+      <button class="tab on" data-tab="incidents">Incidents</button>
+      <button class="tab" data-tab="watch">Live watch</button>
+      <button class="tab" data-tab="ask">Ask Sentinel</button>
+      <button class="tab" data-tab="demo">Demo guide</button>
+    </div>
+
+    <div class="pane on" id="pane-incidents">
+      <div class="bar">
+        <button class="chip on" data-filter="active">Active</button>
+        <button class="chip" data-filter="resolved">History</button>
+        <button class="chip" data-filter="all">All</button>
+        <span style="flex:1"></span>
+        <span class="note" id="countNote"></span>
+      </div>
+      <div class="scroll" id="list"></div>
+    </div>
+
+    <div class="pane" id="pane-watch">
+      <div class="wform">
+        <div class="note">Continuous monitoring: each camera frame goes through the smoke detector on this box. The language model (VLM)
+          runs only when smoke persists, then once per batch of frames to re-check the fire and its growth.</div>
+        <div class="field"><span>Fire recording (all towers that recorded it)</span><select id="wRec"></select></div>
+        <div class="two">
+          <div class="field"><span>Replay speed</span><select id="wSpeed">
+            <option value="1">1 frame / s (60× real time)</option><option value="2" selected>1 frame / 2 s (30×)</option>
+            <option value="5">1 frame / 5 s (12×)</option></select></div>
+          <div class="field"><span>Situation update every</span><select id="wBatch">
+            <option value="3">3 frames (3 min)</option><option value="5" selected>5 frames (5 min)</option>
+            <option value="10">10 frames (10 min)</option></select></div>
+        </div>
+        <div class="actions"><button class="btn primary" id="wStart">Start watching</button>
+          <button class="btn" id="wHistory" title="Replays every recorded fire at its real recording date, as history">Load fire history</button></div>
+        <div class="note">Real HPWREN FIgLib recordings (1 frame per minute per tower), replayed as if live. When two or more
+          towers see the same smoke, their bearing lines are crossed to fix the location.</div>
+      </div>
+      <div class="scroll" id="watchList"></div>
+    </div>
+
+    <div class="pane" id="pane-demo">
+      <div class="wform">
+        <div class="note"><b>Mock inputs, real analysis.</b> Each scenario feeds a real photo or tower recording, with a made-up location,
+          through the same detector, fine-tuned VLM and rules the towers use. Nothing about the result is scripted.</div>
+        <div class="actions"><button class="btn primary" id="demoLoad">Load demo scenarios</button><span class="note" id="demoState"></span></div>
+      </div>
+      <div class="scroll" id="demoList"></div>
+    </div>
+
+    <div class="pane" id="pane-ask">
+      <div class="quick" id="quick">
+        <button data-q="What needs my attention right now?">What needs attention now?</button>
+        <button data-q="Give me a shift briefing for today: active fires, what changed, alerts waiting, and wind.">Shift briefing</button>
+        <button data-q="Explain the selected incident: what the camera sees, how it has developed, and what I should do next." data-needs-sel>Explain selected</button>
+        <button data-q="Draft a short radio message to dispatch for the selected incident." data-needs-sel>Draft radio message</button>
+        <button data-q="What is the wind doing at the selected incident and where would the fire head?" data-needs-sel>Wind outlook</button>
+        <button data-q="List the incidents from the last 7 days.">Last 7 days</button>
+        <button data-q="Which fires did the towers record in the last 90 days, and which ones reached ALERT?">Last 90 days</button>
+      </div>
+      <div class="scroll" id="chatWrap"><div id="chat">
+        <div class="msg a">I'm Sentinel. I run on this tower's computer (Qwen2.5-VL-7B), answer from the tower's own incident log and sensors, and send nothing off the device.
+          Select an incident on the map to ask about it.</div></div></div>
+      <form class="ask" id="askForm"><input id="askIn" placeholder="Ask about incidents, wind, history…" autocomplete="off">
+        <button class="btn primary" type="submit">Ask</button></form>
+    </div>
+  </aside>
+
+  <div id="mapwrap">
+    <div id="map"></div>
+    <div class="float" id="controls">
+      <label><input type="checkbox" data-layer="cones" checked> Downwind cones <span class="help" title="Where smoke and fire would drift with the current wind over the chosen time. A rough guide (10% of wind speed), not a fire-spread model.">?</span></label>
+      <label><input type="checkbox" data-layer="wedges" checked> Direction from towers <span class="help" title="A camera knows the direction to the smoke but not the distance. Each orange wedge is one tower's direction; where two cross, that is the fire.">?</span></label>
+      <label><input type="checkbox" data-layer="fov"> Camera views</label>
+      <label><input type="checkbox" data-layer="counties" checked> County lines</label>
+      <div class="seg">Cone time <select id="hours"><option value="1">1 h</option><option value="3">3 h</option><option value="6">6 h</option></select></div>
+      <div class="seg"><button class="btn" id="fitBtn">Towers</button><button class="btn" id="caBtn">California</button></div>
+    </div>
+    <div class="float" id="banner"></div>
+    <div class="float" id="legend">
+      <button id="legendToggle">Legend ▾</button>
+      <div id="legendBody" style="display:grid;gap:5px">
+        <div class="li"><span id="lg-alert"></span>ALERT: reported to dispatch</div>
+        <div class="li"><span id="lg-monitor"></span>MONITOR: being watched</div>
+        <div class="li"><span id="lg-log"></span>LOG: harmless smoke, kept locally</div>
+        <div class="li"><span id="lg-closed"></span>Closed / history</div>
+        <div class="li"><span id="lg-tower"></span>Lookout tower camera</div>
+        <div class="li"><span class="sw" style="background:#1c5d99"></span>Blue arrow: wind at the tower</div>
+        <div class="li"><span class="sw" style="background:var(--wedge);opacity:.45"></span>Direction from the camera</div>
+        <div class="li"><span class="sw" style="background:var(--cone);opacity:.3"></span>Downwind cone</div>
+      </div>
+    </div>
+    <div class="float" id="detail"></div>
+    <div class="toast" id="toast"></div>
+  </div>
+</main>
+
+<dialog id="reportDlg">
+  <form method="dialog" id="reportForm">
+    <h3>Report a sighting</h3>
+    <div class="field"><span>Which tower camera took it? (its heading gives the direction to the smoke)</span>
+      <select id="fCam"><option value="">Not from a tower: I'll give coordinates</option></select></div>
+    <div class="srcTabs"><button type="button" class="chip on" data-src="tower">Tower frame</button>
+      <button type="button" class="chip" data-src="photo">Demo photo (flames)</button>
+      <button type="button" class="chip" data-src="upload">Upload</button></div>
+    <div class="field" id="sampleField" data-for="tower"><span>Recorded frame from this camera <b id="offLbl"></b></span>
+      <input type="range" id="fSample" min="0" max="0" value="0"></div>
+    <div class="field" data-for="photo" style="display:none"><span>Close-up photos with visible flames (D-Fire dataset). Set a location below or pick on the map.</span>
+      <div class="photos" id="photoGrid"></div></div>
+    <div class="field" data-for="upload" style="display:none"><span>Upload a photo</span><input type="file" id="fFile" accept="image/*"></div>
+    <img id="preview" alt="">
+    <div class="two">
+      <div class="field"><span>Latitude (optional, e.g. from a phone GPS)</span><input id="fLat" inputmode="decimal" placeholder="33.40"></div>
+      <div class="field"><span>Longitude</span><input id="fLon" inputmode="decimal" placeholder="-117.19"></div>
+    </div>
+    <div class="note">Location order: GPS inside the photo, then these coordinates, then the camera's direction.
+      <button type="button" class="btn" id="pickBtn">Pick on map</button></div>
+    <div class="field"><span>Name (optional)</span><input id="fName" maxlength="80" placeholder="e.g. Rainbow Fire"></div>
+    <label class="note"><input type="checkbox" id="fForce"> Ask the VLM even if the detector sees no smoke</label>
+    <div id="result"></div>
+    <div class="actions" style="justify-content:flex-end">
+      <button type="button" class="btn" id="cancelBtn">Close</button>
+      <button type="button" class="btn ember" id="submitBtn">Analyse on this device</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="anaDlg">
+  <div class="ah"><span id="anaIcon"></span><div style="flex:1;min-width:0"><h3 id="anaTitle"></h3><div class="sub" id="anaSub"></div></div>
+    <span class="sev" id="anaSev"></span>
+    <button class="btn" id="anaPrev" title="Previous frame">◀</button><button class="btn" id="anaNext" title="Next frame">▶</button>
+    <button class="btn" id="anaTop">Image</button><button class="btn" id="anaDown">Analysis</button>
+    <button class="x" id="anaClose" aria-label="Close">×</button></div>
+  <div id="anaBody"><div class="bigimg"><img id="anaImg" alt="Frame with detection boxes"></div><div id="anaDetails"></div></div>
+</dialog>
+
+<dialog id="helpDlg">
+  <div class="body">
+    <h3>How to read this console</h3>
+    <dl class="glossary">
+      <dt>Dispatch link</dt><dd>The tower's connection to the outside world (radio/satellite/cell). When it is <b>down</b>, the tower keeps
+        working: it still detects, classifies and logs. ALERTs wait in an <b>outbox</b> on the device and go out when the link comes back.
+        The button in the header simulates losing and restoring it.</dd>
+      <dt>ALERT / MONITOR / LOG</dt><dd><b>ALERT</b>: likely wildfire, reported to dispatch. <b>MONITOR</b>: unclear or small, the tower keeps
+        re-checking it. <b>LOG</b>: harmless (campfire, chimney, controlled burn), kept locally. Fog and cloud are ignored.</dd>
+      <dt>Direction from camera</dt><dd>A single camera measures the <b>direction</b> to the smoke, not the distance. The pin is placed at an
+        assumed distance along that direction. If you know where the fire is, use <b>Correct location</b> and click the map.</dd>
+      <dt>Downwind cone</dt><dd>Where the fire and smoke would drift with the current wind over 1, 3 or 6 hours (10% of wind speed, a grass-fire
+        rule of thumb). A guide for where to look first, not a prediction.</dd>
+      <dt>Camera feed</dt><dd>In the field each tower camera is wired to this computer over the tower's local network: no internet in
+        the loop. For the demo we replay real recorded tower footage (HPWREN FIgLib, stored on this device) as that feed, or you upload a photo.</dd>
+      <dt>Wind</dt><dd>From the tower's own weather station (emulated here from recorded readings stored on this device). No internet needed.</dd>
+      <dt>What needs internet</dt><dd>Nothing for detection, classification, the map, wind, history or Ask Sentinel. Only an ALERT uses
+        the dispatch link: the report (~13 KB) and a weather forecast. Everything else stays on the tower.</dd>
+      <dt>Live watch</dt><dd>Replays a tower camera frame by frame. Each batch of frames produces a situation update in the incident's timeline.</dd>
+      <dt>Ask Sentinel</dt><dd>A language model running on this device that answers from the local incident log. Nothing is sent to the cloud.</dd>
+    </dl>
+    <div class="actions" style="justify-content:flex-end"><button class="btn primary" onclick="this.closest('dialog').close()">Got it</button></div>
+  </div>
+</dialog>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const MPS_TO_MPH = 2.23694;
+const COLORS = {ALERT: "#d32f2f", MONITOR: "#f08c00", LOG: "#8d7b52", closed: "#9aa39c"};
+const COMPASS = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+const compass = d => COMPASS[Math.floor(((d % 360) + 360 + 11.25) % 360 / 22.5) % 16];
+const ago = s => s < 90 ? `${Math.round(s)} s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${(s / 3600).toFixed(1)} h ago` : `${Math.round(s / 86400)} days ago`;
+const isToday = t => new Date(t * 1000).toDateString() === new Date().toDateString();
+const when = t => { const d = new Date(t * 1000);
+  return isToday(t) ? d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : d.toLocaleDateString([], {month: "short", day: "numeric"}) + " " + d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}); };
+const LOC = {exif_gps: "GPS inside the photo", reported_gps: "coordinates reported with the photo", camera_bearing: "camera direction + assumed distance",
+             camera_site: "the camera's own site", map_pin: "set by an officer on the map",
+             triangulated: "triangulated: bearings from several towers cross here"};
+const flameColor = i => i.status === "resolved" ? COLORS.closed : (COLORS[i.severity] || COLORS.LOG);
+
+let CFG = null, STATE = null, SAMPLES = [], WATCH = [], selected = null, filter = "active", picking = null, fitted = false;
+
+// ---------------------------------------------------------------- icons
+function flamePath(g, s) {
+  g.beginPath();
+  g.moveTo(s * .5, s * .04);
+  g.bezierCurveTo(s * .56, s * .22, s * .86, s * .36, s * .86, s * .62);
+  g.bezierCurveTo(s * .86, s * .84, s * .69, s * .97, s * .5, s * .97);
+  g.bezierCurveTo(s * .31, s * .97, s * .14, s * .84, s * .14, s * .63);
+  g.bezierCurveTo(s * .14, s * .47, s * .24, s * .38, s * .33, s * .3);
+  g.bezierCurveTo(s * .34, s * .42, s * .39, s * .5, s * .45, s * .52);
+  g.bezierCurveTo(s * .4, s * .36, s * .46, s * .18, s * .5, s * .04);
+  g.closePath();
+}
+function flameCanvas(color, s = 64) {
+  const c = document.createElement("canvas"); c.width = c.height = s;
+  const g = c.getContext("2d");
+  g.lineJoin = "round"; flamePath(g, s);
+  g.fillStyle = color; g.strokeStyle = "#fff"; g.lineWidth = s * .07; g.stroke(); g.fill();
+  g.beginPath(); g.moveTo(s * .5, s * .5);
+  g.bezierCurveTo(s * .56, s * .62, s * .66, s * .68, s * .66, s * .8);
+  g.bezierCurveTo(s * .66, s * .9, s * .58, s * .94, s * .5, s * .94);
+  g.bezierCurveTo(s * .42, s * .94, s * .34, s * .9, s * .34, s * .8);
+  g.bezierCurveTo(s * .34, s * .68, s * .45, s * .62, s * .5, s * .5); g.closePath();
+  g.fillStyle = "rgba(255,236,153,.9)"; g.fill();
+  return c;
+}
+function towerCanvas(s = 56) {
+  const c = document.createElement("canvas"); c.width = c.height = s;
+  const g = c.getContext("2d");
+  g.fillStyle = "#1c5d99"; g.strokeStyle = "#fff"; g.lineWidth = s * .06; g.lineJoin = "round";
+  g.beginPath(); g.moveTo(s * .3, s * .92); g.lineTo(s * .42, s * .42); g.lineTo(s * .58, s * .42); g.lineTo(s * .7, s * .92); g.closePath(); g.stroke(); g.fill();
+  g.beginPath(); g.moveTo(s * .2, s * .42); g.lineTo(s * .5, s * .12); g.lineTo(s * .8, s * .42); g.closePath(); g.stroke(); g.fill();
+  g.fillStyle = "#fff"; g.fillRect(s * .44, s * .28, s * .12, s * .1);
+  return c;
+}
+function arrowCanvas(color, s = 64) {
+  const c = document.createElement("canvas"); c.width = c.height = s;
+  const g = c.getContext("2d");
+  g.fillStyle = color; g.strokeStyle = "#fff"; g.lineWidth = 3; g.lineJoin = "round";
+  g.beginPath(); g.moveTo(32, 4); g.lineTo(52, 30); g.lineTo(38, 30); g.lineTo(38, 60); g.lineTo(26, 60); g.lineTo(26, 30); g.lineTo(12, 30); g.closePath();
+  g.stroke(); g.fill();
+  return c;
+}
+const imgData = c => c.getContext("2d").getImageData(0, 0, c.width, c.height);
+const flameHTML = (color, size = 26) => `<img alt="" width="${size}" height="${size}" src="${flameCanvas(color, size * 2).toDataURL()}">`;
+$("#lg-alert").innerHTML = flameHTML(COLORS.ALERT, 18); $("#lg-monitor").innerHTML = flameHTML(COLORS.MONITOR, 18);
+$("#lg-log").innerHTML = flameHTML(COLORS.LOG, 18); $("#lg-closed").innerHTML = flameHTML(COLORS.closed, 18);
+$("#lg-tower").innerHTML = `<img alt="" width="18" height="18" src="${towerCanvas(36).toDataURL()}">`;
+$("#legendToggle").onclick = () => { const b = $("#legendBody"); const open = b.style.display !== "none";
+  b.style.display = open ? "none" : "grid"; $("#legendToggle").textContent = open ? "Legend ▸" : "Legend ▾"; };
+
+// ---------------------------------------------------------------- map
+let map = null;
+const fc = features => ({type: "FeatureCollection", features});
+const poly = (ring, props) => ({type: "Feature", properties: props, geometry: {type: "Polygon", coordinates: [ring]}});
+const point = (lon, lat, props) => ({type: "Feature", properties: props, geometry: {type: "Point", coordinates: [lon, lat]}});
+const LAYERS = {cones: ["cone-fill", "cone-line"], wedges: ["wedge-fill", "wedge-line"], fov: ["fov-fill", "fov-line"], counties: ["county-line", "county-label"]};
+
+function initMap() {
+  const protocol = new pmtiles.Protocol();
+  maplibregl.addProtocol("pmtiles", protocol.tile);
+  map = new maplibregl.Map({
+    container: "map", center: [-117.0, 33.1], zoom: 8.3, attributionControl: {compact: true},
+    style: {
+      version: 8,
+      glyphs: location.origin + "/assets/fonts/{fontstack}/{range}.pbf",
+      sprite: location.origin + "/assets/sprites/v4/light",
+      sources: {protomaps: {type: "vector", url: "pmtiles://" + location.origin + "/tiles/sierra-pacific.pmtiles",
+                            attribution: "© OpenStreetMap contributors · Protomaps"}},
+      layers: basemaps.layers("protomaps", basemaps.namedFlavor("light"), {lang: "en"}),
+    },
+  });
+  map.addControl(new maplibregl.NavigationControl(), "bottom-right");
+  map.addControl(new maplibregl.ScaleControl({unit: "imperial"}), "bottom-right");
+  map.on("load", () => {
+    for (const [k, col] of Object.entries(COLORS)) map.addImage("flame-" + k, imgData(flameCanvas(col, 72)), {pixelRatio: 2});
+    map.addImage("tower", imgData(towerCanvas(56)), {pixelRatio: 2});
+    map.addImage("arrow-wind", imgData(arrowCanvas("#1c5d99")), {pixelRatio: 2});
+    map.addImage("arrow-fire", imgData(arrowCanvas("#d32f2f")), {pixelRatio: 2});
+    for (const id of ["counties", "fov", "wedges", "cones", "cameras", "incidents", "winds"])
+      map.addSource(id, {type: "geojson", data: id === "counties" ? "/assets/data/ca_counties.geojson" : fc([])});
+    map.addLayer({id: "county-line", type: "line", source: "counties", paint: {"line-color": "#7b6fae", "line-width": 1.3, "line-dasharray": [3, 2], "line-opacity": .75}});
+    map.addLayer({id: "county-label", type: "symbol", source: "counties", minzoom: 7,
+      layout: {"text-field": ["concat", ["get", "name"], " County"], "text-font": ["Noto Sans Italic"], "text-size": 12},
+      paint: {"text-color": "#6a5f9b", "text-halo-color": "#fff", "text-halo-width": 1.5}});
+    map.addLayer({id: "fov-fill", type: "fill", source: "fov", layout: {visibility: "none"}, paint: {"fill-color": "#1c5d99", "fill-opacity": .07}});
+    map.addLayer({id: "fov-line", type: "line", source: "fov", layout: {visibility: "none"}, paint: {"line-color": "#1c5d99", "line-opacity": .45, "line-width": 1}});
+    map.addLayer({id: "cone-fill", type: "fill", source: "cones", paint: {"fill-color": "#d32f2f", "fill-opacity": ["case", ["get", "sel"], .32, .16]}});
+    map.addLayer({id: "cone-line", type: "line", source: "cones", paint: {"line-color": "#d32f2f", "line-width": 1.5, "line-dasharray": [2, 2]}});
+    map.addLayer({id: "wedge-fill", type: "fill", source: "wedges", paint: {"fill-color": "#e8590c", "fill-opacity": ["case", ["get", "sel"], .26, .1]}});
+    map.addLayer({id: "wedge-line", type: "line", source: "wedges", paint: {"line-color": "#e8590c", "line-width": 1, "line-opacity": .7}});
+    map.addLayer({id: "cam-icon", type: "symbol", source: "cameras",
+      layout: {"icon-image": "tower", "icon-size": .9, "icon-allow-overlap": true, "icon-anchor": "bottom",
+               "text-field": ["get", "label"], "text-font": ["Noto Sans Medium"], "text-size": 11.5, "text-offset": [0, .4], "text-anchor": "top", "text-optional": true},
+      paint: {"text-color": "#1c5d99", "text-halo-color": "#fff", "text-halo-width": 1.6}});
+    map.addLayer({id: "wind-arrows", type: "symbol", source: "winds",
+      layout: {"icon-image": ["get", "icon"], "icon-rotate": ["get", "toward"], "icon-rotation-alignment": "map", "icon-allow-overlap": true, "icon-ignore-placement": true,
+               "icon-size": ["interpolate", ["linear"], ["get", "mps"], 0, .4, 5, .65, 15, 1.05], "icon-offset": ["get", "offset"]}});
+    map.addLayer({id: "inc-halo", type: "circle", source: "incidents", filter: ["all", ["==", ["get", "severity"], "ALERT"], ["==", ["get", "status"], "active"]],
+      paint: {"circle-radius": 24, "circle-color": "#d32f2f", "circle-opacity": .16, "circle-translate": [0, -14]}});
+    map.addLayer({id: "inc-sel", type: "circle", source: "incidents", filter: ["==", ["get", "sel"], true],
+      paint: {"circle-radius": 22, "circle-color": "rgba(0,0,0,0)", "circle-stroke-color": "#1f2a22", "circle-stroke-width": 2, "circle-translate": [0, -14]}});
+    map.addLayer({id: "inc-icon", type: "symbol", source: "incidents",
+      layout: {"icon-image": ["get", "icon"], "icon-anchor": "bottom", "icon-allow-overlap": true,
+               "icon-size": ["case", ["get", "sel"], 1.25, ["==", ["get", "status"], "resolved"], .75, 1],
+               "text-field": ["get", "name"], "text-font": ["Noto Sans Medium"], "text-size": 12.5, "text-offset": [0, .3], "text-anchor": "top", "text-optional": true,
+               "symbol-sort-key": ["get", "rank"]},
+      paint: {"text-color": "#1f2a22", "text-halo-color": "#fff", "text-halo-width": 1.8}});
+    map.loaded_ = true;
+    map.on("click", "inc-icon", e => openIncident(e.features[0].properties.id, false));
+    map.on("click", "cam-icon", e => {
+      const p = e.features[0].properties;
+      new maplibregl.Popup().setLngLat(e.lngLat).setHTML(`<b>${esc(p.name)}</b><br>${esc(p.site)}<br>${esc(p.wind)}`).addTo(map);
+    });
+    for (const l of ["inc-icon", "cam-icon"]) {
+      map.on("mouseenter", l, () => map.getCanvas().style.cursor = "pointer");
+      map.on("mouseleave", l, () => map.getCanvas().style.cursor = picking ? "crosshair" : "");
+    }
+    map.on("click", e => {
+      if (!picking) return;
+      const cb = picking; picking = null; map.getCanvas().style.cursor = ""; banner("");
+      cb(e.lngLat);
+    });
+    drawMap();
+  });
+}
+try { initMap(); } catch (e) {
+  map = null;
+  $("#map").innerHTML = `<div class="empty">The map needs WebGL, which is off in this browser (${esc(e.message || e)}). Everything else still works.</div>`;
+}
+
+function drawMap() {
+  if (!STATE || !map || !map.loaded_) return;
+  const incs = visible();
+  const rank = {ALERT: 3, MONITOR: 2, LOG: 1};
+  map.getSource("cameras").setData(fc(STATE.cameras.map(c => point(c.lon, c.lat, {
+    name: c.name, site: c.site, label: c.name,
+    wind: c.wind ? `Wind from ${compass(c.wind.dir_from_deg)} at ${(c.wind.speed_mps * MPS_TO_MPH).toFixed(0)} mph (${c.wind.emulated ? "emulated station" : "station"})` : "No weather station at this site"}))));
+  map.getSource("fov").setData(fc(STATE.cameras.map(c => poly(c.fov, {}))));
+  map.getSource("wedges").setData(fc(incs.filter(i => i.status === "active" || i.id === selected)
+    .flatMap(i => (i.wedges || []).map(w => poly(w, {sel: i.id === selected})))));
+  map.getSource("cones").setData(fc(incs.filter(i => i.cone && i.status === "active").map(i => poly(i.cone.ring, {sel: i.id === selected}))));
+  map.getSource("incidents").setData(fc(incs.map(i => point(i.lon, i.lat, {id: i.id, name: i.name, severity: i.severity, status: i.status,
+    icon: "flame-" + (i.status === "resolved" ? "closed" : i.severity), sel: i.id === selected, rank: -(rank[i.severity] || 0)}))));
+  const winds = [];
+  for (const c of STATE.cameras) if (c.wind) winds.push(point(c.lon, c.lat, {icon: "arrow-wind", toward: (c.wind.dir_from_deg + 180) % 360, mps: c.wind.speed_mps, offset: [26, -20]}));
+  for (const i of incs) if (i.wind && i.status === "active") winds.push(point(i.lon, i.lat, {icon: "arrow-fire", toward: (i.wind.dir_from_deg + 180) % 360, mps: i.wind.speed_mps, offset: [30, -12]}));
+  map.getSource("winds").setData(fc(winds));
+  if (!fitted && STATE.cameras.length) { fitted = true; fitTowers(); }
+}
+function fitTowers() {
+  if (!map) return;
+  const b = new maplibregl.LngLatBounds();
+  const incs = visible();
+  if (incs.length) incs.forEach(i => b.extend([i.lon, i.lat]));            // fit the fires when there are any
+  else STATE.cameras.forEach(c => b.extend([c.lon, c.lat]));
+  map.fitBounds(b, {padding: 90, maxZoom: 11, duration: 600});
+}
+$("#fitBtn").onclick = () => { if (!map) return; const b = new maplibregl.LngLatBounds();
+  STATE.cameras.forEach(c => b.extend([c.lon, c.lat])); map.fitBounds(b, {padding: 60, maxZoom: 11, duration: 600}); };
+$("#caBtn").onclick = () => map && map.fitBounds([[-124.48, 32.53], [-114.13, 42.01]], {padding: 20, duration: 600});
+for (const cb of $$("[data-layer]"))
+  cb.onchange = () => map && LAYERS[cb.dataset.layer].forEach(l => map.getLayer(l) && map.setLayoutProperty(l, "visibility", cb.checked ? "visible" : "none"));
+$("#hours").onchange = refresh;
+
+// ---------------------------------------------------------------- data
+async function api(path, opts = {}) {
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  return j;
+}
+const post = (path, body, method = "POST") => api(path, {method, headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+async function refresh() {
+  try { STATE = await api(`/api/state?hours=${$("#hours").value}`); }
+  catch (e) { banner("Cannot reach the Sentinel service on this device: " + e.message); return; }
+  drawStats(); drawList(); drawMap(); if (selected) drawDetail();
+}
+const visible = () => STATE.incidents.filter(i => filter === "all" || i.status === filter);
+
+function drawStats() {
+  const s = STATE.summary;
+  const size = b => b < 1024 ? `${b} B` : b < 1048576 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1048576).toFixed(1)} MB`;
+  const perCall = s.vlm_calls ? (s.frames / s.vlm_calls).toFixed(0) : "–";
+  const groups = [
+    ["Fires", [["Active fires", s.active_fires, ""], ["Alert", s.by_severity.ALERT, "alert"], ["Monitor", s.by_severity.MONITOR, "monitor"],
+               ["Harmless (logged)", s.by_severity.LOG, ""]]],
+    ["On device", [["Frames analysed", s.frames, ""], ["No smoke (dropped)", s.ignored, ""], ["VLM calls", s.vlm_calls, ""],
+                   ["Frames per VLM call", perCall, "good"]]],
+    ["Cloud", [["Waiting in outbox", s.outbox, s.outbox ? "queued" : ""], ["Alerts sent", s.alerts_sent, ""],
+               ["Data sent out", size(s.bytes_up), "good"], ["Imagery kept local", size(s.image_bytes_seen), "good"]]]];
+  $("#stats").innerHTML = groups.map(([g, items]) => `<div class="group"><div class="gl">${g}</div>${items.map(([k, v, c]) =>
+    `<div class="stat ${c}"><div class="v">${esc(v)}</div><div class="k">${esc(k)}</div></div>`).join("")}</div>`).join("");
+  const up = STATE.online;
+  $("#link").className = "link " + (up ? "up" : "down");
+  $("#linkTxt").textContent = up ? "Dispatch link up" : "Dispatch link down";
+  $("#linkSub").textContent = up ? "ALERTs go out as soon as they happen" : (s.outbox ? `${s.outbox} alert(s) waiting safely on this device` : "Alerts will wait safely on this device");
+  $("#linkBtn").textContent = up ? "Simulate outage" : "Restore link";
+  $("#link").title = "The tower's radio/satellite link to dispatch. The tower keeps working without it; ALERTs wait in an outbox until it returns.";
+}
+function escTag(i) {
+  const d = (i.escalation || {}).decision;
+  if (d === "queued") return `<span class="tag queued">Alert waiting (link down)</span>`;
+  if (d === "sent") return `<span class="tag sent">Reported to dispatch</span>`;
+  return `<span class="tag">Kept on device</span>`;
+}
+function drawList() {
+  const incs = visible();
+  const n = {active: 0, resolved: 0};
+  STATE.incidents.forEach(i => n[i.status] = (n[i.status] || 0) + 1);
+  $("#countNote").textContent = `${n.active || 0} active · ${n.resolved || 0} in history`;
+  $("#list").innerHTML = incs.length ? incs.map(i => `
+    <div class="card ${i.id === selected ? "sel" : ""}" data-id="${i.id}">
+      <div class="ic">${flameHTML(flameColor(i), 26)}</div>
+      <div class="row"><span class="name">${esc(i.name)}</span>${i.demo ? '<span class="demo-badge">DEMO</span>' : ""}<span class="sev ${i.severity}">${i.severity}</span>${i.watching ? '<span class="tag live">LIVE</span>' : ""}</div>
+      <div class="meta">${esc(i.county ? i.county + " County" : "County unknown")} · started ${when(i.created_at)} · ${i.detections} frame${i.detections === 1 ? "" : "s"} with smoke</div>
+      <div class="row"><span class="tag">${esc((i.source_type || "unknown").replace(/_/g, " "))}</span>${i.status === "resolved" ? '<span class="tag">closed</span>' : escTag(i)}
+        ${i.wind && i.status === "active" ? `<span class="tag">wind ${compass(i.wind.dir_from_deg)} ${(i.wind.speed_mps * MPS_TO_MPH).toFixed(0)} mph</span>` : ""}</div>
+      ${i.last_update ? `<div class="upd" style="grid-column:2">Latest: ${esc(i.last_update)}</div>` : ""}
+      ${i.key_frame != null ? `<img class="thumb" loading="lazy" src="/api/incidents/${i.id}/frames/${i.key_frame}?w=360" alt="">` : ""}
+    </div>`).join("")
+    : `<div class="empty">${filter === "resolved" ? "No history yet. In <b>Live watch</b>, use <b>Load fire history</b> to replay the 12 recorded fires (20 tower recordings) at their real dates." :
+       "No active incidents. Start a <b>Live watch</b> on a tower, or use <b>+ Report sighting</b>."}</div>`;
+  for (const el of $$(".card")) el.onclick = () => openIncident(el.dataset.id);
+}
+for (const b of $$("[data-filter]"))
+  b.onclick = () => { filter = b.dataset.filter; $$("[data-filter]").forEach(x => x.classList.toggle("on", x === b)); drawList(); drawMap(); };
+
+// ---------------------------------------------------------------- detail
+function openIncident(id, fly = true) {
+  select(id, fly);
+  const i = STATE.incidents.find(x => x.id === id);
+  if (i && i.key_frame != null) openAnalysis(id, i.key_frame);
+}
+function select(id, fly) {
+  if (id !== selected) detailKey = null;
+  selected = id;
+  const i = STATE.incidents.find(x => x.id === id);
+  if (i && filter !== "all" && i.status !== filter) { filter = "all"; $$("[data-filter]").forEach(x => x.classList.toggle("on", x.dataset.filter === "all")); }
+  drawList(); drawMap(); drawDetail();
+  if (fly && i && map) map.flyTo({center: [i.lon, i.lat], zoom: Math.max(map.getZoom(), 10), duration: 700});
+}
+function windHtml(w) {
+  if (!w) return `<dd>No reading: this site has no weather station and no cached forecast yet. Use <b>Enter wind</b>.</dd>`;
+  const src = w.source === "sensor" ? (w.label && w.label.includes("nearest") ? esc(w.label) : `${w.emulated ? "Emulated " : ""}tower weather station ${esc(w.station)}`) :
+              w.source === "forecast_cache" ? "Forecast cached from the last alert" : "Entered by an officer";
+  return `<dd>From <b>${compass(w.dir_from_deg)}</b> (${w.dir_from_deg.toFixed(0)}°) at <b>${(w.speed_mps * MPS_TO_MPH).toFixed(1)} mph</b>${w.gust_mps != null ? `, gusts ${(w.gust_mps * MPS_TO_MPH).toFixed(0)} mph` : ""}<br>
+    <span class="note">${src} · ${w.age_s != null ? ago(w.age_s) : ""}${w.stale ? " · <b>old reading</b>" : ""}</span></dd>`;
+}
+function drawSpark(canvas, pts, thr) {
+  const dpr = devicePixelRatio || 1, W = canvas.clientWidth, H = canvas.clientHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  const g = canvas.getContext("2d"); g.scale(dpr, dpr);
+  if (!pts.length) return;
+  const maxA = Math.max(...pts.map(p => p.area), 1e-6), x = i => 4 + i * (W - 8) / Math.max(1, pts.length - 1);
+  g.fillStyle = "rgba(232,89,12,.22)"; g.beginPath(); g.moveTo(x(0), H - 2);
+  pts.forEach((p, i) => g.lineTo(x(i), H - 2 - (p.area / maxA) * (H - 10))); g.lineTo(x(pts.length - 1), H - 2); g.fill();
+  g.setLineDash([3, 3]); g.strokeStyle = "#8d7b52"; g.beginPath(); g.moveTo(0, H - 2 - thr * (H - 10)); g.lineTo(W, H - 2 - thr * (H - 10)); g.stroke();
+  g.setLineDash([]); g.strokeStyle = "#1f4d36"; g.lineWidth = 1.6; g.beginPath();
+  pts.forEach((p, i) => (i ? g.lineTo : g.moveTo).call(g, x(i), H - 2 - p.conf * (H - 10))); g.stroke();
+}
+let detailKey = null, PLAYER = {frames: [], idx: 0, cam: "all", timer: null};
+function playerFrames() { return PLAYER.frames.filter(f => PLAYER.cam === "all" || f.camera_id === PLAYER.cam); }
+function showFrame() {
+  const list = playerFrames(), img = $("#pImg");
+  if (!img) return;
+  if (!list.length) { img.removeAttribute("src"); $("#pCap").textContent = "No frames stored for this incident"; return; }
+  PLAYER.idx = Math.max(0, Math.min(PLAYER.idx, list.length - 1));
+  const f = list[PLAYER.idx];
+  img.src = `/api/incidents/${selected}/frames/${f.n}`;
+  $("#pSlider").max = list.length - 1; $("#pSlider").value = PLAYER.idx;
+  const off = f.offset_s != null ? `${f.offset_s >= 0 ? "+" : "−"}${Math.abs(Math.round(f.offset_s / 60))} min from ignition · ` : "";
+  $("#pCap").innerHTML = `${esc(f.camera_name || "")} · ${off}${when(f.t)} · ${f.smoke ? `<b class="smoke">smoke, conf ${(+f.conf).toFixed(2)}</b>` : "no smoke in this frame"}`;
+  $("#pPos").textContent = `${PLAYER.idx + 1}/${list.length}`;
+}
+function stopPlay() { clearInterval(PLAYER.timer); PLAYER.timer = null; const b = $("#pPlay"); if (b) b.textContent = "▶ Play"; }
+function togglePlay() {
+  if (PLAYER.timer) { stopPlay(); return; }
+  if (PLAYER.idx >= playerFrames().length - 1) PLAYER.idx = 0;
+  $("#pPlay").textContent = "❚❚ Pause";
+  PLAYER.timer = setInterval(() => { if (PLAYER.idx >= playerFrames().length - 1) { stopPlay(); return; } PLAYER.idx++; showFrame(); }, 450);
+}
+async function drawDetail() {
+  const i = STATE.incidents.find(x => x.id === selected);
+  const el = $("#detail");
+  if (!i) { el.classList.remove("show"); stopPlay(); detailKey = null; return; }
+  const key = `${i.id}|${i.updated_at}|${i.status}|${i.lat}|${i.severity}|${(i.escalation || {}).decision}|${$("#hours").value}|${i.n_frames}`;
+  if (key === detailKey && el.classList.contains("show")) return;          // nothing changed: no re-render, no flicker
+  let full = i;
+  try { full = await api(`/api/incidents/${i.id}?hours=${$("#hours").value}`); } catch (e) { /* show what we have */ }
+  if (selected !== i.id) return;
+  const sameIncident = detailKey && detailKey.startsWith(i.id + "|");
+  const atEnd = !sameIncident || PLAYER.idx >= playerFrames().length - 1;
+  detailKey = key;
+  PLAYER.frames = full.frames || [];
+  if (!sameIncident) { PLAYER.cam = "all"; stopPlay(); }
+  if (!sameIncident) {
+    const k = playerFrames().findIndex(f => f.n === i.key_frame);
+    PLAYER.idx = k >= 0 ? k : playerFrames().length - 1;
+  } else if (atEnd && !PLAYER.timer) PLAYER.idx = playerFrames().length - 1;
+  const cams = [...new Map(PLAYER.frames.map(f => [f.camera_id, f.camera_name])).entries()];
+  const e = full.escalation || {}, h = $("#hours").value;
+  const updates = (full.updates || []).slice(-14).reverse();
+  const reportOpen = $("#reportText") && $("#reportText").style.display === "block";
+  el.innerHTML = `
+    <div class="dh">${flameHTML(flameColor(i), 26)}<h3>${esc(i.name)}</h3><span class="sev ${i.severity}">${i.severity}</span>
+      <button class="x" id="closeDetail" aria-label="Close">×</button></div>
+    <div class="player">${PLAYER.frames.length ? `<img id="pImg" alt="Tower frame" title="Open the large view with the full analysis"><button class="open" id="pOpen">⤢ Large view &amp; analysis</button>` : `<img id="pImg" src="/api/incidents/${i.id}/thumb?u=${i.updated_at}" alt="Latest frame">`}
+      <span class="cap" id="pCap">${PLAYER.frames.length ? "" : "Latest frame (no filmstrip stored)"}</span></div>
+    ${PLAYER.frames.length ? `<div class="pctl"><button class="btn" id="pPlay">▶ Play</button><input type="range" id="pSlider" min="0" value="0"><span class="note" id="pPos"></span></div>
+      ${cams.length > 1 ? `<div class="camchips"><button class="chip ${PLAYER.cam === "all" ? "on" : ""}" data-cam="all">All towers</button>${cams.map(([id, n]) => `<button class="chip ${PLAYER.cam === id ? "on" : ""}" data-cam="${esc(id)}">${esc(n)}</button>`).join("")}</div>` : ""}` : ""}
+    <div class="sec"><h4>What the tower saw</h4>
+      <div>${esc(full.description || "No description from the VLM; the detector's finding stands (at least MONITOR).")}</div>
+      <dl style="margin-top:7px"><dt>Smoke source</dt><dd>${esc((i.source_type || "unknown").replace(/_/g, " "))}</dd>
+        <dt>Seen in</dt><dd>${i.detections} frame(s) · last ${when(i.updated_at)}</dd>
+        <dt>Seen by</dt><dd>${esc((i.cameras_seeing || [i.camera_name]).filter(Boolean).join(", ") || "field report")}</dd>
+        <dt>Status</dt><dd>${i.status === "active" ? "active" : "closed"}${i.watching ? " · <b>live watch running</b>" : ""}</dd></dl></div>
+    <div class="sec"><h4>Monitoring timeline ${updates.length ? `· ${full.n_updates} update(s)` : ""}
+        <span class="help" title="Each line is a batch of frames from one tower: how many showed smoke, how much the plume grew, and the VLM's re-check.">?</span></h4>
+      ${(full.timeline || []).length ? `<canvas class="spark" id="spark"></canvas><div class="note" style="margin:3px 0 7px">Green line: detector confidence per frame (dashed = 0.4 alert gate). Orange: plume size.</div>` : ""}
+      ${updates.length ? `<ol class="tl">${updates.map(u => `<li><time>${when(u.t)}</time><span>${esc(u.text || u.kind)}</span></li>`).join("")}</ol>` :
+        `<div class="note">No batch updates yet. Start a <b>Live watch</b> to follow it frame by frame.</div>`}</div>
+    <div class="sec"><h4>Location</h4><dl>
+      <dt>Lat, lon</dt><dd>${i.lat.toFixed(5)}, ${i.lon.toFixed(5)}</dd>
+      <dt>County</dt><dd>${esc(i.county || "unknown")}</dd>
+      <dt>Based on</dt><dd>${esc(LOC[i.loc_source] || i.loc_source)}</dd>
+      ${i.bearing_deg != null && i.loc_source !== "triangulated" ? `<dt>Direction</dt><dd>${i.bearing_deg.toFixed(0)}° ${compass(i.bearing_deg)} from the camera</dd>` : ""}
+      </dl>${i.loc_source === "camera_bearing" ? `<div class="note" style="margin-top:5px">One tower gives the direction, not the distance: the pin sits ${i.range_km || 10} km out. A second tower seeing it fixes this automatically; or use <b>Correct location</b>.</div>` :
+        i.loc_source === "triangulated" ? `<div class="note" style="margin-top:5px">${esc(i.loc_note || "")}</div>` : ""}</div>
+    <div class="sec"><h4>Wind</h4><dl><dt>Now</dt>${windHtml(i.wind)}
+      ${i.cone ? `<dt>In ${h} h</dt><dd>smoke/fire could drift toward <b>${compass(i.cone.toward_deg)}</b>, about ${i.cone.length_km.toFixed(1)} km (${(i.cone.length_km * .621).toFixed(1)} mi)</dd>` : ""}
+      </dl><div class="note" style="margin-top:5px">Rough guide: 10% of wind speed × ${h} h. Where to look first, not a fire-spread model.</div></div>
+    <div class="sec"><h4>Dispatch</h4><div>${i.status === "resolved" ? '<span class="tag">closed</span>' : escTag(i)} ${e.bytes_up ? `<span class="note">${(e.bytes_up / 1024).toFixed(1)} KB sent</span>` : ""}</div>
+      <div class="note" style="margin-top:4px">${esc(e.note || "")}</div></div>
+    <div class="sec actions">
+      <button class="btn primary" id="askExplain">Ask Sentinel to explain</button>
+      <button class="btn" id="movePin" title="Click the map where the fire actually is">Correct location</button>
+      <button class="btn" id="setWind">Enter wind</button>
+      <button class="btn" id="resolve">${i.status === "active" ? "Close incident" : "Reopen"}</button>
+      <button class="btn" id="showReport">Dispatch report</button>
+    </div>
+    <div class="sec" id="reportText" style="display:${reportOpen ? "block" : "none"}"><h4>Report payload (text part)</h4><pre class="report">${esc(full.report_text || "")}</pre></div>`;
+  el.classList.add("show");
+  if (PLAYER.frames.length) {
+    showFrame();
+    $("#pSlider").oninput = e => { stopPlay(); PLAYER.idx = +e.target.value; showFrame(); };
+    $("#pPlay").onclick = togglePlay;
+    const openBig = () => { stopPlay(); const f = playerFrames()[PLAYER.idx]; if (f) openAnalysis(i.id, f.n); };
+    $("#pImg").onclick = openBig; $("#pOpen").onclick = openBig;
+    $$("[data-cam]", el).forEach(b => b.onclick = () => { PLAYER.cam = b.dataset.cam; PLAYER.idx = playerFrames().length - 1; stopPlay();
+      $$("[data-cam]", el).forEach(x => x.classList.toggle("on", x === b)); showFrame(); });
+  }
+  if ($("#spark")) drawSpark($("#spark"), (full.timeline || []).slice(-120), CFG ? CFG.min_conf : .4);
+  $("#closeDetail").onclick = () => { selected = null; detailKey = null; stopPlay(); el.classList.remove("show"); drawList(); drawMap(); };
+  $("#askExplain").onclick = () => { showTab("ask"); ask("Explain the selected incident: what the camera sees, how it has developed, and what I should do next."); };
+  $("#movePin").onclick = () => pick("Click the map where the fire actually is", ll => patch(i.id, {lat: ll.lat, lon: ll.lng}));
+  $("#setWind").onclick = () => {
+    const d = prompt("Wind is coming FROM which direction? (degrees: 0 = north, 90 = east, 270 = west)", i.wind ? i.wind.dir_from_deg.toFixed(0) : "270");
+    if (d == null) return;
+    const s = prompt("Wind speed (mph):", i.wind ? (i.wind.speed_mps * MPS_TO_MPH).toFixed(0) : "10");
+    if (s == null) return;
+    patch(i.id, {wind_from_deg: +d, wind_speed_mps: +s / MPS_TO_MPH});
+  };
+  $("#resolve").onclick = () => patch(i.id, {status: i.status === "active" ? "resolved" : "active"});
+  $("#showReport").onclick = () => { const b = $("#reportText"); b.style.display = b.style.display === "block" ? "none" : "block"; };
+}
+async function patch(id, body) {
+  try { await post(`/api/incidents/${id}`, body, "PATCH"); await refresh(); } catch (e) { toast(e.message); }
+}
+function pick(msg, cb) { if (!map) { toast("The map is unavailable in this browser"); return; } picking = cb; map.getCanvas().style.cursor = "crosshair"; banner(msg + " (Esc to cancel)"); }
+document.addEventListener("keydown", e => { if (e.key === "Escape" && picking && map) { picking = null; map.getCanvas().style.cursor = ""; banner(""); } });
+function banner(msg) { const b = $("#banner"); b.textContent = msg; b.classList.toggle("show", !!msg); }
+let toastT = null;
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove("show"), 5000); }
+
+$("#linkBtn").onclick = async () => {
+  const r = await post("/api/network", {online: !STATE.online});
+  toast(r.online ? (r.flushed ? `Link restored: ${r.flushed} waiting alert(s) sent to dispatch` : "Link restored: nothing was waiting")
+                 : "Link down: the tower keeps working and holds ALERTs until the link returns");
+  refresh();
+};
+$("#helpBtn").onclick = () => $("#helpDlg").showModal();
+
+// ---------------------------------------------------------------- tabs
+function showTab(name) {
+  $$(".tab").forEach(t => t.classList.toggle("on", t.dataset.tab === name));
+  $$(".pane").forEach(p => p.classList.toggle("on", p.id === "pane-" + name));
+  if (name === "watch") refreshWatch();
+  if (name === "demo") refreshDemo();
+}
+$$(".tab").forEach(t => t.onclick = () => showTab(t.dataset.tab));
+
+// ---------------------------------------------------------------- live watch
+let RECS = [];
+async function refreshWatch() {
+  try { WATCH = (await api("/api/watch")).sessions; } catch (e) { return; }
+  const names = Object.fromEntries((CFG ? CFG.cameras : []).map(c => [c.id, c.name]));
+  $("#watchList").innerHTML = WATCH.length ? WATCH.slice(0, 8).map(w => {
+    const pct = Math.round(100 * w.idx / Math.max(1, w.total));
+    const live = w.cams.filter(c => c.has_frame);
+    return `<div class="wcard">
+      <div style="display:flex;gap:6px;align-items:center"><b style="flex:1">${esc(w.label)}</b>
+        ${w.state === "running" ? '<span class="tag live">LIVE</span>' : `<span class="tag">${w.state}</span>`}
+        ${w.time_mode === "recorded" ? '<span class="tag">history</span>' : ""}</div>
+      <div class="note">${w.camera_ids.length} tower${w.camera_ids.length > 1 ? "s" : ""}: ${esc(w.camera_ids.map(c => names[c] || c).join(", "))}</div>
+      ${w.state === "running" && live.length ? `<div class="camgrid">${live.map(c => `<figure><img src="/api/watch/${w.id}/frame/${c.camera_id}?t=${c.frames_done}" alt="">
+        <figcaption><span>${esc(names[c.camera_id] || c.camera_id)}</span><span>${c.latest_offset != null ? `${c.latest_offset >= 0 ? "+" : "−"}${Math.abs(Math.round(c.latest_offset / 60))}m` : ""}</span></figcaption></figure>`).join("")}</div>` : ""}
+      <div class="prog"><i style="width:${pct}%"></i></div>
+      <div class="note">Frame ${w.idx}/${w.total} · <b>${w.frames_done}</b> frames through the detector, <b>${w.vlm_calls}</b> VLM call(s)${w.vlm_calls ? ` (1 per ${Math.round(w.frames_done / w.vlm_calls)} frames)` : ""}</div>
+      <div class="actions">${w.incident_ids.length ? w.incident_ids.map((id, k) => `<button class="btn" data-open="${id}">Open incident${w.incident_ids.length > 1 ? " " + (k + 1) : ""}</button>`).join("") : '<span class="note">No incident yet: waiting for smoke to persist.</span>'}
+        ${w.state === "running" ? `<button class="btn" data-stop="${w.id}">Stop</button>` : ""}</div>
+      ${w.error ? `<div class="note" style="color:var(--alert)">${esc(w.error)}</div>` : ""}
+    </div>`; }).join("") : `<div class="empty">Nothing being watched. Pick a fire recording and press <b>Start watching</b>.</div>`;
+  $$("[data-open]").forEach(b => b.onclick = () => { refresh().then(() => openIncident(b.dataset.open)); });
+  $$("[data-stop]").forEach(b => b.onclick = async () => { await api(`/api/watch/${b.dataset.stop}`, {method: "DELETE"}); refreshWatch(); });
+}
+async function startWatch(recording, time_mode, interval_s) {
+  try {
+    await post("/api/watch", {recording, time_mode, interval_s, batch_frames: +$("#wBatch").value, start_offset_s: time_mode === "recorded" ? null : -600});
+    toast(time_mode === "recorded" ? "Replaying every recorded fire at its real date. They will appear under History." : "Watching: frames from every tower that recorded this fire are going through the detector");
+    showTab("watch");
+  } catch (e) { toast(e.message); }
+}
+$("#wStart").onclick = () => startWatch($("#wRec").value, "live", +$("#wSpeed").value);
+$("#wHistory").onclick = () => { if (confirm(`Replay all ${RECS.length} recorded fires as history? This uses the GPU for several minutes.`)) startWatch("all", "recorded", 0); };
+
+// ---------------------------------------------------------------- assistant
+function mdLite(s) {
+  const lines = esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").split("\n");
+  let out = "", inList = false;
+  for (const l of lines) {
+    const m = l.match(/^\s*[-*•]\s+(.*)/);
+    if (m) { if (!inList) { out += "<ul>"; inList = true; } out += `<li>${m[1]}</li>`; }
+    else { if (inList) { out += "</ul>"; inList = false; } if (l.trim()) out += `<p>${l}</p>`; }
+  }
+  return out + (inList ? "</ul>" : "");
+}
+async function ask(q) {
+  const chat = $("#chat"), wrap = $("#chatWrap");
+  chat.insertAdjacentHTML("beforeend", `<div class="msg q">${esc(q)}</div>`);
+  const a = document.createElement("div"); a.className = "msg a";
+  a.innerHTML = `<span class="thinking"><i></i><i></i><i></i></span> <span class="note">Thinking on this device…</span>`;
+  chat.appendChild(a); wrap.scrollTop = wrap.scrollHeight;
+  try {
+    const r = await post("/api/ask", {question: q, selected});
+    const names = Object.fromEntries(STATE.incidents.map(i => [i.id, i.name]));
+    const links = r.incident_ids.filter(id => names[id]).slice(0, 8);
+    a.innerHTML = mdLite(r.answer) +
+      (links.length ? `<div class="actions" style="margin-top:6px">${links.map(id => `<button class="btn" data-go="${id}">${esc(names[id])}</button>`).join("")}</div>` : "") +
+      `<div class="foot">${esc(r.model)} on this device · ${r.usage.model_calls} model call(s) · ${(r.usage.prompt_tokens + r.usage.completion_tokens).toLocaleString()} tokens ·
+        ${(r.latency_ms / 1000).toFixed(1)} s · <b>0 bytes sent off the device</b>${r.used_image ? " · looked at the incident's frame" : ""}
+        <details><summary>Tools used: ${r.calls.map(c => esc(c.tool)).join(", ")}</summary><pre>${esc(JSON.stringify(r.calls, null, 1))}</pre></details></div>`;
+    $$("[data-go]", a).forEach(b => b.onclick = () => select(b.dataset.go, true));
+  } catch (e) { a.innerHTML = `<span style="color:var(--alert)">${esc(e.message)}</span>`; }
+  wrap.scrollTop = wrap.scrollHeight;
+}
+$$("#quick button").forEach(b => b.onclick = () => {
+  if (b.hasAttribute("data-needs-sel") && !selected) { toast("Select an incident on the map or in the list first"); return; }
+  ask(b.dataset.q);
+});
+$("#askForm").onsubmit = e => { e.preventDefault(); const q = $("#askIn").value.trim(); if (q) { $("#askIn").value = ""; ask(q); } };
+
+// ---------------------------------------------------------------- demo guide
+let DEMO = null;
+async function refreshDemo() {
+  try { DEMO = await api("/api/demo"); } catch (e) { return; }
+  $("#demoState").textContent = {idle: "", running: "Loading… each photo takes a few seconds on the GPU", done: "Loaded", error: "Error: " + (DEMO.error || "")}[DEMO.state] || "";
+  $("#demoLoad").disabled = DEMO.state === "running";
+  $("#demoList").innerHTML = DEMO.scenarios.map((sc, k) => {
+    const r = sc.result || {};
+    const sev = r.severity;
+    const matched = sev && sc.expect_severity ? (sc.expect_severity.split("|").includes(sev) ? '<span class="match ok">✓ as expected</span>' : `<span class="match diff">≠ expected ${esc(sc.expect_severity)}: the model disagreed</span>`) : "";
+    let body = "";
+    if (r.status === "running") body = '<span class="thinking"><i></i><i></i><i></i></span> <span class="note">running on the device…</span>';
+    else if (r.status === "watching") body = `<div class="note">Live watch ${esc(r.state || "")} · frame ${esc(r.progress || "")}${r.towers ? ` · ${r.towers} tower(s) see it` : ""}${r.loc_source === "triangulated" ? " · <b>triangulated</b>" : ""}</div>`;
+    else if (r.status === "not loaded") body = '<span class="note">Press <b>Load demo scenarios</b>.</span>';
+    else if (r.status === "error" || r.status === "skipped") body = `<div class="note">${r.status === "error" ? "Step failed" : "Skipped"}: ${esc(r.note || "")}</div>`;
+    if (r.thumb_b64) body += `<img src="data:image/jpeg;base64,${r.thumb_b64}" alt=""><div class="note">Dropped: no detection ≥ 0.40 (best ${r.best ?? "none"}). VLM not called, 0 tokens, nothing stored or sent.</div>`;
+    return `<div class="demo-step">
+      <div class="hd"><span class="num">${k + 1}</span><b style="flex:1">${esc(sc.title)}</b>${sev ? `<span class="sev ${sev}">${sev}</span>` : ""}</div>
+      <div class="exp">${esc(sc.story || "")}</div>
+      <div class="exp"><span class="muted">Expected:</span> ${esc(sc.expect)} ${matched}</div>
+      ${r.escalation ? `<div class="exp"><span class="muted">Escalation:</span> ${esc(r.escalation)}${r.tokens ? ` · ${r.tokens} VLM tokens` : ""}</div>` : ""}
+      ${body}
+      <div class="actions">${r.incident_id ? `<button class="btn primary" data-demo-open="${r.incident_id}">Open</button>` : ""}
+        ${sc.kind === "action" && sc.action === "restore_link" ? `<button class="btn ember" data-demo-link>${STATE && STATE.online ? "Link is up" : "Restore the link now"}</button>` : ""}</div>
+    </div>`; }).join("") || '<div class="empty">No demo scenarios configured.</div>';
+  $$("[data-demo-open]").forEach(b => b.onclick = () => refresh().then(() => openIncident(b.dataset.demoOpen)));
+  $$("[data-demo-link]").forEach(b => b.onclick = () => { if (!STATE.online) $("#linkBtn").click(); });
+}
+$("#demoLoad").onclick = async () => {
+  if (!confirm("Load the demo scenarios? This clears the current incidents and cuts the dispatch link.")) return;
+  try { await post("/api/demo/load", {}); selected = null; detailKey = null; $("#detail").classList.remove("show"); refresh(); refreshDemo(); }
+  catch (e) { toast(e.message); }
+};
+
+// ---------------------------------------------------------------- large analysis view
+const ANA = {inc: null, frames: [], pos: 0};
+const yesNo = v => v === true ? "yes" : v === false ? "no" : esc(v ?? "–");
+async function openAnalysis(incId, n, scrollToDetails = true) {
+  let inc;
+  try { inc = await api(`/api/incidents/${incId}?hours=${$("#hours").value}`); } catch (e) { toast(e.message); return; }
+  ANA.inc = inc; ANA.frames = inc.frames || [];
+  ANA.pos = Math.max(0, ANA.frames.findIndex(f => f.n === n));
+  if (!$("#anaDlg").open) $("#anaDlg").showModal();
+  renderAnalysis(scrollToDetails);
+}
+function nearestAnalysed(pos) {
+  let best = null;
+  ANA.frames.forEach((f, k) => { if (f.analysis && f.analysis.context !== undefined && (best === null || Math.abs(k - pos) < Math.abs(best - pos))) best = k; });
+  return best;
+}
+function renderAnalysis(scrollToDetails) {
+  const inc = ANA.inc, f = ANA.frames[ANA.pos];
+  if (!f) { $("#anaDetails").innerHTML = `<div class="empty">No frames stored for this incident.</div>`; return; }
+  const own = f.analysis, ak = own ? ANA.pos : nearestAnalysed(ANA.pos), a = ak !== null ? ANA.frames[ak].analysis : null;
+  const ctx = (a && a.context) || null;
+  const sev = (own && own.severity) || inc.severity;
+  const strong = (f.dets || []).filter(d => d.strong), best = strong[0];
+  const off = f.offset_s != null ? `${f.offset_s >= 0 ? "+" : "−"}${Math.abs(Math.round(f.offset_s / 60))} min from ignition · ` : "";
+  $("#anaIcon").innerHTML = flameHTML(flameColor(inc), 28);
+  $("#anaTitle").textContent = inc.name;
+  $("#anaSub").textContent = `${f.camera_name || "field report"} · ${off}${when(f.t)} · frame ${ANA.pos + 1} of ${ANA.frames.length}`;
+  $("#anaSev").className = "sev " + sev; $("#anaSev").textContent = sev;
+  $("#anaImg").src = `/api/incidents/${inc.id}/frames/${f.n}`;
+  $("#anaPrev").disabled = ANA.pos === 0; $("#anaNext").disabled = ANA.pos >= ANA.frames.length - 1;
+  const escal = inc.escalation || {};             // the incident's current status, not the one when this frame was taken
+  const w = inc.wind, h = $("#hours").value;
+  const minConf = CFG ? CFG.min_conf : .4;
+  $("#anaDetails").innerHTML = `<div class="anagrid">
+    <div class="acard"><h4>Stage 1 · Smoke detector (every frame, on this device)${f.detector ? ` · <span style="text-transform:none">${esc(f.detector)}</span>` : ""}</h4>
+      <div class="lead">${best ? `Found <b>${esc(best.cls)} ${best.conf.toFixed(2)}</b> ≥ ${minConf.toFixed(2)} gate.` :
+        `No detection ≥ ${minConf.toFixed(2)}. VLM <b>not called</b> for this frame (call avoided).`}
+        <span class="note"> · ${f.detect_ms != null ? f.detect_ms.toFixed(0) + " ms" : ""}</span></div>
+      ${(f.dets || []).length ? f.dets.map(d => `<span class="dchip ${d.strong ? "" : "weak"}">${esc(d.cls)} ${d.conf.toFixed(2)}</span>`).join("") : '<span class="note">No boxes.</span>'}
+      <div class="note" style="margin-top:6px">Solid = above the alert gate; dashed = weak, shown but ignored.</div></div>
+
+    <div class="acard"><h4>Stage 2 · Context verdict (Qwen2.5-VL-7B + LoRA, on this device)</h4>
+      ${ctx ? `${own ? `<div class="lead">${esc(own.why || "The VLM classified the smoke crop.")}${own.sent_size ? ` Crop sent: ${own.sent_size[0]}×${own.sent_size[1]} px.` : ""}</div>`
+                     : `<div class="lead">The VLM runs once per batch, not on every frame. Verdict below is from <a href="#" id="anaJump">frame ${ak + 1}</a>.</div>`}
+        <dl><dt>Source</dt><dd><b>${esc((ctx.source_type || "").replace(/_/g, " "))}</b></dd><dt>Smoke colour</dt><dd>${esc(ctx.smoke_color)}</dd>
+          <dt>Attended</dt><dd>${esc(ctx.attended)}</dd><dt>Near structures</dt><dd>${yesNo(ctx.near_structures)}</dd>
+          <dt>Near road</dt><dd>${yesNo(ctx.near_road)}</dd><dt>Size</dt><dd>${esc(ctx.size_estimate)}</dd></dl>
+        <div class="quote">“${esc(ctx.description || "")}”</div>`
+      : `<div class="lead">Not needed: nothing passed the detector gate${a && a.vlm_status === "unavailable" ? ", or the VLM is not served (detector-only mode)" : ""}.</div>`}</div>
+
+    <div class="acard"><h4>Impact</h4>
+      <dl><dt>Severity</dt><dd><span class="sev ${sev}">${sev}</span> ${own && own.trend ? `· plume ${esc(own.trend)}` : ""}</dd>
+        ${own && own.batch ? `<dt>This batch</dt><dd>${esc(own.batch)}</dd>` : ""}
+        <dt>Location</dt><dd>${inc.lat.toFixed(5)}, ${inc.lon.toFixed(5)} · ${esc(inc.county || "?")} County</dd>
+        <dt>Based on</dt><dd>${esc(LOC[inc.loc_source] || inc.loc_source)}</dd>
+        <dt>Seen by</dt><dd>${esc((inc.cameras_seeing || []).join(", ") || f.camera_name || "field report")}</dd>
+        <dt>Wind</dt><dd>${w ? `from ${compass(w.dir_from_deg)} at ${(w.speed_mps * MPS_TO_MPH).toFixed(0)} mph${inc.cone ? ` → could drift ${compass(inc.cone.toward_deg)} ~${inc.cone.length_km.toFixed(1)} km in ${h} h` : ""}` : "no reading"}</dd></dl></div>
+
+    <div class="acard"><h4>Escalation (only ALERTs leave the tower)</h4>
+      <div class="ecard"><img src="/api/incidents/${inc.id}/thumb?u=${inc.updated_at}" alt="">
+        <div>${escTag(inc)} ${escal.bytes_up ? `<b>${(escal.bytes_up / 1024).toFixed(1)} KB sent</b>` : escal.payload_bytes ? `<b>${(escal.payload_bytes / 1024).toFixed(1)} KB waiting</b>` : "<b>0 B up</b>"}
+          <div class="note" style="margin-top:4px">${esc(escal.note || "")}</div></div></div></div>
+
+    <div class="acard span2"><h4>Dispatch report</h4><pre class="report">${esc((own && own.report_text) || inc.report_text || "No report: nothing to report.")}</pre></div>
+
+    <div class="acard"><h4>Cost of this pass</h4><dl>
+      <dt>Detector</dt><dd>${f.detect_ms != null ? f.detect_ms.toFixed(0) + " ms" : "–"}</dd>
+      <dt>VLM</dt><dd>${own && own.vlm_ms ? (own.vlm_ms / 1000).toFixed(2) + " s" : "not called"}</dd>
+      <dt>Tokens used</dt><dd>${own && own.tokens ? `${own.tokens} <span class="note">${own.tokens_in ?? "?"} in · ${own.tokens_out ?? "?"} out</span>` : 0}</dd>
+      <dt>Image tokens sent</dt><dd>${own && own.crop_image_tokens ? own.crop_image_tokens + " <span class=note>(crop)</span>" : 0}</dd>
+      <dt>Full frame to cloud</dt><dd>${f.full_frame_image_tokens || "–"} image tokens <span class="note">est., ≤1280 px</span></dd></dl></div>
+
+    <div class="acard"><h4>Edge vs cloud-only, for this frame</h4>
+      <div class="cmp"><div><span class="note">This tower</span><b>${own && own.crop_image_tokens ? own.crop_image_tokens : 0} img tokens</b><span class="note">0 bytes of imagery sent</span></div>
+        <div><span class="note">Cloud-only (every frame uploaded)</span><b>${f.full_frame_image_tokens || "–"} img tokens</b><span class="note">whole frame over the link, needs connectivity</span></div></div>
+      <div class="note" style="margin-top:6px">Across this incident: ${ANA.frames.length} frames analysed, ${ANA.frames.filter(x => x.analysis && x.analysis.tokens).length} VLM call(s).</div></div>
+  </div>`;
+  const jump = $("#anaJump");
+  if (jump) jump.onclick = e => { e.preventDefault(); ANA.pos = ak; renderAnalysis(true); };
+  if (scrollToDetails) {
+    const img = $("#anaImg");
+    const go = () => setTimeout(() => $("#anaBody").scrollTo({top: $("#anaDetails").offsetTop - 8, behavior: "smooth"}), 650);
+    $("#anaBody").scrollTop = 0;
+    if (img.complete) go(); else img.onload = () => { img.onload = null; go(); };
+  }
+}
+$("#anaClose").onclick = () => $("#anaDlg").close();
+$("#anaPrev").onclick = () => { if (ANA.pos > 0) { ANA.pos--; renderAnalysis(false); } };
+$("#anaNext").onclick = () => { if (ANA.pos < ANA.frames.length - 1) { ANA.pos++; renderAnalysis(false); } };
+$("#anaTop").onclick = () => $("#anaBody").scrollTo({top: 0, behavior: "smooth"});
+$("#anaDown").onclick = () => $("#anaBody").scrollTo({top: $("#anaDetails").offsetTop - 8, behavior: "smooth"});
+$("#anaDlg").addEventListener("keydown", e => { if (e.key === "ArrowLeft") $("#anaPrev").click(); if (e.key === "ArrowRight") $("#anaNext").click(); });
+
+// ---------------------------------------------------------------- report dialog
+const dlg = $("#reportDlg");
+let SRC = "tower", PHOTO = null;
+$$("[data-src]").forEach(b => b.onclick = () => {
+  SRC = b.dataset.src; $$("[data-src]").forEach(x => x.classList.toggle("on", x === b));
+  $$("#reportForm [data-for]").forEach(x => x.style.display = x.dataset.for === SRC ? "" : "none");
+  if (SRC === "photo" && !$("#photoGrid").children.length) {
+    $("#photoGrid").innerHTML = SAMPLES.filter(s => s.kind === "photo").map(s => `<img src="/api/sample/${s.id}" data-pid="${s.id}" alt="">`).join("") || '<span class="note">No demo photos on this device.</span>';
+    $$("#photoGrid img").forEach(im => im.onclick = () => { PHOTO = im.dataset.pid; $$("#photoGrid img").forEach(x => x.classList.toggle("on", x === im));
+      $("#preview").src = im.src; $("#preview").style.display = "block"; });
+  }
+  if (SRC === "photo" && !$("#fLat").value) $("#fCam").value = "";
+  if (SRC === "tower") showSample(); else if (SRC === "upload") { $("#preview").style.display = $("#fFile").files.length ? "block" : "none"; }
+});
+function camSamples() { return SAMPLES.filter(s => s.camera_id === $("#fCam").value).sort((a, b) => (a.recording || "").localeCompare(b.recording || "") || a.offset_s - b.offset_s); }
+function showSample() {
+  const list = camSamples(), f = $("#sampleField");
+  f.style.display = list.length ? "" : "none";
+  if (!list.length) return;
+  const s = list[+$("#fSample").value] || list[0];
+  $("#offLbl").textContent = `${s.fire ? s.fire + " · " : ""}${s.offset_s >= 0 ? "+" : "−"}${Math.abs(Math.round(s.offset_s / 60))} min from ignition`;
+  if (SRC === "tower") { $("#preview").src = `/api/sample/${s.id}`; $("#preview").style.display = "block"; }
+}
+$("#fCam").onchange = () => {
+  const list = camSamples();
+  $("#fSample").max = Math.max(0, list.length - 1);
+  const i = list.findIndex(s => s.offset_s >= 1200);
+  $("#fSample").value = i >= 0 ? i : 0;
+  showSample();
+};
+$("#fSample").oninput = showSample;
+$("#fFile").onchange = () => { const f = $("#fFile").files[0]; if (f) { $("#preview").src = URL.createObjectURL(f); $("#preview").style.display = "block"; } else showSample(); };
+$("#reportBtn").onclick = () => { $("#result").innerHTML = ""; dlg.showModal(); showSample(); };
+$("#cancelBtn").onclick = () => dlg.close();
+$("#pickBtn").onclick = () => { dlg.close(); pick("Click the map to set the reported location", ll => {
+  $("#fLat").value = ll.lat.toFixed(5); $("#fLon").value = ll.lng.toFixed(5); dlg.showModal(); }); };
+$("#submitBtn").onclick = async () => {
+  const fd = new FormData(), btn = $("#submitBtn");
+  const cam = $("#fCam").value, file = $("#fFile").files[0];
+  if (cam) fd.append("camera_id", cam);
+  if (SRC === "upload") { if (!file) { $("#result").innerHTML = "Choose a file to upload."; return; } fd.append("image", file); }
+  else if (SRC === "photo") {
+    if (!PHOTO) { $("#result").innerHTML = "Pick one of the demo photos."; return; }
+    if (!cam && !($("#fLat").value && $("#fLon").value)) { $("#result").innerHTML = "Demo photos carry no GPS: enter latitude/longitude or use <b>Pick on map</b>."; return; }
+    fd.append("sample_id", PHOTO);
+  } else { const s = camSamples()[+$("#fSample").value]; if (s) fd.append("sample_id", s.id); }
+  if ($("#fLat").value || $("#fLon").value) { fd.append("lat", $("#fLat").value); fd.append("lon", $("#fLon").value); }
+  if ($("#fName").value) fd.append("name", $("#fName").value);
+  if ($("#fForce").checked) fd.append("force_vlm", "1");
+  btn.disabled = true; btn.textContent = "Running detector + VLM on this device…"; $("#result").innerHTML = "";
+  try {
+    const r = await api("/api/report", {method: "POST", body: fd});
+    const res = r.result;
+    const timing = `detector ${res.detect_ms.toFixed(0)} ms${res.vlm_ms ? ` · VLM ${(res.vlm_ms / 1000).toFixed(1)} s, ${res.tokens} tokens` : ""}`;
+    if (!r.incident) $("#result").innerHTML = `<b>No smoke found.</b> ${esc(r.note)} <span class="note">(${timing})</span>`;
+    else {
+      await refresh(); dlg.close(); select(r.incident.id, true);
+      openAnalysis(r.incident.id, r.frame_n);
+    }
+  } catch (e) { $("#result").innerHTML = `<span style="color:var(--alert)">${esc(e.message)}</span>`; }
+  btn.disabled = false; btn.textContent = "Analyse on this device";
+};
+
+// ---------------------------------------------------------------- start
+(async () => {
+  try { CFG = await api("/api/config"); SAMPLES = (await api("/api/samples")).samples; }
+  catch (e) { banner("Cannot reach the Sentinel service on this device: " + e.message); return; }
+  for (const c of CFG.cameras) {
+    const opt = `<option value="${c.id}">${esc(c.name)} · facing ${compass(c.azimuth_deg)}</option>`;
+    $("#fCam").insertAdjacentHTML("beforeend", opt);
+  }
+  try { RECS = (await api("/api/recordings")).recordings; } catch (e) { RECS = []; }
+  $("#wRec").innerHTML = RECS.map(r => `<option value="${esc(r.key)}">${esc(r.fire)} · ${esc(r.date || "")} · ${r.cameras.length} tower${r.cameras.length > 1 ? "s" : ""}</option>`).join("");
+  if (CFG.cameras.length) { $("#fCam").value = CFG.cameras[0].id; $("#fCam").onchange(); }
+  const warn = [];
+  if (!CFG.map_available) warn.push("offline map file missing");
+  if (!CFG.detector_available) warn.push("detector weights missing");
+  if (!CFG.vlm_served) warn.push(`VLM "${CFG.vlm_model}" not served (detector-only mode)`);
+  if (warn.length) banner(warn.join(" · "));
+  refresh();
+  setInterval(refresh, 4000);
+  setInterval(() => { if ($("#pane-watch").classList.contains("on") || WATCH.some(w => w.state === "running")) refreshWatch(); }, 2000);
+  setInterval(() => { if ($("#pane-demo").classList.contains("on")) refreshDemo(); }, 2500);
+})();
+</script>
+</body>
+</html>

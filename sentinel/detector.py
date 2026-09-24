@@ -1,7 +1,15 @@
 """Stage 1: YOLO smoke/fire detector (fine-tuned YOLO, or YOLO-World zero-shot with text classes)."""
+from pathlib import Path
+
 import numpy as np
 
 from sentinel.schema import Detection
+
+
+def imgsz_for(weights: str) -> int:
+    """Tower-trained detectors (tower_*/joint_* weights) were trained at 960 px; the rest at 640."""
+    name = Path(weights).name.lower()
+    return 960 if ("joint" in name or "tower" in name) else 640
 
 
 class YoloDetector:
