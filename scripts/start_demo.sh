@@ -56,6 +56,9 @@ for p in d['pipelines']:
         print(f\"  {p['name']:6} detector={p['detector_weights']:28} vlm={p['vlm']:8} {'OK' if p['vlm_served'] and p['detector_available'] else 'NOT READY'}\")"
 curl -s -m 5 -o /dev/null -w "  metrics dashboard: HTTP %{http_code}\n" localhost:8090/
 curl -s -m 5 -o /dev/null -w "  incident map: HTTP %{http_code}\n" localhost:8100/ || true
+# a reused instance keeps the flags it was started with: show which tower detector it actually runs
+curl -s -m 5 localhost:8100/api/config 2>/dev/null | python3 -c "import json, sys; \
+print('  incident map detector:', json.load(sys.stdin).get('detector_weights'))" 2>/dev/null || true
 echo
 echo "Ready. On the laptop: ssh -N -L 8095:localhost:8095 -L 8090:localhost:8090 -L 8100:localhost:8100 hp11@<nano-ip>"
 echo "Demo app: http://localhost:8095   Live metrics: http://localhost:8090   Incident map: http://localhost:8100"
