@@ -252,6 +252,93 @@ labels the reports), `--no-monitor`.
   available detector runs once on a blank frame in the background, so the first click does not pay the
   cold CUDA/CLIP load.
 
+## Incident map (offline, port 8100)
+
+`sentinel.incident_map` is an operations view of the tower network: every confirmed detection becomes an
+incident on an offline map of California, with a severity, county, location, the camera's bearing to the
+smoke, the wind from the tower's own weather station and an indicative downwind cone. Map tiles, fonts,
+wind and models all come from the box itself; with the uplink cut, everything on the page still works.
+
+```bash
+./scripts/setup_map_assets.sh        # once, while online: ~1.5 GB into ~/sentinel-assets (outside git)
+./scripts/fetch_figlib.sh            # 20 FIgLib recordings (12 fires, ~740 MB), rate-limited, into ~/sentinel-assets/figlib
+python scripts/build_cameras.py      # config/cameras.json from HPWREN's camera list + the recordings on disk
+python -m sentinel.incident_map      # binds 127.0.0.1:8100; uplink starts OFFLINE
+ssh -N -L 8100:localhost:8100 hp11@<nano-ip>   # laptop, then http://localhost:8100
+```
+
+- **Cameras** (`config/cameras.json`, built by `scripts/build_cameras.py`) are the 19 real HPWREN cameras
+  that recorded our 20 FIgLib sequences, with their published coordinates, heading and 90° field of view
+  (`hpwren.ucsd.edu/cameras/sites.js`) and their weather station where the site has one. The recordings
+  cover 12 fires from June–September 2026; the Junction Fire was recorded by six towers and the Creelman
+  Fire by three. FIgLib data: HPWREN, https://www.hpwren.ucsd.edu/ (credit required).
+- **Triangulation:** one tower measures only the direction to the smoke. When a second tower's bearing
+  line crosses an active incident's line (in front of both cameras, within 60 km, within 30 min), its
+  sighting joins that incident and the pin moves to the least-squares crossing point of all the towers'
+  lines (`geo.triangulate`); the note says how closely the lines agree. On the Junction Fire recording,
+  4 of the 6 towers detected the smoke and their lines agree within 0.3 km (266 frames, 14 VLM calls).
+- **Consolidation:** a tower can open an incident on haze before the real plume appears, so a second
+  tower's sighting may start a separate one. Whenever an incident's position changes, any other active
+  incident that is the same fire (fixes within 5 km, or one tower's line passing within 5 km of the other's
+  fix, or two single-tower lines crossing) is merged into it: towers, frames, timeline and alert. With it,
+  the Junction Fire replay is one incident from 4 towers and the Creelman Fire one from 3.
+- **Frames and the large view:** every frame of an incident from the moment it opens is kept in
+  `state/frames/<incident>/` (labelled boxes, ≤1280 px) with its detections, detector time and, for the
+  frames the VLM checked, its verdict, tokens in/out, crop size and escalation. The incident panel plays
+  them back (filterable by tower); clicking a frame opens a large centred view that scrolls down to the
+  full analysis: detector, VLM verdict, impact, dispatch report, escalation, cost of the pass, edge vs
+  cloud-only for that frame.
+- **Inputs:** tower frames (FIgLib replays), 36 close-up flame photos from the D-Fire test split as demo
+  field reports (they carry no GPS: type coordinates or pick on the map), or an upload. Tower frames go
+  through the tower detector (`--detector-weights`, default `tower_yolo.pt`); photos and uploads through
+  the D-Fire detector (`--photo-detector-weights`, default `smoke_yolo.pt`, D-Fire mAP50 0.787 vs 0.106 for
+  the tower model). A retrained model written to the same path is reloaded on its next use.
+- **Demo scenarios** (`config/demo_scenarios.json`, "Demo guide" tab → *Load demo scenarios*): mock inputs,
+  real analysis. Eleven photos from the D-Fire dataset, each given a made-up San Diego County location, go
+  through the same detector, fine-tuned VLM and rules; two FIgLib recordings start as live watches; the last
+  steps restore the link and ask the assistant. Each step shows the expected path and the actual result.
+  The photos were picked by running candidates through the pipeline and checking each image by eye; on the
+  last load all eleven matched: 4 ALERT (flames in trees, plume behind a town, grass fire, vehicle fire),
+  2 MONITOR (grass burning by buildings, industrial smoke), 3 LOG (attended field burn, farm column, hazy
+  look-alike), 2 IGNORE at the detector (red storm cloud, hill mist). The loader starts with the link down.
+  There is no true campfire example in our data (the teacher labelled 3 of 3,100 crops as campfire, and
+  none behaved as one), so the benign example is an attended controlled burn.
+- **No internet at run time.** In the field the camera and weather station sit on the tower's local
+  network next to this box; here recorded FIgLib frames and a stored weather reading stand in for them.
+  Map, models, wind, history and the assistant are all local. Only an ALERT uses the uplink (the report
+  and a forecast). Internet is needed once, at setup, to download the map, recordings and models.
+- **Location**, in priority order: GPS tags in the image (none of our datasets carry any) → coordinates
+  sent with the image (a field report or emulated GPS) → the camera bearing (the smoke's column in the
+  frame through a pinhole model, placed at an assumed `--range-km`, default 10 km) → the camera site. The
+  bearing is measured; the distance is not, and the page says so. The operator can move the pin, and the
+  county is recomputed offline from Census boundaries.
+- **Wind** needs no internet. HPWREN towers carry a Vaisala WXT536 station; with no serial link to one here,
+  an emulator replays one real reading per station (captured into `state/wx_seed.json`) with a small
+  random walk, and every reading is labelled "emulated". Fallbacks: a value typed by the operator, then the
+  forecast cached from the last ALERT escalation (the cloud is contacted only then), then nothing.
+- **Downwind cone:** 10% of the wind speed × the horizon (1/3/6 h), ± half the observed direction range.
+  This is the grass-fuel rule of thumb (Cruz & Alexander 2019), shown as "where to look first", not as a
+  fire-spread model.
+- **Escalation** is the same rule as everywhere else: IGNORE is counted only, LOG/MONITOR stay on the box,
+  and an ALERT is sent once per incident (or waits in the outbox until the link is toggled back up).
+  Repeat frames from the same camera within 12° and 2 h update one incident, never re-send it.
+- **Live watch** (continuous monitoring): replays a fire's FIgLib frames from every tower that recorded
+  it, merged in time order, as if live. Every frame goes
+  through the detector; an incident opens after `--gate-frames` (default 2) frames in a row with smoke, with
+  one VLM call. After that, each batch of N frames produces a situation update in the incident timeline:
+  frames with smoke, plume-area change, trend (growing / steady / shrinking) and one VLM re-check. Growth
+  can raise the severity and trigger the one-time escalation. On the Beaver Fire recording: 46 frames,
+  8 VLM calls, opened as MONITOR and raised to ALERT at the first batch (plume area ×4.8). "Load fire
+  history" replays all five recordings with their real timestamps and archives them as history.
+- **Ask Sentinel** (`sentinel/assistant.py`): the on-device Qwen2.5-VL-7B (`--assistant-model`, default
+  `base7b`) plans up to three tool calls with schema-constrained JSON (attention now, summarize a period,
+  list incidents, incident detail, wind outlook, draft dispatch). Code runs them against the local incident
+  store, and the model answers from those facts only; "explain" questions also get the incident's frame.
+  Each answer lists its tool calls, tokens and latency. Nothing leaves the device.
+- Defaults: detector `~/sentinel/models/tower_yolo.pt`, VLM `context` on the zrt backend socket. State
+  (`incidents.db`, forecast cache) lives in `~/sentinel-assets/state`. `--no-sensor` turns off the emulator;
+  `--start-online` starts with the link up.
+
 ## Datasets and models
 
 Licenses below are as published by each source at the time of writing. **Verify each one before

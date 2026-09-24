@@ -1,0 +1,368 @@
+[
+ {
+  "id": "bh-w",
+  "name": "Boucher Hill (west)",
+  "site": "Boucher Hill, on Palomar Mountain",
+  "lat": 33.33462,
+  "lon": -116.91938,
+  "elev_m": 1664,
+  "azimuth_deg": 270,
+  "hfov_deg": 90,
+  "wx_station": "BH-WXT536",
+  "hpwren_cam": "bh-w-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260722_RainbowFire_bh-w-mobo-c",
+    "fire": "Rainbow Fire",
+    "date": "2026-07-22"
+   }
+  ]
+ },
+ {
+  "id": "bm-e",
+  "name": "Big Black (east)",
+  "site": "Big Black Mountain, northeast of Ramona",
+  "lat": 33.15992,
+  "lon": -116.80807,
+  "elev_m": 1236,
+  "azimuth_deg": 90,
+  "hfov_deg": 90,
+  "wx_station": null,
+  "hpwren_cam": "bm-e-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260629_JunctionFire_bm-e-mobo-c",
+    "fire": "Junction Fire",
+    "date": "2026-06-29"
+   }
+  ]
+ },
+ {
+  "id": "bm-s",
+  "name": "Big Black (south)",
+  "site": "Big Black Mountain, northeast of Ramona",
+  "lat": 33.15992,
+  "lon": -116.80807,
+  "elev_m": 1236,
+  "azimuth_deg": 180,
+  "hfov_deg": 90,
+  "wx_station": null,
+  "hpwren_cam": "bm-s-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260722_CreelmanFire_bm-s-mobo-c",
+    "fire": "Creelman Fire",
+    "date": "2026-07-22"
+   }
+  ]
+ },
+ {
+  "id": "cp-w",
+  "name": "Cuyamaca Peak (west)",
+  "site": "Cuyamaca Peak",
+  "lat": 32.94642,
+  "lon": -116.60668,
+  "elev_m": 1980,
+  "azimuth_deg": 270,
+  "hfov_deg": 90,
+  "wx_station": "CP-WXT536",
+  "hpwren_cam": "cp-w-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260722_CreelmanFire_cp-w-mobo-c",
+    "fire": "Creelman Fire",
+    "date": "2026-07-22"
+   }
+  ]
+ },
+ {
+  "id": "hp-e",
+  "name": "High Point (east)",
+  "site": "High Point, Palomar Mountain",
+  "lat": 33.36302,
+  "lon": -116.83622,
+  "elev_m": 1871,
+  "azimuth_deg": 90,
+  "hfov_deg": 90,
+  "wx_station": "HP-WXT536",
+  "hpwren_cam": "hp-e-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260629_JunctionFire_hp-e-mobo-c",
+    "fire": "Junction Fire",
+    "date": "2026-06-29"
+   }
+  ]
+ },
+ {
+  "id": "hp-n",
+  "name": "High Point (north)",
+  "site": "High Point, Palomar Mountain",
+  "lat": 33.36302,
+  "lon": -116.83622,
+  "elev_m": 1871,
+  "azimuth_deg": 0,
+  "hfov_deg": 90,
+  "wx_station": "HP-WXT536",
+  "hpwren_cam": "hp-n-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260820_ChiaFire_hp-n-mobo-c",
+    "fire": "Chia Fire",
+    "date": "2026-08-20"
+   }
+  ]
+ },
+ {
+  "id": "hp-s",
+  "name": "High Point (south)",
+  "site": "High Point, Palomar Mountain",
+  "lat": 33.36302,
+  "lon": -116.83622,
+  "elev_m": 1871,
+  "azimuth_deg": 180,
+  "hfov_deg": 90,
+  "wx_station": "HP-WXT536",
+  "hpwren_cam": "hp-s-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260629_JunctionFire_hp-s-mobo-c",
+    "fire": "Junction Fire",
+    "date": "2026-06-29"
+   }
+  ]
+ },
+ {
+  "id": "lp-w",
+  "name": "Lyons Peak (west)",
+  "site": "Lyons Peak, east of Jamul",
+  "lat": 32.70153,
+  "lon": -116.76457,
+  "elev_m": 1132,
+  "azimuth_deg": 270,
+  "hfov_deg": 90,
+  "wx_station": "LP-WXT536",
+  "hpwren_cam": "lp-w-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260807_BeaverFire_lp-w-mobo-c",
+    "fire": "Beaver Fire",
+    "date": "2026-08-07"
+   }
+  ]
+ },
+ {
+  "id": "mg-e",
+  "name": "Mesa Grande (east)",
+  "site": "Mesa Grande, south of Lake Henshaw",
+  "lat": 33.18891,
+  "lon": -116.7606,
+  "elev_m": 1304,
+  "azimuth_deg": 90,
+  "hfov_deg": 90,
+  "wx_station": "MG-WXT520",
+  "hpwren_cam": "mg-e-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260629_JunctionFire_mg-e-mobo-c",
+    "fire": "Junction Fire",
+    "date": "2026-06-29"
+   }
+  ]
+ },
+ {
+  "id": "mg-s",
+  "name": "Mesa Grande (south)",
+  "site": "Mesa Grande, south of Lake Henshaw",
+  "lat": 33.18891,
+  "lon": -116.7606,
+  "elev_m": 1304,
+  "azimuth_deg": 180,
+  "hfov_deg": 90,
+  "wx_station": "MG-WXT520",
+  "hpwren_cam": "mg-s-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260722_CreelmanFire_mg-s-mobo-c",
+    "fire": "Creelman Fire",
+    "date": "2026-07-22"
+   }
+  ]
+ },
+ {
+  "id": "mlo-s",
+  "name": "Mount Laguna Observatory (south)",
+  "site": "Mount Laguna Observatory, Laguna Mountains",
+  "lat": 32.83989,
+  "lon": -116.42658,
+  "elev_m": 1872,
+  "azimuth_deg": 180,
+  "hfov_deg": 90,
+  "wx_station": "MLO-WXT536",
+  "hpwren_cam": "mlo-s-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260817_Church2Fire_mlo-s-mobo-c",
+    "fire": "Church2 Fire",
+    "date": "2026-08-17"
+   }
+  ]
+ },
+ {
+  "id": "rm-e",
+  "name": "Red Mountain (east)",
+  "site": "Red Mountain, Fallbrook - San Diego County",
+  "lat": 33.40079,
+  "lon": -117.19047,
+  "elev_m": 483,
+  "azimuth_deg": 90,
+  "hfov_deg": 90,
+  "wx_station": "RM-WXT536",
+  "hpwren_cam": "rm-e-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260722_RainbowFire_rm-e-mobo-c",
+    "fire": "Rainbow Fire",
+    "date": "2026-07-22"
+   }
+  ]
+ },
+ {
+  "id": "rm-s",
+  "name": "Red Mountain (south)",
+  "site": "Red Mountain, Fallbrook - San Diego County",
+  "lat": 33.40079,
+  "lon": -117.19047,
+  "elev_m": 483,
+  "azimuth_deg": 180,
+  "hfov_deg": 90,
+  "wx_station": "RM-WXT536",
+  "hpwren_cam": "rm-s-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260618_MissionFire_rm-s-mobo-c",
+    "fire": "Mission Fire",
+    "date": "2026-06-18"
+   },
+   {
+    "folder": "20260906_BrengleFire_rm-s-mobo-c",
+    "fire": "Brengle Fire",
+    "date": "2026-09-06"
+   }
+  ]
+ },
+ {
+  "id": "sdsc-e",
+  "name": "SDSC (east)",
+  "site": "UCSD San Diego Supercomputer Center, La Jolla",
+  "lat": 32.884461,
+  "lon": -117.23974,
+  "elev_m": 125,
+  "azimuth_deg": 90,
+  "hfov_deg": 90,
+  "wx_station": null,
+  "hpwren_cam": "sdsc-e-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260816_SorrentoFire_sdsc-e-mobo-c",
+    "fire": "Sorrento Fire",
+    "date": "2026-08-16"
+   }
+  ]
+ },
+ {
+  "id": "vo-n",
+  "name": "Volcan Tract III (north)",
+  "site": "Volcan Tract III, Volcan Mountain",
+  "lat": 33.13826,
+  "lon": -116.61702,
+  "elev_m": 1670,
+  "azimuth_deg": 0,
+  "hfov_deg": 90,
+  "wx_station": null,
+  "hpwren_cam": "vo-n-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260629_JunctionFire_vo-n-mobo-c",
+    "fire": "Junction Fire",
+    "date": "2026-06-29"
+   }
+  ]
+ },
+ {
+  "id": "vo-w",
+  "name": "Volcan Tract III (west)",
+  "site": "Volcan Tract III, Volcan Mountain",
+  "lat": 33.13826,
+  "lon": -116.61702,
+  "elev_m": 1670,
+  "azimuth_deg": 270,
+  "hfov_deg": 90,
+  "wx_station": null,
+  "hpwren_cam": "vo-w-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260629_JunctionFire_vo-w-mobo-c",
+    "fire": "Junction Fire",
+    "date": "2026-06-29"
+   }
+  ]
+ },
+ {
+  "id": "wc-w",
+  "name": "Mount Woodson (west)",
+  "site": "Mount Woodson CAL FIRE, west of Ramona",
+  "lat": 33.00872,
+  "lon": -116.97101,
+  "elev_m": 877,
+  "azimuth_deg": 270,
+  "hfov_deg": 90,
+  "wx_station": null,
+  "hpwren_cam": "wc-w-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260622_BernardoFire_wc-w-mobo-c",
+    "fire": "Bernardo Fire",
+    "date": "2026-06-22"
+   }
+  ]
+ },
+ {
+  "id": "wilson-w",
+  "name": "Mount Wilson (west)",
+  "site": "Mount Wilson Observatory, Angeles National Forest",
+  "lat": 34.22451,
+  "lon": -118.05867,
+  "elev_m": 1713,
+  "azimuth_deg": 270,
+  "hfov_deg": 90,
+  "wx_station": null,
+  "hpwren_cam": "wilson-w-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260909_GettyFire_wilson-w-mobo-c",
+    "fire": "Getty Fire",
+    "date": "2026-09-09"
+   }
+  ]
+ },
+ {
+  "id": "ws-n",
+  "name": "White Star (north)",
+  "site": "White Star, near Boulevard",
+  "lat": 32.64723,
+  "lon": -116.31798,
+  "elev_m": 1221,
+  "azimuth_deg": 0,
+  "hfov_deg": 90,
+  "wx_station": "WS-WXT536",
+  "hpwren_cam": "ws-n-mobo-c",
+  "recordings": [
+   {
+    "folder": "20260715_ThornFire_ws-n-mobo-c",
+    "fire": "Thorn Fire",
+    "date": "2026-07-15"
+   }
+  ]
+ }
+]
