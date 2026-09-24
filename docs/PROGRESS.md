@@ -166,6 +166,26 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] Owner: install ntfy on the teammate's phone, create a private topic, write `export NTFY_TOPIC_URL=…` to `~/.sentinel_alerts.env` on the Nano, restart the demo app — configured; test push sent, and a real ALERT pushed from the live pipeline (report + snapshot)
 - [ ] Rehearse: Send test alert → phone buzzes; live segment with a wildfire video on a tablet; Offline → queued → Online → buzz
 
+## Sentinel Console (v2.0.0): one system, one port 🧭 — ▶ IN PROGRESS (branch `feat/console`)
+
+Design: [console design](plans/2026-09-24-sentinel-console-design.md) · Plan: [console plan](plans/2026-09-24-sentinel-console.md). This replaces the four separate screens (8090 / 8095 / 8100 / app) with one professional console on port 8080. A fire from any camera becomes one incident, one alert and one push, with edge vs cloud-only built in.
+
+- [x] Design + plan approved (one server, demo controls folded into real features, Edge vs Cloud page, minimalist UI)
+- [ ] T1 Shared services (one detector load, one VLM client, one uplink, one outbox)
+- [ ] T2 Cloud-only shadow ledger (bytes, tokens, $, time to decision per link profile, offline-blind frames)
+- [ ] T3 Incident map on shared services (real delivery for tower ALERTs)
+- [ ] T4 Web app on shared services (mobile camera events)
+- [ ] T5 Console server on port 8080 (mobile camera → incident, console API)
+- [ ] T6 Measured cloud samples (optional, needs `~/.cloud_vlm.env`)
+- [ ] T7 UI shell (sidebar, header, drawers, Ask Sentinel panel)
+- [ ] T8 Operations page (map + incidents + field report)
+- [ ] T9 Cameras page (towers, mobile camera, Run drill)
+- [ ] T10 Alerts + System pages (Test outage)
+- [ ] T11 Edge vs Cloud page
+- [ ] T12 Models page (deployed models, LoRA v2 selectable, compare on an image)
+- [ ] T13 `start_console.sh`, README, `docs/versions/v2.0.0-console.md`
+- [ ] T14 Verified on the Nano, tag `v2.0.0-console`, merged to `main`
+
 ## Still needs the owner 🙋
 
 - [ ] Cloud provider API key in `~/.cloud_vlm.env` on the Nano → run Phase 6b (measured cloud column)
