@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 07:00 Nano time (ICT) · **Release for the demo: `v1.3.1-demo`** · runbook: [DEMO_RUNBOOK.md](DEMO_RUNBOOK.md) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 11:00 Nano time (ICT) · **Release for the demo: `v1.4.0-incident-map`** · runbook: [DEMO_RUNBOOK.md](DEMO_RUNBOOK.md) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -147,6 +147,15 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] `docs/DEMO_RUNBOOK.md` — pre-demo checklist, 5-minute script with curated sample IDs, measured numbers, what to say accurately, Q&A, recovery table
 - [x] Gallery scan (60 images): BEFORE 39/60 correct, AFTER 43/60; showcase images picked
 - [x] Tagged `v1.3.1-demo`
+
+## Incident map integration (Kruthika's UI) 🗺️
+
+- [x] Imported her `~/sentinel-map` work (16 files + README section) under her authorship; 446 → 457 tests pass on our latest code
+- [x] Integrated with deployed models: joint detector at 960 px for towers, D-Fire model at 640 px for photos; `--state-dir`; `start_demo.sh` starts/reuses port 8100; runbook segment
+- [x] Two reviews: fixed the Restore-link race, per-step demo errors, assistant tool errors, input validation; no deadlocks
+- [x] Merged into `main` (c97d3e0); verified on the Nano: 11/11 demo photos matched, Junction triangulated from 2 towers (ALERT), Beaver ALERT
+- [x] Tagged `v1.4.0-incident-map` (doc in docs/versions/)
+- [ ] Kruthika commits/pushes her own `~/sentinel-map` + `~/sentinel-assets` work from her folders; close PR #1 (it contains weights/logs, not UI)
 
 ## Still needs the owner 🙋
 
