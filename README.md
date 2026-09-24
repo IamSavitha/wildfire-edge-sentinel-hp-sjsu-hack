@@ -252,6 +252,35 @@ labels the reports), `--no-monitor`.
   available detector runs once on a blank frame in the background, so the first click does not pay the
   cold CUDA/CLIP load.
 
+### Live camera + phone alerts
+
+The **Live camera** tab streams a camera (webcam, or an iPhone through macOS Continuity Camera) to the
+Nano: one JPEG frame every 1–2 s (≤1280 px, never more than one in flight; frames arriving while one is
+processed get `202 {"busy": true}` and are skipped). Each frame goes through the real `Pipeline` as tower
+`live-camera`: the AFTER detector at its own size, the persistence gate (3 frames ≥ 0.4), one call to the
+LoRA `context` VLM per event, a trend re-check every `--live-recheck-s` (default 10 s, for demo pacing) and
+the per-tower latch, so a fire raises **one** ALERT. The page draws the boxes over the preview and shows
+gate progress, the event, severity and the VLM verdict.
+
+ALERTs are delivered for real: a push to your phone through [ntfy](https://ntfy.sh) (title, dispatch
+text, urgent priority, snapshot attached) and, with `--dispatch-url`, a POST to dispatch. Delivery goes
+through a durable outbox (`--state-dir`, default `data/live_outbox.db`): offline, the alert waits; toggling
+**Online** sends it at once; failed pushes are retried every few seconds. At most one push per 30 s (the
+rest are counted as suppressed). With a notifier or dispatch URL configured, an ALERT from the single-image
+tab is delivered the same way (one per photo). **Send test alert** checks the phone before the demo.
+
+```bash
+# once, on the Nano: the topic URL is a secret (anyone who knows it can read the alerts)
+echo 'export NTFY_TOPIC_URL=https://ntfy.sh/<long-random-topic>' > ~/.sentinel_alerts.env
+chmod 600 ~/.sentinel_alerts.env        # optional: export NTFY_TOKEN=tk_... for a protected server
+./scripts/start_demo.sh                 # sources it; prints only "phone alerts: configured"
+```
+
+The camera needs a secure origin: open the page as `http://localhost:8095` through the SSH tunnel, not
+`http://<nano-ip>:8095`. Endpoints: `POST /api/live/frame` (body = JPEG, `?stream=<id>`),
+`POST /api/live/reset`, `POST /api/notify/test`. The topic URL is read from the environment only and
+logged redacted (host + first 4 characters of the topic).
+
 ## Incident map (offline, port 8100)
 
 `sentinel.incident_map` is an operations view of the tower network: every confirmed detection becomes an
