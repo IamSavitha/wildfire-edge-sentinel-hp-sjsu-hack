@@ -290,9 +290,11 @@ ssh -N -L 8100:localhost:8100 hp11@<nano-ip>   # laptop, then http://localhost:8
   cloud-only for that frame.
 - **Inputs:** tower frames (FIgLib replays), 36 close-up flame photos from the D-Fire test split as demo
   field reports (they carry no GPS: type coordinates or pick on the map), or an upload. Tower frames go
-  through the tower detector (`--detector-weights`, default `tower_yolo.pt`); photos and uploads through
-  the D-Fire detector (`--photo-detector-weights`, default `smoke_yolo.pt`, D-Fire mAP50 0.787 vs 0.106 for
-  the tower model). A retrained model written to the same path is reloaded on its next use.
+  through the tower detector (`--detector-weights`, default `joint_yolo.pt` at 960 px: trained jointly on
+  D-Fire and tower frames, tower mAP50 0.718 without forgetting D-Fire, 0.748); photos and uploads through
+  the D-Fire detector (`--photo-detector-weights`, default `smoke_yolo.pt` at 640 px, D-Fire mAP50 0.787 vs
+  0.106 for the stage-2 tower model). `--detector-imgsz` / `--photo-detector-imgsz` override the sizes. A
+  retrained model written to the same path is reloaded on its next use.
 - **Demo scenarios** (`config/demo_scenarios.json`, "Demo guide" tab → *Load demo scenarios*): mock inputs,
   real analysis. Eleven photos from the D-Fire dataset, each given a made-up San Diego County location, go
   through the same detector, fine-tuned VLM and rules; two FIgLib recordings start as live watches; the last
@@ -335,9 +337,10 @@ ssh -N -L 8100:localhost:8100 hp11@<nano-ip>   # laptop, then http://localhost:8
   list incidents, incident detail, wind outlook, draft dispatch). Code runs them against the local incident
   store, and the model answers from those facts only; "explain" questions also get the incident's frame.
   Each answer lists its tool calls, tokens and latency. Nothing leaves the device.
-- Defaults: detector `~/sentinel/models/tower_yolo.pt`, VLM `context` on the zrt backend socket. State
-  (`incidents.db`, forecast cache) lives in `~/sentinel-assets/state`. `--no-sensor` turns off the emulator;
-  `--start-online` starts with the link up.
+- Defaults: detector `~/sentinel/models/joint_yolo.pt`, VLM `context` on the zrt backend socket. State
+  (`incidents.db`, forecast cache) lives in `~/sentinel-assets/state`; `--state-dir` moves it, so a second
+  instance never shares a DB with the first. `--no-sensor` turns off the emulator; `--start-online` starts
+  with the link up.
 
 ## Datasets and models
 
