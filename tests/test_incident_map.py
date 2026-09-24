@@ -535,3 +535,60 @@ def test_demo_scenarios_run_the_real_pipeline_on_mock_inputs(tmp_path):
     assert link["result"]["status"] == "ready"
     [inc] = state["incidents"]
     assert inc["name"] == "Demo Fire" and inc["demo"]["id"] == "a" and inc["key_frame"] == 0
+
+
+def test_default_detectors_run_at_their_training_size(tmp_path, monkeypatch):
+    """Tower frames go through the joint model at 960 px, photos through the D-Fire model at 640."""
+    import sentinel.detector as det_mod
+    made = []
+
+    class FakeYolo(FakeDetector):
+        def __init__(self, weights, conf=0.25, imgsz=640, classes=None, model=None):
+            super().__init__()
+            made.append((Path(weights).name, imgsz))
+    monkeypatch.setattr(det_mod, "YoloDetector", FakeYolo)
+    tower_w, photo_w = tmp_path / "joint_yolo.pt", tmp_path / "smoke_yolo.pt"
+    tower_w.write_bytes(b"x")
+    photo_w.write_bytes(b"x")
+    seq = tmp_path / "data" / "demo" / "fire_x"
+    seq.mkdir(parents=True)
+    (seq / "1_+00120.jpg").write_bytes(jpeg())
+
+    def run(**kw):
+        made.clear()
+        app = create_map_app(cameras=CAMS, assets_dir=tmp_path / "a", data_dir=tmp_path / "data",
+                             state_dir=tmp_path / "s", detector_weights=str(tower_w),
+                             photo_detector_weights=str(photo_w), vlm_factory=FakeVLM,
+                             model_lister=lambda: ["context"], forecast_fn=lambda la, lo: FORECAST,
+                             counties=COUNTIES, **kw)
+        with TestClient(app) as c:
+            [sid] = [s["id"] for s in c.get("/api/samples").json()["samples"] if s["camera_id"] == "rm-e"]
+            assert post(c, sample_id=sid).status_code == 200
+            assert post(c, camera_id="rm-e", image=jpeg()).status_code == 200
+        return made[:]
+    assert run() == [("joint_yolo.pt", 960), ("smoke_yolo.pt", 640)]
+    assert run(detector_imgsz=1280, photo_detector_imgsz=800) == [("joint_yolo.pt", 1280), ("smoke_yolo.pt", 800)]
+    assert (tmp_path / "s" / "incidents.db").exists() and not (tmp_path / "a" / "state").exists()
+
+
+def test_main_defaults_and_overrides(monkeypatch, tmp_path):
+    import sys
+    import types
+    import sentinel.incident_map as im
+    seen = {}
+    monkeypatch.setattr(im, "create_map_app", lambda **kw: seen.update(kw) or "app")
+    monkeypatch.setattr(im, "load_cameras", lambda path: {})
+    monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda app, **kw: seen.update(ran=app)))
+    assets = tmp_path / "assets"
+    im.main(["--assets", str(assets), "--no-sensor"])
+    assert seen["ran"] == "app" and Path(seen["state_dir"]) == assets / "state"
+    assert Path(seen["detector_weights"]).name == "joint_yolo.pt" and seen["detector_imgsz"] == 960
+    assert Path(seen["photo_detector_weights"]).name == "smoke_yolo.pt" and seen["photo_detector_imgsz"] == 640
+    seen.clear()
+    im.main(["--assets", str(assets), "--no-sensor", "--state-dir", str(tmp_path / "state-core"),
+             "--detector-weights", "models/smoke_yolo.pt", "--photo-detector-imgsz", "800"])
+    assert Path(seen["state_dir"]) == tmp_path / "state-core"
+    assert seen["detector_imgsz"] == 640 and seen["photo_detector_imgsz"] == 800
+    seen.clear()
+    im.main(["--no-sensor", "--detector-weights", "models/smoke_yolo.pt", "--detector-imgsz", "960"])
+    assert seen["detector_imgsz"] == 960

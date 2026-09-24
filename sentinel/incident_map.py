@@ -33,6 +33,7 @@ from starlette.concurrency import run_in_threadpool
 
 from sentinel.assistant import Assistant
 from sentinel.config import Tower
+from sentinel.detector import imgsz_for
 from sentinel.geo import (box_bearings, compass, county_at, destination, downwind_cone, exif_gps,
                           line_offset_km, ray_intersection, sector, triangulate, valid_latlon)
 from sentinel.imaging import crop_box, to_jpeg
@@ -147,9 +148,9 @@ def scan_samples(roots: list[Path], benign_dir: Path | None, cameras: dict[str, 
     return out
 
 
-def default_detector_factory(weights: str):
+def default_detector_factory(weights: str, imgsz: int | None = None):
     from sentinel.detector import YoloDetector
-    return YoloDetector(weights, conf=0.1)
+    return YoloDetector(weights, conf=0.1, imgsz=imgsz or imgsz_for(weights))
 
 
 class NetworkState(BaseModel):
@@ -181,8 +182,9 @@ class IncidentPatch(BaseModel):
 def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT_ASSETS,
                    data_dir: str | Path | None = None, state_dir: str | Path | None = None,
                    figlib_dir: str | Path | None = None,
-                   detector_weights: str = str(HOME / "sentinel" / "models" / "tower_yolo.pt"),
+                   detector_weights: str = str(HOME / "sentinel" / "models" / "joint_yolo.pt"),
                    photo_detector_weights: str | None = str(HOME / "sentinel" / "models" / "smoke_yolo.pt"),
+                   detector_imgsz: int | None = None, photo_detector_imgsz: int | None = None,
                    detector_factory: Callable[[str], Callable] | None = None,
                    vlm_factory: Callable[[str], object] | None = None, vlm_model: str = "context",
                    vlm_base_url: str = "http://localhost:8000/v1", vlm_timeout_s: float = 60.0,
@@ -197,7 +199,13 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
     assets_dir = Path(assets_dir)
     state_dir = Path(state_dir) if state_dir else assets_dir / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
-    detector_factory = detector_factory or default_detector_factory
+    if detector_factory is None:
+        # each model runs at the size it was trained at (tower/joint 960 px, D-Fire 640) unless overridden
+        sizes = {w: sz for w, sz in ((photo_detector_weights, photo_detector_imgsz),
+                                     (detector_weights, detector_imgsz)) if w}
+
+        def detector_factory(weights: str):
+            return default_detector_factory(weights, sizes.get(weights))
     if vlm_factory is None:
         def vlm_factory(model: str):
             from sentinel.vlm_client import ContextVLM
@@ -238,8 +246,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
                 stats[k] += v
 
     def detector(kind: str = "tower"):
-        """Tower frames use the tower-tuned model; close-up photos (field reports) the D-Fire model,
-        which is far better on them (D-Fire mAP50 0.787 vs 0.106 for the tower model)."""
+        """Tower frames use the tower-tuned model (joint by default); close-up photos (field reports) the
+        D-Fire model, which is best on them (D-Fire mAP50 0.787 vs 0.748 joint, 0.106 stage-2 tower)."""
         weights = photo_detector_weights if kind == "photo" and photo_detector_weights and \
             Path(photo_detector_weights).exists() else detector_weights
         try:
@@ -1143,13 +1151,20 @@ def main(argv=None):
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8100)
     ap.add_argument("--assets", default=str(DEFAULT_ASSETS), help="offline map, web libs and state (outside git)")
+    ap.add_argument("--state-dir", default=None,
+                    help="incident DB, forecast cache and frames (default <assets>/state); give a second "
+                         "instance its own so they never share a DB")
     ap.add_argument("--data-dir", default=str(HOME / "sentinel" / "data"), help="benign frames (+ older data/demo)")
     ap.add_argument("--figlib-dir", default=None, help="FIgLib recordings (default <assets>/figlib)")
     ap.add_argument("--cameras", default="config/cameras.json")
-    ap.add_argument("--detector-weights", default=str(HOME / "sentinel" / "models" / "tower_yolo.pt"),
-                    help="detector for tower camera frames")
+    ap.add_argument("--detector-weights", default=str(HOME / "sentinel" / "models" / "joint_yolo.pt"),
+                    help="detector for tower camera frames (joint D-Fire + tower model)")
+    ap.add_argument("--detector-imgsz", type=int, default=None,
+                    help="inference size for tower frames (default: 960 for tower/joint weights, else 640)")
     ap.add_argument("--photo-detector-weights", default=str(HOME / "sentinel" / "models" / "smoke_yolo.pt"),
                     help="detector for close-up photos and uploads (D-Fire model)")
+    ap.add_argument("--photo-detector-imgsz", type=int, default=None,
+                    help="inference size for photos (default: 960 for tower/joint weights, else 640)")
     ap.add_argument("--vlm-base-url", default="unix:///opt/hp/zrt/run/vllm-base7b.sock",
                     help="the served VLM; the zrt proxy only routes the base label, so LoRA goes via the socket")
     ap.add_argument("--vlm-model", default="context")
@@ -1166,8 +1181,10 @@ def main(argv=None):
     seed = Path(a.wx_seed or Path(a.assets) / "state" / "wx_seed.json")
     sensor = None if a.no_sensor or not seed.exists() else SensorEmulator(seed)
     app = create_map_app(cameras=load_cameras(a.cameras), assets_dir=a.assets, data_dir=a.data_dir,
-                         figlib_dir=a.figlib_dir,
+                         state_dir=a.state_dir or Path(a.assets) / "state", figlib_dir=a.figlib_dir,
                          detector_weights=a.detector_weights, photo_detector_weights=a.photo_detector_weights,
+                         detector_imgsz=a.detector_imgsz or imgsz_for(a.detector_weights),
+                         photo_detector_imgsz=a.photo_detector_imgsz or imgsz_for(a.photo_detector_weights),
                          vlm_model=a.vlm_model,
                          vlm_base_url=a.vlm_base_url, vlm_timeout_s=a.vlm_timeout, sensor=sensor,
                          range_km=a.range_km, start_online=a.start_online, gate_frames=a.gate_frames,
