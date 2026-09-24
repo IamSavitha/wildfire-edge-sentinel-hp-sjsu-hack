@@ -37,15 +37,17 @@ tmux has-session -t monitor 2>/dev/null || \
 say "3/5 Demo app (port 8095): BEFORE = YOLO-World + base7b, AFTER = $DETECTOR + LoRA, live camera"
 NTFY_TOPIC_URL=""
 if [ -f "$ALERTS_ENV" ]; then
+  set -a   # export whatever the file sets, with or without `export`
   # shellcheck disable=SC1090
   . "$ALERTS_ENV"
+  set +a
 fi
 if [ -n "${NTFY_TOPIC_URL:-}" ]; then echo "phone alerts: configured"; else echo "phone alerts: not configured"; fi
 if tmux has-session -t webapp 2>/dev/null; then
   echo "demo app already running (reusing it; to pick up $ALERTS_ENV: tmux kill-session -t webapp, then re-run)"
 else
   # the session sources the env file itself: a running tmux server would not pass our environment on
-  tmux new-session -d -s webapp "cd $PWD && . .venv/bin/activate && { [ ! -f $ALERTS_ENV ] || . $ALERTS_ENV; } && \
+  tmux new-session -d -s webapp "cd $PWD && . .venv/bin/activate && { [ ! -f $ALERTS_ENV ] || { set -a; . $ALERTS_ENV; set +a; }; } && \
     python -m sentinel.webapp --port 8095 --vlm-base-url unix://$SOCK --after-weights $DETECTOR > webapp.log 2>&1"
 fi
 
