@@ -180,7 +180,7 @@ def test_from_env():
 
 def test_redaction_shows_host_and_four_chars():
     assert redact_topic_url(TOPIC) == "ntfy.example.org/sent…"
-    assert redact_topic_url("https://ntfy.sh/abcdefgh") == "ntfy.sh"     # short topic: host only
+    assert redact_topic_url("https://push.example/abcdefgh") == "push.example"   # short topic: host only
     assert redact_topic_url("https://ntfy.sh/ab") == "ntfy.sh"
     n, _ = make()
     assert TOPIC not in n.describe() and "sentinel-test-topic" not in repr(n)
