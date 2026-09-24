@@ -46,3 +46,14 @@ def test_picks_highest_confidence():
     g = PersistenceGate(min_conf=0.4, min_frames=1, cooldown_s=60)
     best = Detection("fire", 0.95, (5, 5, 9, 9))
     assert g.update("t1", [D, best], 0) == best
+
+
+def test_streak_reports_progress_and_reset_clears_it():
+    g = gate()
+    assert g.streak("t1") == 0
+    g.update("t1", [D], 0)
+    g.update("t1", [D], 1)
+    assert g.streak("t1") == 2 and g.streak("t2") == 0
+    g.reset_streak("t1")
+    assert g.streak("t1") == 0
+    assert g.update("t1", [D], 2) is None
