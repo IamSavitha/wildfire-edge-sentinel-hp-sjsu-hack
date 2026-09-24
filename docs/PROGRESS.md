@@ -163,7 +163,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] ALERT → ntfy push to a teammate's phone (report + snapshot); offline queues, online delivers; test pushes rate-limited, real alerts never dropped; stale alerts expire
 - [x] Reviewed twice (514 tests); merged to `main`; deployed; verified on the Nano with real models: gate 3/3 → VLM "wildland" → ALERT (≈40 ms per frame, 5.6 s for the VLM frame)
 - [x] Tagged `v1.5.0-live-camera`
-- [ ] Owner: install ntfy on the teammate's phone, create a private topic, write `export NTFY_TOPIC_URL=…` to `~/.sentinel_alerts.env` on the Nano, restart the demo app
+- [x] Owner: install ntfy on the teammate's phone, create a private topic, write `export NTFY_TOPIC_URL=…` to `~/.sentinel_alerts.env` on the Nano, restart the demo app — configured; test push sent, and a real ALERT pushed from the live pipeline (report + snapshot)
 - [ ] Rehearse: Send test alert → phone buzzes; live segment with a wildfire video on a tablet; Offline → queued → Online → buzz
 
 ## Still needs the owner 🙋
