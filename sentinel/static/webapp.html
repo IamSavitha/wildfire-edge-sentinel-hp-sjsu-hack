@@ -648,8 +648,8 @@
     if (dv.state === "queued") return { cls: "queued", text: "Queued — link offline" };
     if (dv.state === "retrying") return { cls: "bad", text: "Delivery failed — retrying" };
     if (dv.state === "sending") return { cls: "queued", text: "Sending…" };
+    if (dv.phone === "expired") return { cls: "bad", text: "Expired — not sent (queued over 10 min)" };
     if (dv.phone === "sent") return { cls: "ok", text: "Sent to phone ✓" };
-    if (dv.phone === "suppressed") return { cls: "queued", text: "Suppressed (rate limit)" };
     if (dv.dispatch === "sent") return { cls: "ok", text: "Sent to dispatch ✓ (phone alerts off)" };
     return { cls: "", text: "Delivered (simulated: phone alerts not configured)" };
   }
@@ -657,7 +657,7 @@
 
   function paintPhone() {
     const ph = config && config.phone;
-    $("phone-note").textContent = !ph ? "" : ph.configured ? `Phone alerts: on (${ph.target})`
+    $("phone-note").textContent = !ph ? "" : ph.configured ? `Phone alerts: on (${ph.host})`
       : "Phone alerts: not configured (NTFY_TOPIC_URL; see the runbook)";
     $("notify-test").disabled = !!(ph && !ph.configured);
     const lv = config && config.live;
@@ -894,7 +894,7 @@
     try {
       const r = await postJSON("/api/notify/test", {});
       setLiveMsg(r.status === "sent" ? "Test push sent ✓ Check the phone."
-        : `Suppressed by the rate limit (at most one push every ${Math.round(r.phone.min_interval_s || 30)} s). Try again shortly.`);
+        : `Test push skipped: at most one every ${Math.round(r.phone.min_interval_s || 30)} s (real ALERTs are never held back). Try again shortly.`);
     } catch (e) { setLiveMsg("Test push failed: " + e.message, true); }
     finally { $("notify-test").disabled = false; }
   });
@@ -981,7 +981,7 @@
       <div><small>Bytes sent upstream</small><strong>${bytes(up)}</strong></div>
       <div><small>Images a cloud-only system could not process</small><strong>${int(n.cloud_only_blind)}</strong></div>
       ${d.delivery ? `<div><small>Real alerts delivered · waiting in outbox</small><strong>${int(d.delivery.delivered)} · ${int(d.delivery.pending)}</strong></div>
-      <div><small>Phone pushes sent · suppressed</small><strong>${d.delivery.phone.configured ? `${int(d.delivery.phone.sent)} · ${int(d.delivery.phone.suppressed)}` : "off"}</strong></div>` : ""}`;
+      <div><small>Phone pushes sent · deferred (burst guard)</small><strong>${d.delivery.phone.configured ? `${int(d.delivery.phone.sent)} · ${int(d.delivery.phone.deferred)}` : "off"}</strong></div>` : ""}`;
   }
 
   function renderLive(live) {
