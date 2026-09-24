@@ -305,7 +305,10 @@ ssh -N -L 8100:localhost:8100 hp11@<nano-ip>   # laptop, then http://localhost:8
   line crosses an active incident's line (in front of both cameras, within 60 km, within 30 min), its
   sighting joins that incident and the pin moves to the least-squares crossing point of all the towers'
   lines (`geo.triangulate`); the note says how closely the lines agree. On the Junction Fire recording,
-  4 of the 6 towers detected the smoke and their lines agree within 0.3 km (266 frames, 14 VLM calls).
+  with the stage-2 tower detector 4 of the 6 towers detected the smoke and their lines agree within
+  0.3 km (266 frames, 14 VLM calls). With the deployed joint detector (960 px) the demo watch forms one
+  ALERT incident triangulated from 2 towers (Big Black, Mesa Grande; 65 frames). With exactly two towers
+  the lines always meet at one point, so agreement is only informative with three or more.
 - **Consolidation:** a tower can open an incident on haze before the real plume appears, so a second
   tower's sighting may start a separate one. Whenever an incident's position changes, any other active
   incident that is the same fire (fixes within 5 km, or one tower's line passing within 5 km of the other's
@@ -359,7 +362,8 @@ ssh -N -L 8100:localhost:8100 hp11@<nano-ip>   # laptop, then http://localhost:8
   one VLM call. After that, each batch of N frames produces a situation update in the incident timeline:
   frames with smoke, plume-area change, trend (growing / steady / shrinking) and one VLM re-check. Growth
   can raise the severity and trigger the one-time escalation. On the Beaver Fire recording: 46 frames,
-  8 VLM calls, opened as MONITOR and raised to ALERT at the first batch (plume area ×4.8). "Load fire
+  8 VLM calls, opened as MONITOR and raised to ALERT at the first batch (plume area ×4.8) with the stage-2
+  tower detector; with the deployed joint detector the demo watch also ends at ALERT (37 frames, 8 updates). "Load fire
   history" replays all 20 recordings (12 fires) with their real timestamps and archives them as history.
 - **Ask Sentinel** (`sentinel/assistant.py`): the on-device Qwen2.5-VL-7B (`--assistant-model`, default
   `base7b`) plans up to three tool calls with schema-constrained JSON (attention now, summarize a period,

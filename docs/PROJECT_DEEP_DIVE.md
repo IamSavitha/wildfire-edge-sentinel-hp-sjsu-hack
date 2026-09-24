@@ -2,7 +2,7 @@
 
 **What this is:** the complete engineering record of the project: what was built and why, how each decision was made, what went wrong and how it was fixed, and the technical detail needed to explain and defend it as its engineer.
 
-**Status as of 2026-09-24 07:00 (Nano time, ICT):** demo release `v1.3.1-demo`. All training done and measured on the Nano; detector `v1.3.0-joint` deployed; demo app and live metrics running; edge-vs-cloud comparison code built and fairness-reviewed (390 tests), waiting only for a cloud provider key to produce the measured cloud column.
+**Status as of 2026-09-24 11:00 (Nano time, ICT):** demo release `v1.4.0-incident-map` — the `v1.3.0-joint` models plus Kruthika Virupakshappa's offline incident map and Ask Sentinel assistant (457 tests). All training done and measured on the Nano; the measured cloud column waits only for a provider key.
 
 ---
 
@@ -115,6 +115,22 @@ The cascade is the core idea: each stage is cheaper than the next and filters mo
 3. Clear cases finalise immediately (ALERT: dangerous + near homes/black/large; IGNORE: fog/cloud).
 4. Unclear cases wait 30 s and re-check growth using the window max; MONITOR repeats up to 4 times.
 5. Finalise → build report → escalator decides → after an ALERT the tower is latched until smoke has been gone for 120 s.
+
+---
+
+## 3b. Operations view: incident map and Ask Sentinel (by Kruthika Virupakshappa)
+
+The demo app shows one image at a time; the **incident map** (port 8100) shows the tower network the way a duty officer would. Built by teammate Kruthika Virupakshappa on the same pipeline modules and models:
+
+- **Incidents from detections** on an offline map of the 19 real HPWREN towers that recorded the FIgLib fires (map tiles, fonts, wind and models all local).
+- **Bearing and triangulation:** one tower only knows a direction (the plume's column through a pinhole model); where two towers' lines cross is the fire (`geo.triangulate`, least squares). Duplicate incidents of the same fire are consolidated.
+- **Wind without internet:** the tower's weather station (emulated from real readings) drives a downwind "where to look first" cone (10% of wind speed × horizon; a rule of thumb, labelled as such).
+- **Live watch:** multi-tower FIgLib replays with growth tracking, severity escalation and one-time ALERT.
+- **Ask Sentinel:** the on-device 7B plans up to three schema-constrained tool calls over the local incident store and answers from those facts only; nothing leaves the device.
+
+**Integration decisions:** tower frames run through the deployed joint detector at 960 px (the size it was trained at); photos use the D-Fire model at 640 px; a `--state-dir` keeps separate instances from sharing a database. Reviews added an incident lock (a live watch could otherwise overwrite "Restore link"), per-step error handling in the demo loader, and error-tolerant assistant tool calls.
+
+**Verified on the Nano:** 11/11 demo photos matched their expected severities; the Junction watch triangulated one ALERT incident from 2 towers (4 with the older tower-only detector — the joint model trades a little distant-plume sensitivity for not forgetting close-range scenes); Beaver reached ALERT.
 
 ---
 

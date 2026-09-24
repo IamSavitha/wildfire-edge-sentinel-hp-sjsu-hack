@@ -50,8 +50,15 @@ else
 fi
 
 say "4/5 Incident map (port 8100): tower frames through $DETECTOR, own state dir"
-if listening 8100; then
+responding() { curl -s -m 3 -o /dev/null "http://localhost:$1/api/config"; }
+# A process that is still shutting down can hold the port without answering: wait for it to go.
+if listening 8100 && ! responding 8100; then
+  for _ in $(seq 1 10); do listening 8100 || break; sleep 2; done
+fi
+if listening 8100 && responding 8100; then
   echo "incident map already running on 8100 (reusing it)"
+elif listening 8100; then
+  echo "port 8100 is held by a process that does not answer; stop it and re-run"
 else
   tmux has-session -t incidentmap-core 2>/dev/null || \
     tmux new-session -d -s incidentmap-core "cd $PWD && . .venv/bin/activate && python -m sentinel.incident_map \
