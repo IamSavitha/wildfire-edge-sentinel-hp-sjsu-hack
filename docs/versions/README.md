@@ -9,7 +9,8 @@ Each version of Wildfire Edge Sentinel is a **git tag** plus a **frozen set of m
 | Tower | `v1.2.0-tower` | YOLO11s + tower fine-tune (stage 2) | same LoRA | Tower mAP50 0.728, but D-Fire 0.106 (forgetting) | [v1.2.0-tower.md](v1.2.0-tower.md) |
 | Joint (recommended models) | `v1.3.0-joint` | YOLO11s joint D-Fire + tower (stage 3) | same LoRA | Tower 0.718 and D-Fire 0.748 — forgetting fixed | [v1.3.0-joint.md](v1.3.0-joint.md) |
 | Demo build | `v1.3.1-demo` | as v1.3.0 | same LoRA | start_demo.sh, runbook, measured results | (patch; see v1.3.0) |
-| **Incident map (current demo release)** | `v1.4.0-incident-map` | as v1.3.0 (+ D-Fire model for photos) | same LoRA | Kruthika's offline incident map + Ask Sentinel; 11/11 demo scenarios; Junction triangulated, Beaver ALERT | [v1.4.0-incident-map.md](v1.4.0-incident-map.md) |
+| Incident map | `v1.4.0-incident-map` | as v1.3.0 (+ D-Fire model for photos) | same LoRA | Kruthika's offline incident map + Ask Sentinel; 11/11 demo scenarios; Junction triangulated, Beaver ALERT | [v1.4.0-incident-map.md](v1.4.0-incident-map.md) |
+| **Live camera (current demo release)** | `v1.5.0-live-camera` | as v1.3.0 | same LoRA | Webcam / iPhone stream through the full pipeline; ALERT pushed to a team phone (ntfy); verified gate → VLM → ALERT on the Nano | [v1.5.0-live-camera.md](v1.5.0-live-camera.md) |
 
 ## How versions are kept safe
 
