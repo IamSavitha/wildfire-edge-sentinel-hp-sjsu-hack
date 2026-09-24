@@ -1,5 +1,7 @@
 """Delivery (phone + dispatch behind the outbox) and the live-camera pipeline wrapper, with fakes."""
+import logging
 import threading
+from datetime import datetime, timezone
 
 import numpy as np
 import pytest
@@ -52,14 +54,14 @@ class FakeNotifier:
                 "min_interval_s": 30, "last_error": None}
 
 
-def delivery(notifier=None, dispatch=None, online=True, forecasts=None):
+def delivery(notifier=None, dispatch=None, online=True, forecasts=None, clock=lambda: 0.0):
     forecasts = [] if forecasts is None else forecasts
 
     def forecast(lat, lon):
         forecasts.append((lat, lon))
         return {"temp_c": [30.0]}
     return Delivery(Outbox(":memory:"), Link(online=online), forecast, notifier=notifier,
-                    dispatch_fn=dispatch, clock=lambda: 0.0)
+                    dispatch_fn=dispatch, clock=clock)
 
 
 # ---------------------------------------------------------------- delivery
@@ -121,6 +123,39 @@ def test_forecast_update_goes_to_dispatch_only():
     d.deliver(report(), now=100.0)
     assert [p.get("type") for p in sent] == [None, FORECAST_UPDATE]
     assert n.alerts == ["ev1"] and forecasts == [(37.1, -121.9)]
+
+
+def iso(t):
+    return datetime.fromtimestamp(t, tz=timezone.utc).isoformat()
+
+
+def test_stale_queued_alert_expires_instead_of_buzzing(caplog):
+    n, sent, forecasts = FakeNotifier(), [], []
+    d = delivery(n, sent.append, online=False, forecasts=forecasts, clock=lambda: 10_000.0)
+    d.deliver(report(detected_at=iso(10_000.0 - 700)), now=9_300.0)
+    d.link.online = True
+    with caplog.at_level(logging.WARNING, logger="sentinel.live"):
+        d.flush(10_000.0)
+    st = d.event("ev1")
+    assert st["state"] == "sent" and st["phone"] == "expired" and st["dispatch"] == "expired"
+    assert n.alerts == [] and sent == [] and d.summary()["pending"] == 0
+    assert "expired" in caplog.text
+
+
+def test_recent_queued_alert_is_still_delivered():
+    n = FakeNotifier()
+    d = delivery(n, online=False, clock=lambda: 10_000.0)
+    d.deliver(report(detected_at=iso(10_000.0 - 120)), now=9_880.0)
+    d.link.online = True
+    d.flush(10_000.0)
+    assert n.alerts == ["ev1"] and d.event("ev1")["phone"] == "sent"
+
+
+def test_no_forecast_fetch_without_dispatch():
+    forecasts = []
+    d = delivery(FakeNotifier(), forecasts=forecasts)
+    d.deliver(report(), now=100.0)
+    assert forecasts == [] and d.summary()["pending"] == 0
 
 
 def test_nothing_configured_is_a_simulated_delivery():

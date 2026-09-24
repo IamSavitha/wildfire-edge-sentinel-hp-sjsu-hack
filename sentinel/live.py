@@ -7,6 +7,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict
+from datetime import datetime
 from typing import Callable
 
 import numpy as np
@@ -23,6 +24,18 @@ log = logging.getLogger(__name__)
 LIVE_TOWER_ID = "live-camera"
 MAX_TRACKED_EVENTS = 50
 EVENTS_SHOWN = 4
+MAX_ALERT_AGE_S = 600   # a queued ALERT older than this is dropped, not pushed (e.g. after a restart)
+
+
+class _NoDispatch(Exception):
+    """Raised instead of fetching a forecast nobody would receive."""
+
+
+def _alert_age_s(payload: dict, now: float) -> float | None:
+    try:
+        return now - datetime.fromisoformat(payload["detected_at"]).timestamp()
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 class Delivery:
@@ -30,7 +43,9 @@ class Delivery:
     the escalator interface `Pipeline` calls), `flush` delivers what is due while the link is up.
     A push or dispatch failure raises inside the escalator's send, so the report stays queued and is
     retried with the outbox backoff (<= 10 s); a retry only redoes the channel that failed, so the
-    phone never buzzes twice for one alert. Rate-limited pushes count as delivered."""
+    phone never buzzes twice for one alert. An ALERT still queued MAX_ALERT_AGE_S after detection is
+    marked "expired" and not sent. The forecast update only goes to dispatch, so without a dispatch
+    URL no forecast is fetched."""
 
     def __init__(self, outbox: Outbox, link: Link, forecast_fn: Callable[[float, float], dict],
                  notifier=None, dispatch_fn: Callable[[dict], None] | None = None,
@@ -40,7 +55,8 @@ class Delivery:
         self.notifier = notifier
         self.dispatch_fn = dispatch_fn
         self.clock = clock
-        self.escalator = Escalator(outbox, link, forecast_fn, self._send, Metrics())
+        self.forecast_fn = forecast_fn
+        self.escalator = Escalator(outbox, link, self._forecast, self._send, Metrics())
         self.events: OrderedDict[str, dict] = OrderedDict()
         self.lock = threading.Lock()          # guards `events`
         self.flush_lock = threading.Lock()    # one flush at a time (request threads + the retry thread)
@@ -109,13 +125,26 @@ class Delivery:
 
     # ------------------------------------------------------------ send (runs inside Escalator.flush)
 
+    def _forecast(self, lat: float, lon: float) -> dict:
+        if self.dispatch_fn is None:
+            raise _NoDispatch()      # the escalator then skips the forecast update
+        return self.forecast_fn(lat, lon)
+
     def _send(self, payload: dict) -> None:
         if payload.get("type") == FORECAST_UPDATE:   # dispatch wants it; the phone already buzzed
-            if self.dispatch_fn is not None:
+            with self.lock:
+                st = self.events.get(payload.get("event_id"))
+            if self.dispatch_fn is not None and not (st and st["phone"] == "expired"):
                 self.dispatch_fn(payload)
             return
         st = self._track(payload)                    # also covers alerts queued by an earlier run
         st["attempts"] += 1
+        age = _alert_age_s(payload, self.clock())
+        if age is not None and age > MAX_ALERT_AGE_S:
+            log.warning("alert %s expired: detected %.0f s ago (> %d s); not sent", st["event_id"], age,
+                        MAX_ALERT_AGE_S)
+            st.update(phone="expired", dispatch="expired", delivered=True, error=None, sent_at=self.clock())
+            return
         try:
             if st["phone"] in ("pending", "failed"):
                 if self.notifier is None:
