@@ -12,6 +12,13 @@ class PersistenceGate:
         self._streak: dict[str, int] = defaultdict(int)
         self._last_fired: dict[str, float] = {}
 
+    def streak(self, tower_id: str) -> int:
+        """Consecutive frames with a strong detection so far (for display)."""
+        return self._streak.get(tower_id, 0)
+
+    def reset_streak(self, tower_id: str) -> None:
+        self._streak.pop(tower_id, None)
+
     def update(self, tower_id: str, detections: list[Detection], now: float) -> Detection | None:
         strong = [d for d in detections if d.conf >= self.min_conf]
         if not strong:

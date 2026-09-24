@@ -1,6 +1,7 @@
-"""Demo web app: run the BEFORE and AFTER cascades on one image side by side, and watch usage and
-edge-vs-cloud economics live. `python -m sentinel.webapp`, then open http://localhost:8095
-(SSH-tunnel the port from a laptop)."""
+"""Demo web app: run the BEFORE and AFTER cascades on one image side by side, watch usage and
+edge-vs-cloud economics live, or point a camera at smoke and get a real phone alert (live camera tab:
+frames through the full Pipeline; ALERTs pushed via ntfy when NTFY_TOPIC_URL is set).
+`python -m sentinel.webapp`, then open http://localhost:8095 (SSH-tunnel the port from a laptop)."""
 import argparse
 import hashlib
 import io
@@ -21,15 +22,19 @@ import cv2
 import httpx
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from PIL import Image
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from sentinel.config import Tower
+from sentinel.config import Settings, Tower
 from sentinel.detector import imgsz_for  # noqa: F401 - re-exported; shared with the incident map
+from sentinel.escalation import Link
+from sentinel.live import LIVE_TOWER_ID, Delivery, LiveCamera
 from sentinel.live_metrics import effective_prices
 from sentinel.monitor import PriceUpdate, _load_prices
+from sentinel.notify import NotifyError
+from sentinel.outbox import Outbox
 from sentinel.webapp_logic import TRUTHS, Session, escalate, load_benchmarks, run_pass
 
 PAGE = Path(__file__).parent / "static" / "webapp.html"
@@ -40,6 +45,9 @@ SAMPLE_THUMB_SIDE = 200
 MODELS_TTL_S = 10.0
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 _ID_RE = re.compile(r"^[0-9a-f]{12}$")
+_STREAM_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+LIVE_JPEG_TYPES = {"image/jpeg", "image/jpg", "image/pjpeg"}
+FLUSH_EVERY_S = 2.0
 _FIGLIB_RE = re.compile(r"_([+-]\d+)\.[A-Za-z]+$")   # FIgLib: <epoch>_<offset s from ignition>.jpg
 
 DETECTORS = {
@@ -210,7 +218,14 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                    detectors: dict | None = None, pipelines: dict | None = None,
                    vlm_base_url: str = "http://localhost:8000/v1", vlm_timeout_s: float = 60.0,
                    min_conf: float = 0.4, max_upload_bytes: int = MAX_UPLOAD_BYTES,
-                   clock: Callable[[], float] = time.time, warmup: bool = False) -> FastAPI:
+                   clock: Callable[[], float] = time.time, warmup: bool = False,
+                   notifier=None, dispatch_fn: Callable[[dict], None] | None = None,
+                   outbox_path: str = ":memory:", live_recheck_s: float = 10.0,
+                   live_lat: float | None = None, live_lon: float | None = None,
+                   flush_every_s: float = FLUSH_EVERY_S, deliver_image_alerts: bool = False) -> FastAPI:
+    """notifier: phone pushes (NtfyNotifier or None); dispatch_fn: POST an ALERT to dispatch (or None).
+    ALERTs from the live camera are delivered for real through a durable outbox at `outbox_path`;
+    ALERTs from /api/analyze (sample photos, uploads) only with deliver_image_alerts=True."""
     detectors = detectors or DETECTORS
     pipelines = pipelines or PIPELINES
     tower = tower or DEMO_TOWER
@@ -226,7 +241,7 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
 
     prices = _load_prices(prices_path)
     session = Session()
-    state = {"online": True}
+    link = Link(online=True)
     samples = {s["id"]: s for s in scan_samples(sample_dirs)}
     thumbs: dict[str, bytes] = {}
     gpu_lock = threading.Lock()        # one model call at a time on the shared GPU
@@ -234,6 +249,11 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
     det_cache: dict[str, Callable] = {}
     vlm_cache: dict[str, object] = {}
     models_cache: dict = {"ts": None, "names": [], "error": None}
+    delivery = Delivery(Outbox(outbox_path), link, forecast_fn, notifier=notifier, dispatch_fn=dispatch_fn,
+                        clock=clock)
+    live_tower = Tower(LIVE_TOWER_ID, "Live camera", tower.lat if live_lat is None else live_lat,
+                       tower.lon if live_lon is None else live_lon, "", temp_c=tower.temp_c)
+    live_settings = Settings(min_conf=min_conf, min_frames=3, recheck_s=live_recheck_s)
 
     def served_models() -> tuple[list[str], str | None]:
         with cache_lock:
@@ -272,9 +292,31 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                 vlm_cache[model] = vlm_factory(model)
             return vlm_cache[model]
 
+    live_pipe = pipelines["after"]
+    live_spec = detectors[live_pipe["detector"]]
+
+    def live_vlm():
+        return get_vlm(live_pipe["vlm"]) if live_pipe["vlm"] in served_models()[0] else None
+
+    live_cam = LiveCamera(live_tower, lambda: get_detector(live_pipe["detector"]), live_vlm, delivery,
+                      live_settings, gpu_lock)
+
     def session_payload() -> dict:
         return {"session": session.summary(), "economics": session.economics(prices),
-                "prices": effective_prices(prices), "online": state["online"]}
+                "prices": effective_prices(prices), "online": link.online, "delivery": delivery.summary()}
+
+    def flush_outbox() -> int:
+        try:
+            return delivery.flush(clock())
+        except Exception:  # noqa: BLE001 - a broken flush must not break the request that triggered it
+            log.exception("outbox flush failed")
+            return 0
+
+    def retry_loop(stop: threading.Event) -> None:
+        """Retries queued ALERTs while the link is up (the outbox's own backoff decides what is due)."""
+        while not stop.wait(flush_every_s):
+            if link.online and delivery.outbox.pending_count():
+                flush_outbox()
 
     def warm_detectors() -> None:
         """Run each available detector once so the first judged click skips the cold CUDA/CLIP load."""
@@ -298,13 +340,18 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
             t = threading.Thread(target=warm_detectors, name="detector-warmup", daemon=True)
             app.state.warmup_thread = t
             t.start()
+        stop = threading.Event()
+        threading.Thread(target=retry_loop, args=(stop,), name="outbox-retry", daemon=True).start()
         yield
+        stop.set()
         if monitor is not None:
             monitor.stop()
 
     app = FastAPI(title="Wildfire Edge Sentinel demo", lifespan=lifespan)
     app.state.session = session
     app.state.warmup_thread = None
+    app.state.delivery = delivery
+    app.state.live = live_cam
 
     @app.get("/", response_class=HTMLResponse)
     def index():
@@ -317,8 +364,18 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                 "detectors": {k: {"label": v["label"], "weights": v["weights"],
                                   "available": bool(detector_available(v))} for k, v in detectors.items()},
                 "benchmarks": load_benchmarks(results_dir), "prices": effective_prices(prices),
-                "online": state["online"], "min_conf": min_conf, "truths": list(TRUTHS),
-                "tower": {"id": tower.id, "name": tower.name, "lat": tower.lat, "lon": tower.lon}}
+                "online": link.online, "min_conf": min_conf, "truths": list(TRUTHS),
+                "tower": {"id": tower.id, "name": tower.name, "lat": tower.lat, "lon": tower.lon},
+                "phone": {"configured": notifier is not None,
+                          "host": getattr(notifier, "host", None) if notifier is not None else None},
+                "dispatch_configured": dispatch_fn is not None, "deliver_image_alerts": deliver_image_alerts,
+                "live": {"tower": {"id": live_tower.id, "name": live_tower.name, "lat": live_tower.lat,
+                                   "lon": live_tower.lon},
+                         "detector": live_pipe["detector"], "detector_weights": live_spec["weights"],
+                         "detector_available": bool(detector_available(live_spec)), "vlm": live_pipe["vlm"],
+                         "min_frames": live_settings.min_frames, "min_conf": live_settings.min_conf,
+                         "recheck_s": live_settings.recheck_s, "cooldown_s": live_settings.cooldown_s,
+                         "max_frame_bytes": max_upload_bytes}}
 
     @app.get("/api/samples")
     def list_samples():
@@ -365,7 +422,7 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
 
     def analyze_sync(image: np.ndarray, names: list[str], truth: str, force_vlm: bool,
                      image_bytes: int) -> list[dict]:
-        online = state["online"]
+        online = link.online
         served, _ = served_models()
         forecasts: dict = {}
 
@@ -380,7 +437,7 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                 raise exc
             return value
 
-        out = []
+        out, alerts = [], {}
         for name in names:
             r = run_pipeline(name, image, force_vlm, served)
             if "error" not in r:
@@ -388,10 +445,26 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                 r["escalation"] = esc
                 r["correct"] = session.record(name, r, esc, truth=truth, image_bytes=image_bytes,
                                               online=online)
+                if esc["decision"] in ("sent", "queued"):
+                    alerts[name] = (r, r.get("report"))
                 r.pop("report", None)       # the text and thumbnail are returned separately
             out.append(r)
         session.record_request(online)
+        if alerts and deliver_image_alerts and delivery.configured:
+            deliver_one(alerts)
         return out
+
+    def deliver_one(alerts: dict) -> None:
+        """One photo, one real alert: the AFTER pass's report if it alerted, else the first ALERT."""
+        r, report = alerts.get("after") or next(iter(alerts.values()))
+        esc = r["escalation"]
+        payload = dict(report)
+        payload["forecast"] = esc.get("forecast")
+        payload["forecast_status"] = "ok" if payload["forecast"] else "pending"
+        try:
+            esc["delivery"] = delivery.deliver(payload, clock())
+        except Exception:  # noqa: BLE001 - the analysis result stands even if delivery breaks
+            log.exception("alert delivery failed")
 
     def handle_analyze(body: bytes, ctype: str) -> dict:
         """Parse, validate, decode and run: all blocking work, so it runs in the threadpool."""
@@ -439,7 +512,7 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
         info.update(width=int(image.shape[1]), height=int(image.shape[0]), bytes=len(data))
 
         results = analyze_sync(image, names, truth, force_vlm, len(data))
-        return {"image": info, "truth": truth, "online": state["online"], "results": results,
+        return {"image": info, "truth": truth, "online": link.online, "results": results,
                 **session_payload()}
 
     @app.post("/api/analyze")
@@ -449,8 +522,56 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
 
     @app.post("/api/network")
     def set_network(s: NetworkState):
-        state["online"] = s.online
-        return {"online": state["online"]}
+        link.online = s.online
+        if not link.online:
+            return {"online": False}
+        return {"online": True, "flushed": flush_outbox()}   # queued ALERTs go out at once
+
+    # ---------------------------------------------------------------- live camera
+
+    def live_sync(body: bytes, stream: str | None) -> dict:
+        if not detector_available(live_spec):
+            raise HTTPException(503, f"live detector weights not found: {live_spec['weights']}")
+        image = decode_image(body)
+        return {**live_cam.process(image, clock(), stream), "online": link.online}
+
+    @app.post("/api/live/frame")
+    async def live_frame(request: Request, stream: str | None = None):
+        kind = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if kind not in LIVE_JPEG_TYPES:
+            raise HTTPException(415, "send one JPEG frame as the body (Content-Type: image/jpeg)")
+        if stream is not None and not _STREAM_RE.match(stream):
+            raise HTTPException(400, "stream must be 1-40 letters, digits, '-' or '_'")
+        if not live_cam.busy.acquire(blocking=False):
+            return JSONResponse({"busy": True}, status_code=202)   # the client skips this frame
+        try:
+            body = await _read_body(request, max_upload_bytes)
+            if not body:
+                raise HTTPException(400, "empty frame")
+            return await run_in_threadpool(live_sync, body, stream)
+        finally:
+            live_cam.busy.release()
+
+    @app.post("/api/live/reset")
+    def live_reset():
+        if not live_cam.busy.acquire(timeout=30):
+            raise HTTPException(409, "a live frame is still being processed; try again")
+        try:
+            live_cam.reset()
+            return {**live_cam.view(clock()), "online": link.online}
+        finally:
+            live_cam.busy.release()
+
+    @app.post("/api/notify/test")
+    def notify_test():
+        if notifier is None:
+            raise HTTPException(409, "phone alerts are not configured: set NTFY_TOPIC_URL "
+                                     "(e.g. in ~/.sentinel_alerts.env) and restart the app")
+        try:
+            status = notifier.send_test()
+        except NotifyError as exc:     # already redacted
+            raise HTTPException(502, str(exc)) from None
+        return {"status": status, "phone": delivery.summary()["phone"]}
 
     @app.get("/api/session")
     def get_session():
@@ -499,6 +620,17 @@ def main(argv=None):
     ap.add_argument("--after-imgsz", type=int,
                     help="AFTER detector inference size (default: 960 for tower/joint weights, else 640)")
     ap.add_argument("--no-monitor", action="store_true", help="skip live vLLM metrics")
+    ap.add_argument("--live-recheck-s", type=float, default=10.0,
+                    help="live camera: seconds between trend re-checks of a MONITOR event (demo pacing; "
+                         "the tower pipeline uses 30)")
+    ap.add_argument("--live-lat", type=float, help="live camera latitude (default: the report tower's)")
+    ap.add_argument("--live-lon", type=float, help="live camera longitude (default: the report tower's)")
+    ap.add_argument("--dispatch-url", help="also POST each ALERT to this dispatch endpoint "
+                                           "(e.g. scripts/dispatch_stub.py); default: phone only")
+    ap.add_argument("--state-dir", default="data", help="where the live alert outbox lives (live_outbox.db)")
+    ap.add_argument("--deliver-image-alerts", action="store_true",
+                    help="also push ALERTs from the single-image tab (samples/uploads) to the phone/dispatch; "
+                         "default: live camera only")
     args = ap.parse_args(argv)
 
     detectors = detector_specs(args.before_weights, args.after_weights, args.after_imgsz)
@@ -518,10 +650,23 @@ def main(argv=None):
         from sentinel.monitor import Monitor, fetch_json, fetch_uds_metrics
         monitor = Monitor(args.run_dir, _load_prices(args.prices), None, fetch_uds_metrics, time.time,
                           fetch_json, system_stats)
+    from sentinel.notify import NtfyNotifier
+    notifier = NtfyNotifier.from_env()     # NTFY_TOPIC_URL (+ NTFY_TOKEN); the URL is never printed
+    print(f"phone alerts: {'configured (' + notifier.host + ')' if notifier else 'not configured'}", flush=True)
+    dispatch_fn = None
+    if args.dispatch_url:
+        from functools import partial
+
+        from sentinel.cloud import send_dispatch
+        dispatch_fn = partial(send_dispatch, args.dispatch_url)
     app = create_web_app(monitor=monitor, prices_path=args.prices, warmup=True,
                          sample_dirs=args.samples or ["data/dfire/test/images", "data/demo", "data/benign"],
                          results_dir=args.results, tower=tower, detectors=detectors, pipelines=pipelines,
-                         vlm_base_url=args.vlm_base_url, vlm_timeout_s=args.vlm_timeout)
+                         vlm_base_url=args.vlm_base_url, vlm_timeout_s=args.vlm_timeout,
+                         notifier=notifier, dispatch_fn=dispatch_fn,
+                         outbox_path=str(Path(args.state_dir) / "live_outbox.db"),
+                         live_recheck_s=args.live_recheck_s, live_lat=args.live_lat, live_lon=args.live_lon,
+                         deliver_image_alerts=args.deliver_image_alerts)
     import uvicorn
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
 
