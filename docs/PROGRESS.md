@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 05:10 Nano time (ICT) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 07:00 Nano time (ICT) · **Release for the demo: `v1.3.1-demo`** · runbook: [DEMO_RUNBOOK.md](DEMO_RUNBOOK.md) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -109,14 +109,15 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 
 - [x] `data/bench/clips.csv` with 20–40 clips (`alert` / `no_alert`) — 25 real tower clips via `scripts/make_bench_clips.py`: 15 alert (5 FIgLib post-ignition + 10 pyro smoke windows), 10 no_alert (smoke-free tower footage)
 - [x] `bench.py --name before --detector-weights yolov8s-worldv2.pt --detector-classes smoke,fire --model <base id> --recheck-s 5`
-- [ ] ⏳ `bench.py --name after --detector-weights models/joint_yolo.pt --detector-imgsz 960 --model context --recheck-s 5` (+ before rerun with first-alert timing, + deployed recheck 30 s)
+- [x] `bench.py --name after` (joint 960 px + LoRA, recheck 5 s) — recall **11/15**, 6/10 no-fire clips alerted, 1 VLM call per ~40 frames; BEFORE rerun recall 0/15; recheck-30 not measurable on ~20 s clips
+- [ ] Hand-check the 10 no-fire bench clips (some contain unlabelled smoke; one is a low-cloud confusion), relabel, rerun edge (and cloud) benches
 - [ ] `bench.py --name base_full --model <base id> --full-frame --recheck-s 5` (token ablation for the cost model)
 - [ ] `bench.py --name detector_only --detector-only` (optional ablation)
-- [ ] `compare.py` → `results/before_after.md`
+- [x] `compare.py` → `results/before_after.md` (detector, VLM and end-to-end tables)
 - [ ] Fill `config/cost_inputs.json` (measured values + current published prices, with sources) → `cost_model.py`
 - [ ] Commit `results/` (JSON + `before_after.md`)
 
-## Phase 7 — Live demo 🖥️ [T23] — ⏸ PAUSED (2026-09-24, owner's call; resume with `tmux new -s webapp 'python -m sentinel.webapp --port 8095 --vlm-base-url unix:///opt/hp/zrt/run/vllm-base7b.sock'`)
+## Phase 7 — Live demo 🖥️ [T23] — ▶ RESUMED (demo app live with v1.3.0-joint; start everything with `./scripts/start_demo.sh`)
 
 - [ ] `config/towers.json` sources point at real `data/demo/...` folders
 - [ ] `config/settings.json`: `vlm_model` = `context` (or the base id), `detector_weights` = `models/smoke_yolo.pt`
@@ -128,9 +129,9 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [ ] Benign tower shows LOG/IGNORE and never reaches dispatch
 - [ ] Record a backup screen capture of the full demo
 
-## Phase 7b — Demo UI page 💻🖥️ — ⏸ PAUSED (app built, reviewed and stopped on the Nano to free GPU memory)
+## Phase 7b — Demo UI page 💻🖥️ — ▶ RESUMED
 
-- [ ] Design the demo page: what judges see in 5 minutes (live tower feeds, event timeline, escalation/outbox, online/offline toggle, metrics)
+- [x] Design the demo page: what judges see in 5 minutes (live tower feeds, event timeline, escalation/outbox, online/offline toggle, metrics)
 - [ ] Before vs after view: same frame through base vs fine-tuned models, side by side (detector boxes + VLM verdict)
 - [ ] Results panel that reads `results/*.json` (detector mAP, VLM accuracy, end-to-end precision/recall, cost model)
 - [x] **Live comparative metrics dashboard** — live on the Nano (tmux `monitor`, port 8090): `ssh -N -L 8090:localhost:8090 hp11@100.109.162.35` → http://localhost:8090. Reviewed (202 tests). First reading: teacher32b 839k input / 299k output tokens — while any model runs (detector, base VLM, LoRA VLM, teacher), show live per-model: requests, tokens in/out, tokens/s, latency p50/p95, GPU memory, calls avoided by the cascade, bytes sent upstream, and a running cost comparison (edge vs cloud-per-frame at configurable $/token and $/GB) to summarise the economics
@@ -139,6 +140,21 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] Deploy the demo app on the Nano after LoRA is served (base7b with `--enable-lora`) — live on :8095 via the backend socket; BEFORE and AFTER both served; first session: AFTER used 191 VLM tokens vs ~4,149 cloud-every-frame estimate (−95%), 0 bytes vs 377 KB uploads
 - [ ] Implement, test, and serve it from the Nano dashboard (port 8080, via SSH tunnel)
 - [ ] Rehearse the demo flow on the page end to end
+
+## Demo release ✅
+
+- [x] `scripts/start_demo.sh` — one command brings up base7b + LoRA, live metrics (8090) and the demo app (8095) with a health check
+- [x] `docs/DEMO_RUNBOOK.md` — pre-demo checklist, 5-minute script with curated sample IDs, measured numbers, what to say accurately, Q&A, recovery table
+- [x] Gallery scan (60 images): BEFORE 39/60 correct, AFTER 43/60; showcase images picked
+- [x] Tagged `v1.3.1-demo`
+
+## Still needs the owner 🙋
+
+- [ ] Cloud provider API key in `~/.cloud_vlm.env` on the Nano → run Phase 6b (measured cloud column)
+- [ ] Hand-check the 10 no-fire bench clips
+- [ ] Record the backup demo video; 2-min YouTube video; slides with the 3 visuals; Google Drive + socials
+- [ ] GitHub rulesets (protect `main` and `v*` tags) — see docs/versions/README.md
+- [ ] Who owns the `incidentmap` tmux session on the Nano? Coordinate GPU use before the final runs
 
 ## Phase 8 — Deliverables (due Fri 9/25, 8pm) [T28]
 

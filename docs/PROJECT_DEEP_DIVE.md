@@ -2,7 +2,7 @@
 
 **What this is:** the complete engineering record of the project: what was built and why, how each decision was made, what went wrong and how it was fixed, and the technical detail needed to explain and defend it as its engineer.
 
-**Status as of 2026-09-24 02:00 (Nano time, ICT):** code complete and reviewed (280 tests). Detector and VLM before/after both measured; demo app live with both pipelines. Stage-2 tower detector training and the end-to-end bench are next. Numbers marked *pending* are filled in as runs finish (see `docs/PROGRESS.md` and `results/`).
+**Status as of 2026-09-24 07:00 (Nano time, ICT):** demo release `v1.3.1-demo`. All training done and measured on the Nano; detector `v1.3.0-joint` deployed; demo app and live metrics running; edge-vs-cloud comparison code built and fairness-reviewed (390 tests), waiting only for a cloud provider key to produce the measured cloud column.
 
 ---
 
@@ -26,6 +26,7 @@
 | VLM LoRA training loss (answer tokens) | 1.21 at step 10 | **0.137** after 2 epochs (answer-token accuracy 70% → 95.1%) |
 | VLM source-type agreement with teacher (500 held-out crops) | 45.0% (base 7B) | **73.6%** (LoRA 7B) |
 | VLM danger / benign / look-alike group agreement | 53.0% | **75.6%** |
+| End-to-end, 25 real tower clips (15 fires, 10 no-fire) | recall 0/15 (YOLO-World + base 7B) | **recall 11/15**, first alert ~5–8 s, 1 VLM call per ~40 frames; 6/10 no-fire clips alerted (label noise + a low-cloud case) |
 | VLM per class: unknown / controlled burn / industrial stack | 0 / 1 / 54 correct | **123 / 34** / 38 correct (stack regressed) |
 
 ---
@@ -261,6 +262,27 @@ Running a FIgLib tower frame (21 minutes after ignition) through the demo showed
 
 ---
 
+## 8b. Edge vs cloud-only: how the comparison is kept fair
+
+The cloud-only baseline runs **the same model** (Qwen2.5-VL-7B-Instruct, hosted by an OpenAI-compatible provider) on **the same data**, so differences come from deployment, not model choice.
+
+| Fairness decision | Why |
+|---|---|
+| Cloud gets a full-frame prompt ("most frames contain no smoke; answer smoke_color none if so") | The edge's crop prompt assumes a detector already flagged smoke; reusing it would inflate cloud false alarms |
+| Cloud gets temporal logic too (persist K frames + a size trend), reported next to per-frame | The edge has a persistence gate and a growth check; a real cloud system could run the same |
+| Uplink model: link busy only while serialising; `latest` frame policy by default; RTT added once | A FIFO queue charging RTT as link occupancy invents backlogs no real system would have |
+| Measured network baseline subtracted before adding a link profile | The measured cloud latency already includes this machine's real network |
+| After an outage, cloud sees live frames (held from the clip) | Short recorded clips would otherwise make "cloud never knows" an artefact |
+| Edge delivery follows the shipped code: retries at +2, +4, +8 s then every 10 s, half a flush interval, 3-RTT HTTPS post | The model must not be kinder to the edge than the product is |
+| Paired statistics over clips both sides alerted; base-vs-base rows | Unpaired p50s compare different clips |
+| Responses cached (key: host, model, mode, prompt hash, max_tokens, image); transient errors retried | Re-runs cost nothing; one 429 isn't scored as a wrong answer |
+
+**What the edge actually wins on** (simulated with measured-latency placeholders; to be confirmed with the provider): on fiber the cloud is about as fast (≈1 s either way); on satellite the edge is faster; after a clean outage both know within seconds. The durable edge advantages are **~1,000× fewer bytes and $0 marginal API cost**, **decisions during the outage** (local action possible), not needing the fire to still be visible, and robustness on slow links.
+
+**Product fix found by this analysis:** the outbox used to back off up to 300 s and fetched the forecast before sending. Alerts now retry within 10 s, every queued ALERT goes out before any forecast, and the forecast follows as a small update.
+
+---
+
 ## 9. Step-by-step implementation (what happened, in order)
 
 **Day 0 (Tue 9/22) — planning and core code**
@@ -303,6 +325,8 @@ Running a FIgLib tower frame (21 minutes after ignition) through the demo showed
 | 14 | zsh mangled `$sha:refs/...` | `:r` is a zsh modifier | `${sha}:refs/...` | Brace variables in refspecs |
 | 15 | Detector misses tower smoke | Domain gap (close-range training data) | Measured it; stage-2 tower fine-tune at 960 px | Test on the deployment domain |
 | 16 | Review-caught logic bugs | — | Scheduled burn hid house fires; one missed frame faked growth; one fire re-alerted every 2 min; dashboard froze during VLM calls; outbox backoff overflowed after 62 retries; replayer hung on bad paths; totals doubled under a race; cloud baseline was unfairly large | Two-stage review after every batch pays for itself |
+| 19 | 6/10 no-fire bench clips alerted | pyro-sdis leaves some smoky frames unlabelled (one "clean" clip shows a real plume); one clip is genuine low cloud | Inspected frames; benign set to be hand-checked; fog/cloud named as a known limitation | Audit benchmark labels before trusting precision |
+| 20 | Edge-vs-cloud first draft tilted toward the edge | Short clips, a crop prompt on full frames, FIFO uplink, optimistic edge delivery | Two fairness reviews; fixes listed in §8b | Have a reviewer attack your own claims before judges do |
 | 18 | Stage-2 detector forgot D-Fire and the fire class | Sequential fine-tuning on smoke-only tower data | Measured on both domains; stage-3 joint (replay) training on D-Fire + tower | Always re-test old domains after domain adaptation |
 | 17 | LoRA model returned 404 through the proxy | zrt's proxy routes only the served label (`base7b`), even though `/v1/models` lists the adapter | Call the backend's own unix socket (`unix:///opt/hp/zrt/run/vllm-base7b.sock`); added socket support to the VLM client and demo app | Verify a served model with a real request, not just a listing |
 
