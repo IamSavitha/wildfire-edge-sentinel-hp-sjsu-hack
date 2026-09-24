@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 from sentinel.config import Tower
+from sentinel.detector import imgsz_for  # noqa: F401 - re-exported; shared with the incident map
 from sentinel.live_metrics import effective_prices
 from sentinel.monitor import PriceUpdate, _load_prices
 from sentinel.webapp_logic import TRUTHS, Session, escalate, load_benchmarks, run_pass
@@ -47,12 +48,6 @@ DETECTORS = {
     "yolo11s": {"label": "YOLO11s fine-tuned on D-Fire", "weights": "models/smoke_yolo.pt",
                 "classes": None, "imgsz": 640},
 }
-
-
-def imgsz_for(weights: str) -> int:
-    """Tower-trained detectors (tower_*/joint_* weights) were trained at 960 px; the rest at 640."""
-    name = Path(weights).name.lower()
-    return 960 if ("joint" in name or "tower" in name) else 640
 
 
 def detector_specs(before_weights: str, after_weights: str, after_imgsz: int | None = None) -> dict:
