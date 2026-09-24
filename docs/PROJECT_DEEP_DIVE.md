@@ -2,7 +2,7 @@
 
 **What this is:** the complete engineering record of the project: what was built and why, how each decision was made, what went wrong and how it was fixed, and the technical detail needed to explain and defend it as its engineer.
 
-**Status as of 2026-09-24 11:00 (Nano time, ICT):** demo release `v1.4.0-incident-map` — the `v1.3.0-joint` models plus Kruthika Virupakshappa's offline incident map and Ask Sentinel assistant (457 tests). All training done and measured on the Nano; the measured cloud column waits only for a provider key.
+**Status as of 2026-09-24 (Nano time, ICT):** demo release `v1.5.0-live-camera` — the `v1.3.0-joint` models, Kruthika Virupakshappa's incident map, and a live camera with phone alerts (514 tests). The measured cloud column waits only for a provider key.
 
 ---
 
@@ -131,6 +131,16 @@ The demo app shows one image at a time; the **incident map** (port 8100) shows t
 **Integration decisions:** tower frames run through the deployed joint detector at 960 px (the size it was trained at); photos use the D-Fire model at 640 px; a `--state-dir` keeps separate instances from sharing a database. Reviews added an incident lock (a live watch could otherwise overwrite "Restore link"), per-step error handling in the demo loader, and error-tolerant assistant tool calls.
 
 **Verified on the Nano:** 11/11 demo photos matched their expected severities; the Junction watch triangulated one ALERT incident from 2 towers (4 with the older tower-only detector — the joint model trades a little distant-plume sensitivity for not forgetting close-range scenes); Beaver reached ALERT.
+
+---
+
+## 3c. Live camera and phone alerts
+
+To make the flow tangible on stage, the demo app has a **Live camera** tab: the laptop webcam or an iPhone (macOS Continuity Camera) streams a frame every 1–2 s to the Nano through the SSH tunnel (`http://localhost` counts as a secure context, which browsers require for camera access). Frames go through **the same `Pipeline` a tower uses** — persistence gate, one VLM call per event, growth re-check, one ALERT per fire — and an ALERT is delivered through the real outbox to an **ntfy push** on a teammate's phone, standing in for 911.
+
+- **Measured on the Nano:** ~40 ms per frame for detection; the event-opening frame pays one VLM call (~5.6 s); a streamed smoke-and-fire photo went 1/3 → 2/3 → 3/3 → "wildland" → ALERT.
+- **Edge-first still holds:** offline, the alert waits in the outbox; online, it goes out within seconds as a ~1 KB report plus a small snapshot. Nothing else leaves the device.
+- **Demo safety (from review):** only test pushes are rate-limited; real alerts are never silently dropped (dedupe by latch and event id; a burst guard defers rather than drops); queued alerts older than 10 minutes expire instead of buzzing later; photo samples don't push unless enabled; the ntfy topic lives only in a private env file on the Nano.
 
 ---
 

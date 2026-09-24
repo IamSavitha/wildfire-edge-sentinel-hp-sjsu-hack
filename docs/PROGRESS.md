@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 11:00 Nano time (ICT) · **Release for the demo: `v1.4.0-incident-map`** · runbook: [DEMO_RUNBOOK.md](DEMO_RUNBOOK.md) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 Nano time (ICT) · **Release for the demo: `v1.5.0-live-camera`** · runbook: [DEMO_RUNBOOK.md](DEMO_RUNBOOK.md) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -156,6 +156,15 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] Merged into `main` (c97d3e0); verified on the Nano: 11/11 demo photos matched, Junction triangulated from 2 towers (ALERT), Beaver ALERT
 - [x] Tagged `v1.4.0-incident-map` (doc in docs/versions/)
 - [ ] Kruthika commits/pushes her own `~/sentinel-map` + `~/sentinel-assets` work from her folders; close PR #1 (it contains weights/logs, not UI)
+
+## Live camera + phone alerts 📱
+
+- [x] Live camera tab (laptop webcam or iPhone via Continuity Camera) → same pipeline as a tower (gate, one VLM call per event, re-check, one alert per fire)
+- [x] ALERT → ntfy push to a teammate's phone (report + snapshot); offline queues, online delivers; test pushes rate-limited, real alerts never dropped; stale alerts expire
+- [x] Reviewed twice (514 tests); merged to `main`; deployed; verified on the Nano with real models: gate 3/3 → VLM "wildland" → ALERT (≈40 ms per frame, 5.6 s for the VLM frame)
+- [x] Tagged `v1.5.0-live-camera`
+- [ ] Owner: install ntfy on the teammate's phone, create a private topic, write `export NTFY_TOPIC_URL=…` to `~/.sentinel_alerts.env` on the Nano, restart the demo app
+- [ ] Rehearse: Send test alert → phone buzzes; live segment with a wildfire video on a tablet; Offline → queued → Online → buzz
 
 ## Still needs the owner 🙋
 
