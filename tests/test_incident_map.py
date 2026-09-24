@@ -592,3 +592,33 @@ def test_main_defaults_and_overrides(monkeypatch, tmp_path):
     seen.clear()
     im.main(["--no-sensor", "--detector-weights", "models/smoke_yolo.pt", "--detector-imgsz", "960"])
     assert seen["detector_imgsz"] == 960
+
+
+def test_a_failing_demo_step_is_marked_and_the_rest_still_run(tmp_path):
+    data = tmp_path / "data"
+    (data / "imgs").mkdir(parents=True)
+    (data / "imgs" / "fire.jpg").write_bytes(jpeg())
+    cfg = tmp_path / "demo.json"
+    cfg.write_text(json.dumps([
+        {"id": "gone", "kind": "photo", "title": "Missing", "image": "imgs/missing.jpg", "lat": 33.0, "lon": -116.9,
+         "expect": "ALERT"},
+        {"id": "a", "kind": "photo", "title": "Fire", "image": "imgs/fire.jpg", "lat": 33.0, "lon": -116.9,
+         "expect": "ALERT"},
+        {"id": "c", "kind": "action", "action": "restore_link", "title": "Link", "expect": "sent"}]))
+    FakeVLM.ctx = WILD
+    app = create_map_app(cameras=CAMS, assets_dir=tmp_path / "a", data_dir=data, detector_weights="w.pt",
+                         photo_detector_weights=None, detector_factory=lambda w: FakeDetector(), vlm_factory=FakeVLM,
+                         model_lister=lambda: ["context"], forecast_fn=lambda la, lo: FORECAST, counties=COUNTIES,
+                         demo_scenarios=cfg)
+    with TestClient(app) as c:
+        c.post("/api/demo/load")
+        import time as _t
+        for _ in range(100):
+            d = c.get("/api/demo").json()
+            if d["state"] != "running":
+                break
+            _t.sleep(0.05)
+    gone, a, link = (s["result"] for s in d["scenarios"])
+    assert d["state"] == "done" and d["error"] is None
+    assert gone["status"] == "error" and "missing.jpg" in gone["note"]
+    assert a["status"] == "done" and a["severity"] == "ALERT" and link["status"] == "ready"

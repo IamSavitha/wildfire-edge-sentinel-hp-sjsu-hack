@@ -918,6 +918,7 @@ async function refreshDemo() {
     if (r.status === "running") body = '<span class="thinking"><i></i><i></i><i></i></span> <span class="note">running on the device…</span>';
     else if (r.status === "watching") body = `<div class="note">Live watch ${esc(r.state || "")} · frame ${esc(r.progress || "")}${r.towers ? ` · ${r.towers} tower(s) see it` : ""}${r.loc_source === "triangulated" ? " · <b>triangulated</b>" : ""}</div>`;
     else if (r.status === "not loaded") body = '<span class="note">Press <b>Load demo scenarios</b>.</span>';
+    else if (r.status === "error" || r.status === "skipped") body = `<div class="note">${r.status === "error" ? "Step failed" : "Skipped"}: ${esc(r.note || "")}</div>`;
     if (r.thumb_b64) body += `<img src="data:image/jpeg;base64,${r.thumb_b64}" alt=""><div class="note">Dropped: no detection ≥ 0.40 (best ${r.best ?? "none"}). VLM not called, 0 tokens, nothing stored or sent.</div>`;
     return `<div class="demo-step">
       <div class="hd"><span class="num">${k + 1}</span><b style="flex:1">${esc(sc.title)}</b>${sev ? `<span class="sev ${sev}">${sev}</span>` : ""}</div>

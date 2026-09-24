@@ -856,38 +856,47 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
     demo = {"state": "idle", "results": {}, "error": None}
     scenarios = json.loads(Path(demo_scenarios).read_text()) if demo_scenarios and Path(demo_scenarios).exists() else []
 
+    def run_demo_step(sc: dict, res: dict) -> None:
+        if sc["kind"] == "photo":
+            path = data_dir / sc["image"] if data_dir else Path(sc["image"])
+            data = path.read_bytes()
+            image = decode_image(data)
+            info = {"source": "demo", "name": path.name, "kind": "photo",
+                    "width": int(image.shape[1]), "height": int(image.shape[0]), "bytes": len(data)}
+            r = process(image, data, info, None, (sc["lat"], sc["lon"]), sc.get("name"), False,
+                        demo={"id": sc["id"], "title": sc["title"], "expect": sc["expect"]})
+            inc = r["incident"]
+            rr = r["result"]
+            res.update(status="done", severity=rr["severity"], detect_ms=rr["detect_ms"],
+                       best=(rr["best"] or {}).get("conf"), tokens=rr["tokens"],
+                       thumb_b64=None if inc else rr["thumbnail_b64"],
+                       source_type=(rr["context"] or {}).get("source_type"),
+                       incident_id=inc["id"] if inc else None, frame_n=r.get("frame_n"),
+                       escalation=((inc or {}).get("escalation") or {}).get("decision"))
+        elif sc["kind"] == "watch":
+            g = recordings.get(sc["recording"])
+            if g is None:
+                res.update(status="skipped", note="recording not on this device")
+                return
+            out = start_watch(WatchRequest(recording=sc["recording"], interval_s=sc.get("interval_s", 1.0),
+                                           batch_frames=sc.get("batch_frames", 5), time_mode="live",
+                                           start_offset_s=sc.get("start_offset_s", -300)))
+            res.update(status="watching", session=out["sessions"][0]["id"])
+        else:
+            res.update(status="ready")
+
     def run_demo() -> None:
-        """Mock inputs, real analysis: each photo goes through the detector + VLM + rules on this device."""
+        """Mock inputs, real analysis: each photo goes through the detector + VLM + rules on this device.
+        A step that fails (a missing photo, a busy camera) is marked and the rest still run."""
         try:
             for sc in scenarios:
                 res = demo["results"][sc["id"]] = {"status": "running"}
-                if sc["kind"] == "photo":
-                    path = data_dir / sc["image"] if data_dir else Path(sc["image"])
-                    data = path.read_bytes()
-                    image = decode_image(data)
-                    info = {"source": "demo", "name": path.name, "kind": "photo",
-                            "width": int(image.shape[1]), "height": int(image.shape[0]), "bytes": len(data)}
-                    r = process(image, data, info, None, (sc["lat"], sc["lon"]), sc.get("name"), False,
-                                demo={"id": sc["id"], "title": sc["title"], "expect": sc["expect"]})
-                    inc = r["incident"]
-                    rr = r["result"]
-                    res.update(status="done", severity=rr["severity"], detect_ms=rr["detect_ms"],
-                               best=(rr["best"] or {}).get("conf"), tokens=rr["tokens"],
-                               thumb_b64=None if inc else rr["thumbnail_b64"],
-                               source_type=(rr["context"] or {}).get("source_type"),
-                               incident_id=inc["id"] if inc else None, frame_n=r.get("frame_n"),
-                               escalation=((inc or {}).get("escalation") or {}).get("decision"))
-                elif sc["kind"] == "watch":
-                    g = recordings.get(sc["recording"])
-                    if g is None:
-                        res.update(status="skipped", note="recording not on this device")
-                        continue
-                    out = start_watch(WatchRequest(recording=sc["recording"], interval_s=sc.get("interval_s", 1.0),
-                                                   batch_frames=sc.get("batch_frames", 5), time_mode="live",
-                                                   start_offset_s=sc.get("start_offset_s", -300)))
-                    res.update(status="watching", session=out["sessions"][0]["id"])
-                else:
-                    res.update(status="ready")
+                try:
+                    run_demo_step(sc, res)
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("demo step %s failed", sc.get("id"))
+                    detail = exc.detail if isinstance(exc, HTTPException) else exc
+                    res.update(status="error", note=f"{type(exc).__name__}: {detail}"[:300])
             demo["state"] = "done"
         except Exception as exc:  # noqa: BLE001
             log.exception("demo load failed")
