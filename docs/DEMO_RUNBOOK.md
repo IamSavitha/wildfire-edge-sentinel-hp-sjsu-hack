@@ -46,14 +46,17 @@ tablet or second monitor, camera ~0.5–1 m away, the plume filling a good part 
 or smoke indoors.**
 
 **Rehearsal (5 min):**
-1. Live camera tab → pick the camera → interval **1.5 s** → **Start**. Boxes appear on the preview.
-2. **Send test alert** → phone buzzes (a test push; at most one push per 30 s, else "Suppressed (rate limit)").
+1. Open the Live camera tab in **one browser tab only** (every tab feeds the same live pipeline) → pick the
+   camera → interval **1.5 s** → **Start**. Boxes appear on the preview.
+2. **Send test alert** → phone buzzes (test pushes only: at most one per 30 s, else "Test push skipped").
 3. Play the smoke video: gate dots fill 1/3 → 3/3, the VLM verdict appears once, then ALERT (black/large/near
    structures) or MONITOR (re-checked every 10 s; growing → ALERT). Banner: **Sent to phone ✓**; phone buzzes
    with the snapshot and the dispatch text.
 4. **Reset live**, toggle **Offline**, replay → banner **Queued — link offline**; toggle **Online** → the banner
-   turns **Sent to phone ✓** within seconds and the phone buzzes. Wait 30 s between pushes (rate limit).
-5. **Reset live** before the real demo (clears the open event and the one-ALERT-per-fire latch).
+   turns **Sent to phone ✓** within seconds and the phone buzzes. Real ALERTs are never rate-limited.
+5. Press **Stop**, then **Reset live** before the real demo (clears the open event and the one-ALERT-per-fire
+   latch). The photo samples on the Single image tab do not push to the phone unless the app was started
+   with `--deliver-image-alerts`.
 
 ## 2. The 5-minute story
 
@@ -114,5 +117,7 @@ The incident map (triangulation, wind, live watch, Ask Sentinel) was built by Kr
 | Live camera: ALERT already raised, nothing new | One ALERT per fire (latch): press **Reset live**. |
 | Phone does not buzz; banner says "Delivered (simulated…)" | The app has no topic: check `start_demo.sh` prints `configured`; if the webapp was already running, `tmux kill-session -t webapp` and re-run. |
 | Banner "Delivery failed — retrying" | ntfy unreachable from the Nano (`curl -sI https://ntfy.sh` on the Nano). The alert stays in the outbox and goes out when it answers; keep talking, it retries every few seconds. |
-| Banner "Suppressed (rate limit)" | Less than 30 s since the last push (a test push counts). Wait, **Reset live**, repeat. |
+| "Test push skipped" | Test pushes are limited to one per 30 s (ALERTs are not). Wait and press again. |
+| Banner "Expired — not sent" | That alert sat in the outbox over 10 min (e.g. app restarted while offline); it is dropped on purpose. **Reset live** and show a fresh one. |
+| Frames jump / gate never fills with two laptops or tabs | Only one tab may stream: press **Stop** in the other tab, then **Reset live**. |
 | Phone gets pushes but silently | ntfy app: check the topic's notification sound/priority settings; turn off Focus / Do Not Disturb. |

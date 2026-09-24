@@ -265,21 +265,25 @@ gate progress, the event, severity and the VLM verdict.
 ALERTs are delivered for real: a push to your phone through [ntfy](https://ntfy.sh) (title, dispatch
 text, urgent priority, snapshot attached) and, with `--dispatch-url`, a POST to dispatch. Delivery goes
 through a durable outbox (`--state-dir`, default `data/live_outbox.db`): offline, the alert waits; toggling
-**Online** sends it at once; failed pushes are retried every few seconds. At most one push per 30 s (the
-rest are counted as suppressed). With a notifier or dispatch URL configured, an ALERT from the single-image
-tab is delivered the same way (one per photo). **Send test alert** checks the phone before the demo.
+**Online** sends it at once; failed pushes are retried every few seconds. Real ALERTs are never dropped
+by a rate limit: a burst guard (more than 5 pushes a minute) only holds extra alerts in the outbox for a
+few seconds. An alert still queued 10 minutes after detection (e.g. across a restart) is marked expired and
+not pushed. Without `--dispatch-url` no forecast is fetched. ALERTs from the single-image tab (samples,
+uploads) are pushed only with `--deliver-image-alerts` (one per photo). **Send test alert** checks the
+phone before the demo; test pushes are limited to one per 30 s.
 
 ```bash
 # once, on the Nano: the topic URL is a secret (anyone who knows it can read the alerts)
 echo 'export NTFY_TOPIC_URL=https://ntfy.sh/<long-random-topic>' > ~/.sentinel_alerts.env
 chmod 600 ~/.sentinel_alerts.env        # optional: export NTFY_TOKEN=tk_... for a protected server
-./scripts/start_demo.sh                 # sources it; prints only "phone alerts: configured"
+./scripts/start_demo.sh                 # loads it (set -a); prints only "phone alerts: configured"
 ```
 
 The camera needs a secure origin: open the page as `http://localhost:8095` through the SSH tunnel, not
 `http://<nano-ip>:8095`. Endpoints: `POST /api/live/frame` (body = JPEG, `?stream=<id>`),
-`POST /api/live/reset`, `POST /api/notify/test`. The topic URL is read from the environment only and
-logged redacted (host + first 4 characters of the topic).
+`POST /api/live/reset`, `POST /api/notify/test`. The topic URL is read from the environment only; logs
+show the host and at most the first 4 characters of a long topic, and the page and API show the host only.
+Stream from one browser tab at a time: all tabs feed the same live pipeline.
 
 ## Incident map (offline, port 8100)
 
