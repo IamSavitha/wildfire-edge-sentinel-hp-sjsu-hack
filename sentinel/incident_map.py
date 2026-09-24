@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import logging
+import math
 import re
 import shutil
 import threading
@@ -243,6 +244,7 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
     # inc_lock may be held while taking gpu_lock (watch step), never the reverse.
     inc_lock = threading.RLock()
     cache: dict = {}
+    cache_lock = threading.Lock()       # one model load per weights file, even with concurrent requests
 
     def bump(**kw):
         with stats_lock:
@@ -259,19 +261,21 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         except OSError:
             mtime = None
         key = (weights, mtime)          # a retrained model written to the same path is picked up automatically
-        if key not in cache:
-            for k in [k for k in cache if isinstance(k, tuple) and k[0] == weights]:
-                del cache[k]
-            if mtime is not None and cache.get("loaded", {}).get(weights) not in (None, mtime):
-                log.info("detector weights changed on disk, reloading %s", weights)
-            cache[key] = detector_factory(weights)
-            cache.setdefault("loaded", {})[weights] = mtime
-        return cache[key], Path(weights).stem
+        with cache_lock:
+            if key not in cache:
+                for k in [k for k in cache if isinstance(k, tuple) and k[0] == weights]:
+                    del cache[k]
+                if mtime is not None and cache.get("loaded", {}).get(weights) not in (None, mtime):
+                    log.info("detector weights changed on disk, reloading %s", weights)
+                cache[key] = detector_factory(weights)
+                cache.setdefault("loaded", {})[weights] = mtime
+            return cache[key], Path(weights).stem
 
     def vlm():
-        if "vlm" not in cache:
-            cache["vlm"] = vlm_factory(vlm_model)
-        return cache["vlm"]
+        with cache_lock:
+            if "vlm" not in cache:
+                cache["vlm"] = vlm_factory(vlm_model)
+            return cache["vlm"]
 
     def forecast_key(cam: dict | None, lat: float, lon: float) -> str:
         return cam["id"] if cam else f"{lat:.2f},{lon:.2f}"
@@ -803,6 +807,9 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         except Exception as exc:  # noqa: BLE001
             log.exception("watch %s failed", s.id)
             s.state, s.error = "error", f"{type(exc).__name__}: {exc}"[:300]
+        finally:
+            for c in s.cams.values():               # finished sessions stay listed: drop the full-size frames
+                c.last_hit, c.recent = None, []
 
     def watch_many(sessions: list[WatchSession]) -> None:
         for s in sessions:
@@ -940,6 +947,7 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
 
     app = FastAPI(title="Wildfire Edge Sentinel incident map", lifespan=lifespan)
     app.state.store = store
+    app.state.watches = watches
     app.state.winds = winds
     for mount, sub in (("/assets", assets_dir / "web"), ("/tiles", assets_dir / "maps")):
         if sub.is_dir():
@@ -965,7 +973,7 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
 
     @app.get("/api/state")
     def get_state(hours: float = 1.0):
-        hours = min(max(hours, 0.25), 12.0)
+        hours = min(max(hours, 0.25), 12.0) if math.isfinite(hours) else 1.0
         incs = store.all()
         return {"online": state["online"], "hours": hours, "generated_at": clock(), "summary": summary(incs),
                 "cameras": [camera_view(c) for c in cameras.values()],
@@ -996,6 +1004,7 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
 
     @app.get("/api/incidents/{incident_id}")
     def get_incident(incident_id: str, hours: float = 1.0):
+        hours = hours if math.isfinite(hours) else 1.0
         inc = store.get(incident_id)
         if inc is None:
             raise HTTPException(404, "unknown incident")
@@ -1034,6 +1043,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         if (p.wind_from_deg is None) != (p.wind_speed_mps is None):
             raise HTTPException(400, "send wind direction and speed together")
         if p.wind_from_deg is not None:
+            if not (math.isfinite(p.wind_from_deg) and math.isfinite(p.wind_speed_mps)):
+                raise HTTPException(400, "wind must be finite numbers")
             if p.wind_speed_mps < 0 or p.wind_speed_mps > 80:
                 raise HTTPException(400, "wind speed out of range")
             inc["manual_wind"] = {"dir_from_deg": p.wind_from_deg % 360, "speed_mps": p.wind_speed_mps,
@@ -1121,6 +1132,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         data = path.read_bytes()
         if w:                                   # small copy for list thumbnails
             img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+            if img is None:
+                raise HTTPException(404, "frame unreadable")
             ih, iw = img.shape[:2]
             s = min(1.0, max(64, min(w, 640)) / iw)
             img = cv2.resize(img, (int(iw * s), int(ih * s)), interpolation=cv2.INTER_AREA)

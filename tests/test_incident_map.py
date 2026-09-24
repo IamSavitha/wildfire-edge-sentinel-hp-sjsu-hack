@@ -654,3 +654,57 @@ def test_link_restored_during_a_watch_vlm_call_is_not_reverted_by_the_watch(tmp_
         inc = c.get(f"/api/incidents/{s['incident_ids'][0]}").json()
     assert out == [{"online": True, "flushed": 1}]
     assert inc["severity"] == "ALERT" and inc["escalation"]["decision"] == "sent"
+
+
+def test_non_finite_inputs_are_rejected_or_defaulted(env, tmp_path):
+    c, _, _, _ = env
+    inc = post(c, camera_id="rm-e").json()["incident"]
+    url, hdr = f"/api/incidents/{inc['id']}", {"content-type": "application/json"}
+    for body in ('{"wind_from_deg": NaN, "wind_speed_mps": 5}', '{"wind_from_deg": Infinity, "wind_speed_mps": 5}',
+                 '{"wind_from_deg": 90, "wind_speed_mps": NaN}'):
+        assert c.patch(url, content=body, headers=hdr).status_code == 400, body
+    assert (c.get(url).json().get("wind") or {}).get("source") != "manual"
+    for q in ("nan", "inf", "-inf"):
+        assert c.get(f"/api/state?hours={q}").json()["hours"] == 1.0
+    assert c.get(f"{url}?hours=nan").status_code == 200
+
+
+def test_unreadable_stored_frame_is_a_404(env, tmp_path):
+    c, _, _, _ = env
+    r = post(c, camera_id="rm-e").json()
+    path = tmp_path / "assets" / "state" / "frames" / r["incident"]["id"] / f"{r['frame_n']}.jpg"
+    assert path.exists()
+    path.write_bytes(b"not a jpeg")
+    assert c.get(f"/api/incidents/{r['incident']['id']}/frames/{r['frame_n']}?w=120").status_code == 404
+
+
+def test_finished_watch_drops_its_frames_from_memory(tmp_path):
+    app = watch_env(tmp_path)
+    with TestClient(app) as c:
+        c.post("/api/watch", json={"recording": "fire_x", "interval_s": 0, "batch_frames": 4,
+                                   "time_mode": "recorded", "start_offset_s": None})
+        [s] = wait_done(c)
+        cam = app.state.watches[s["id"]].cams["rm-e"]
+        assert cam.last_hit is None and cam.recent == [] and cam.latest_thumb   # the small thumbnail stays
+
+
+def test_detector_is_loaded_once_under_concurrent_reports(tmp_path):
+    import threading
+    import time as _t
+    loads = []
+
+    def slow_factory(weights):
+        loads.append(weights)
+        _t.sleep(0.2)
+        return FakeDetector()
+    app = create_map_app(cameras=CAMS, assets_dir=tmp_path / "a", detector_weights="w.pt", photo_detector_weights=None,
+                         detector_factory=slow_factory, vlm_factory=FakeVLM, model_lister=lambda: ["context"],
+                         forecast_fn=lambda la, lo: FORECAST, counties=COUNTIES)
+    with TestClient(app) as c:
+        codes = []
+        ts = [threading.Thread(target=lambda: codes.append(post(c, camera_id="rm-e").status_code)) for _ in range(3)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(10)
+    assert codes == [200, 200, 200] and loads == ["w.pt"]
