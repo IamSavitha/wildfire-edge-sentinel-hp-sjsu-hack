@@ -331,7 +331,7 @@ ssh -N -L 8100:localhost:8100 hp11@<nano-ip>   # laptop, then http://localhost:8
   frames with smoke, plume-area change, trend (growing / steady / shrinking) and one VLM re-check. Growth
   can raise the severity and trigger the one-time escalation. On the Beaver Fire recording: 46 frames,
   8 VLM calls, opened as MONITOR and raised to ALERT at the first batch (plume area ×4.8). "Load fire
-  history" replays all five recordings with their real timestamps and archives them as history.
+  history" replays all 20 recordings (12 fires) with their real timestamps and archives them as history.
 - **Ask Sentinel** (`sentinel/assistant.py`): the on-device Qwen2.5-VL-7B (`--assistant-model`, default
   `base7b`) plans up to three tool calls with schema-constrained JSON (attention now, summarize a period,
   list incidents, incident detail, wind outlook, draft dispatch). Code runs them against the local incident

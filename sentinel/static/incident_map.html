@@ -663,7 +663,7 @@ function drawList() {
       ${i.last_update ? `<div class="upd" style="grid-column:2">Latest: ${esc(i.last_update)}</div>` : ""}
       ${i.key_frame != null ? `<img class="thumb" loading="lazy" src="/api/incidents/${i.id}/frames/${i.key_frame}?w=360" alt="">` : ""}
     </div>`).join("")
-    : `<div class="empty">${filter === "resolved" ? "No history yet. In <b>Live watch</b>, use <b>Load fire history</b> to replay the five recorded fires at their real dates." :
+    : `<div class="empty">${filter === "resolved" ? "No history yet. In <b>Live watch</b>, use <b>Load fire history</b> to replay the 12 recorded fires (20 tower recordings) at their real dates." :
        "No active incidents. Start a <b>Live watch</b> on a tower, or use <b>+ Report sighting</b>."}</div>`;
   for (const el of $$(".card")) el.onclick = () => openIncident(el.dataset.id);
 }
