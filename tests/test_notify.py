@@ -115,20 +115,42 @@ def test_a_failure_does_not_start_the_rate_limit_window():
     assert n.notify_alert(REPORT) == "sent"
 
 
-def test_rate_limit_suppresses_without_raising(caplog):
+def test_alerts_are_never_rate_limited():
     clock = Clock()
     n, post = make(clock=clock, min_interval_s=30)
-    assert n.notify_alert(REPORT) == "sent"
+    for _ in range(5):
+        assert n.notify_alert(REPORT) == "sent"
+        clock.t += 2
+    assert len(post.calls) == 5 and n.stats()["suppressed"] == 0
+
+
+def test_test_pushes_are_rate_limited_without_raising(caplog):
+    clock = Clock()
+    n, post = make(clock=clock, min_interval_s=30)
+    assert n.send_test() == "sent"
     clock.t += 10
     with caplog.at_level(logging.INFO, logger="sentinel.notify"):
-        assert n.notify_alert(REPORT) == "suppressed"
         assert n.send_test() == "suppressed"
-    assert len(post.calls) == 1
-    assert n.stats()["suppressed"] == 2
     assert "suppressed" in caplog.text and "sentinel-test-topic" not in caplog.text
-    clock.t += 21
+    assert n.notify_alert(REPORT) == "sent"          # a real ALERT is not held back by a test push
+    clock.t += 5
+    assert n.send_test() == "suppressed"             # nor does a test push buzz right after an ALERT
+    clock.t += 30
+    assert n.send_test() == "sent"
+    assert len(post.calls) == 3 and n.stats()["suppressed"] == 2
+
+
+def test_alert_burst_guard_defers_instead_of_dropping():
+    clock = Clock()
+    n, post = make(clock=clock, burst_max=5, burst_window_s=60)
+    for _ in range(5):
+        assert n.notify_alert(REPORT) == "sent"
+        clock.t += 1
+    with pytest.raises(NotifyError, match="burst limit"):
+        n.notify_alert(REPORT)                       # raises: the outbox keeps it and retries
+    assert len(post.calls) == 5 and n.stats()["deferred"] == 1 and n.stats()["failed"] == 0
+    clock.t += 56                                    # the first push leaves the 60 s window
     assert n.notify_alert(REPORT) == "sent"
-    assert len(post.calls) == 2
 
 
 def test_send_test_is_a_plain_text_push():
@@ -158,9 +180,23 @@ def test_from_env():
 
 def test_redaction_shows_host_and_four_chars():
     assert redact_topic_url(TOPIC) == "ntfy.example.org/sent…"
-    assert redact_topic_url("https://ntfy.sh/ab") == "ntfy.sh/ab…"
+    assert redact_topic_url("https://ntfy.sh/abcdefgh") == "ntfy.sh"     # short topic: host only
+    assert redact_topic_url("https://ntfy.sh/ab") == "ntfy.sh"
     n, _ = make()
     assert TOPIC not in n.describe() and "sentinel-test-topic" not in repr(n)
+    assert n.host == "ntfy.example.org"
+    assert "sent" not in n.stats()["host"] and "target" not in n.stats()
+
+
+def test_httpx_request_logs_are_silenced():
+    assert logging.getLogger("httpx").level >= logging.WARNING      # httpx logs full URLs at INFO
+
+
+def test_phone_text_does_not_claim_no_connectivity():
+    n, post = make()
+    n.notify_alert(REPORT)                           # forecast_status "pending", but we are online
+    assert "no connectivity" not in post.calls[0]["headers"]["Message"]
+    assert "Wildland smoke/fire" in post.calls[0]["headers"]["Message"]
 
 
 def test_ascii_header_limits_length_and_strips_control_chars():

@@ -35,7 +35,7 @@ class FakeNotifier:
         return self._next()
 
     def stats(self):
-        return {"sent": len(self.alerts), "suppressed": 0, "failed": 0, "target": self.target,
+        return {"sent": len(self.alerts), "suppressed": 0, "failed": 0, "deferred": 0, "host": "ntfy.example",
                 "min_interval_s": 30, "last_error": None}
 
 

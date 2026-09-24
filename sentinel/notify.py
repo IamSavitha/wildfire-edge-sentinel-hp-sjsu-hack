@@ -9,6 +9,10 @@ snapshot, the full UTF-8 report is sent as the body instead. If the server refus
 (4xx other than auth/rate-limit, e.g. attachments disabled on a self-hosted server), the alert is
 re-sent text-only so it still arrives.
 
+Real ALERTs are never rate-limited or dropped: a burst guard (more than `burst_max` alert pushes in
+`burst_window_s`) raises NotifyError, so the outbox keeps the alert and delivers it a few seconds later.
+Only rehearsal pushes (`send_test`) are limited to one per `min_interval_s`, and those are skipped.
+
 The topic URL is a secret (anyone who knows it can read the alerts): it is read from the
 environment only (`NTFY_TOPIC_URL`, optional `NTFY_TOKEN` access token) and logged redacted.
 """
@@ -18,6 +22,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 import unicodedata
 from typing import Callable, Mapping
 from urllib.parse import urlparse
@@ -27,6 +32,7 @@ import httpx
 from sentinel.report import render_text
 
 log = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)   # httpx logs every request URL (the secret topic) at INFO
 
 ALERT_TAGS = ("fire", "rotating_light")
 TEST_TAGS = ("white_check_mark",)
@@ -50,10 +56,12 @@ def ascii_header(text: str, limit: int = MESSAGE_LIMIT) -> str:
 
 
 def redact_topic_url(url: str) -> str:
-    """host + the first 4 characters of the topic, for logs and the UI."""
+    """host + the first 4 characters of the topic, for logs; just the host for a short topic, so the
+    whole topic is never shown."""
     p = urlparse(url)
+    host = p.hostname or "?"
     topic = p.path.strip("/").split("/")[-1] if p.path.strip("/") else ""
-    return f"{p.hostname or '?'}/{topic[:4]}…"
+    return f"{host}/{topic[:4]}…" if len(topic) > 8 else host
 
 
 def _valid_topic_url(url: str) -> bool:
@@ -64,7 +72,7 @@ def _valid_topic_url(url: str) -> bool:
 class NtfyNotifier:
     def __init__(self, topic_url: str, token: str | None = None, min_interval_s: float = 30.0,
                  clock: Callable[[], float] = time.time, post: Callable = httpx.post,
-                 timeout_s: float = 10.0):
+                 timeout_s: float = 10.0, burst_max: int = 5, burst_window_s: float = 60.0):
         if not _valid_topic_url(topic_url):
             raise ValueError("ntfy topic URL must look like https://<host>/<topic>")
         self.topic_url = topic_url
@@ -73,10 +81,14 @@ class NtfyNotifier:
         self.clock = clock
         self.post = post
         self.timeout_s = timeout_s
-        self.target = redact_topic_url(topic_url)
+        self.target = redact_topic_url(topic_url)        # logs only
+        self.host = urlparse(topic_url).hostname or "?"   # what the UI and APIs show
+        self.burst_max = burst_max
+        self.burst_window_s = burst_window_s
+        self._alert_times: deque = deque()
         self._lock = threading.Lock()          # one push at a time; guards the rate-limit window
         self._last_sent: float | None = None
-        self._counts = {"sent": 0, "suppressed": 0, "failed": 0}
+        self._counts = {"sent": 0, "suppressed": 0, "failed": 0, "deferred": 0}
         self.last_error: str | None = None
 
     @classmethod
@@ -98,39 +110,51 @@ class NtfyNotifier:
 
     def stats(self) -> dict:
         with self._lock:
-            return {**self._counts, "target": self.target, "min_interval_s": self.min_interval_s,
-                    "last_error": self.last_error}
+            return {**self._counts, "host": self.host, "min_interval_s": self.min_interval_s,
+                    "burst_max": self.burst_max, "last_error": self.last_error}
 
     # ------------------------------------------------------------ public API
 
     def notify_alert(self, report: dict) -> str:
-        """Push an ALERT report. Returns "sent" or "suppressed" (rate limit); raises NotifyError
-        when it could not be delivered, so the caller's outbox retries it."""
+        """Push an ALERT report. Returns "sent"; raises NotifyError when it could not be delivered
+        (or the burst guard defers it), so the caller's outbox keeps it and retries."""
         title = f"🔥 WILDFIRE ALERT — {report.get('tower_name') or report.get('tower_id') or 'camera'}"
         try:
             snapshot = base64.b64decode(report.get("thumbnail_jpeg_b64") or "", validate=True) or None
         except (ValueError, TypeError):
             snapshot = None
-        return self._publish(title, render_text(report), 5, ALERT_TAGS, snapshot,
-                             f"sentinel-{report.get('event_id', 'alert')}.jpg")
+        # the phone gets the alert first; "Forecast pending (no connectivity...)" would be wrong online
+        text = render_text({**report, "forecast_status": "not_requested"} if not report.get("forecast") else report)
+        return self._publish(title, text, 5, ALERT_TAGS, snapshot,
+                             f"sentinel-{report.get('event_id', 'alert')}.jpg", limited=False)
 
     def send_test(self) -> str:
-        """A rehearsal push (same rate limit as alerts)."""
+        """A rehearsal push: "sent", or "suppressed" within `min_interval_s` of the last push."""
         return self._publish("Wildfire Edge Sentinel test",
                              "Test alert: phone alerts from the Wildfire Edge Sentinel demo work.",
-                             3, TEST_TAGS, None, None)
+                             3, TEST_TAGS, None, None, limited=True)
 
     # ------------------------------------------------------------ internals
 
     def _publish(self, title: str, message: str, priority: int, tags, snapshot: bytes | None,
-                 filename: str | None) -> str:
+                 filename: str | None, *, limited: bool) -> str:
         with self._lock:
             now = self.clock()
-            if self._last_sent is not None and now - self._last_sent < self.min_interval_s:
-                self._counts["suppressed"] += 1
-                log.info("push to %s suppressed by the rate limit (%.0f s since the last push, min %.0f s)",
-                         self.target, now - self._last_sent, self.min_interval_s)
-                return "suppressed"
+            if limited:
+                if self._last_sent is not None and now - self._last_sent < self.min_interval_s:
+                    self._counts["suppressed"] += 1
+                    log.info("test push to %s suppressed by the rate limit (%.0f s since the last push, "
+                             "min %.0f s)", self.target, now - self._last_sent, self.min_interval_s)
+                    return "suppressed"
+            else:
+                while self._alert_times and now - self._alert_times[0] >= self.burst_window_s:
+                    self._alert_times.popleft()
+                if len(self._alert_times) >= self.burst_max:
+                    self._counts["deferred"] += 1
+                    log.warning("alert push to %s deferred: burst limit (%d in %.0f s); the outbox retries it",
+                                self.target, self.burst_max, self.burst_window_s)
+                    raise NotifyError(f"burst limit: more than {self.burst_max} alert pushes in "
+                                      f"{self.burst_window_s:.0f} s; deferred")
             headers = {"Title": ascii_header(title, TITLE_LIMIT), "Priority": str(priority),
                        "Tags": ",".join(tags)}
             if self.token:
@@ -155,6 +179,8 @@ class NtfyNotifier:
                 self._fail(msg)
                 raise NotifyError(msg) from None
             self._last_sent = now
+            if not limited:
+                self._alert_times.append(now)
             self._counts["sent"] += 1
             self.last_error = None
             log.info("push sent to %s (%s)", self.target, headers["Title"])

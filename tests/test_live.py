@@ -48,7 +48,7 @@ class FakeNotifier:
         return self._next()
 
     def stats(self):
-        return {"sent": len(self.alerts), "suppressed": 0, "failed": 0, "target": self.target,
+        return {"sent": len(self.alerts), "suppressed": 0, "failed": 0, "deferred": 0, "host": "ntfy.example",
                 "min_interval_s": 30, "last_error": None}
 
 
@@ -106,10 +106,12 @@ def test_retry_only_redoes_the_channel_that_failed():
     assert d.event("ev1")["dispatch"] == "sent" and d.event("ev1")["state"] == "sent"
 
 
-def test_rate_limited_push_counts_as_delivered():
-    d = delivery(FakeNotifier(["suppressed"]))
+def test_burst_deferred_push_stays_queued_and_goes_out_later():
+    n = FakeNotifier([NotifyError("burst limit: more than 5 alert pushes in 60 s; deferred"), "sent"])
+    d = delivery(n)
     st = d.deliver(report(), now=100.0)
-    assert st["state"] == "sent" and st["phone"] == "suppressed"
+    assert st["state"] == "retrying" and "burst limit" in st["error"] and d.summary()["pending"] == 1
+    assert d.flush(103.0) == 1 and d.event("ev1")["phone"] == "sent"
 
 
 def test_forecast_update_goes_to_dispatch_only():
