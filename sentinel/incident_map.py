@@ -200,7 +200,7 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
                    llm_factory: Callable[[], object] | None = None,
                    demo_scenarios: str | Path | None = "config/demo_scenarios.json",
                    start_online: bool = False, clock: Callable[[], float] = time.time,
-                   services: "Services | None" = None) -> FastAPI:
+                   services: "Services | None" = None, page_extras: str = "") -> FastAPI:
     """services: the console's shared detector/VLM caches, GPU lock, uplink, outbox and cloud-only shadow
     (sentinel.services). Given, tower and report ALERTs are delivered for real through its outbox and
     the uplink is the console's; without it this app runs on its own exactly as before."""
@@ -1104,7 +1104,9 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
 
     @app.get("/", response_class=HTMLResponse)
     def index():
-        return PAGE.read_text()
+        page = PAGE.read_text()
+        # the console adds its extra tabs (edge vs cloud, camera, models, system) to this page
+        return page.replace("</body>", page_extras + "</body>", 1) if page_extras else page
 
     @app.get("/api/config")
     def config():

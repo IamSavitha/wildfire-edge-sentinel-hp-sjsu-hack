@@ -20,7 +20,6 @@ from typing import Callable
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +34,8 @@ from sentinel.webapp_logic import load_benchmarks
 log = logging.getLogger(__name__)
 
 STATIC = Path(__file__).parent / "static" / "console"
+OFFICER_EXTRAS = ('<link rel="stylesheet" href="/console/officer_ext.css">'
+                  '<script src="/console/officer_ext.js"></script>')
 HOME = Path.home()
 FLUSH_EVERY_S = 2.0
 MOBILE_ID = "mobile-1"
@@ -311,14 +312,10 @@ def create_console_app(*, services: Services, map_app: FastAPI, web_app: FastAPI
             if sub.is_dir():
                 app.mount(mount, StaticFiles(directory=sub), name=mount.strip("/"))
     if STATIC.is_dir():
-        app.mount("/console", StaticFiles(directory=STATIC), name="console")
-
-    @app.get("/", include_in_schema=False)
-    def index():
-        page = STATIC / "index.html"
-        if not page.exists():
-            raise HTTPException(404, "console UI not built")
-        return FileResponse(page, headers={"Cache-Control": "no-cache"})
+        app.mount("/console", StaticFiles(directory=STATIC, html=True), name="console")
+    # the officer console (Kruthika's incident map page, with the console's extra tabs) is the home page;
+    # mounted last, so every console route above wins, and its own /api/* names do not collide with them
+    app.mount("/", map_app)
 
     return app
 
@@ -336,6 +333,7 @@ def build_console(*, services: Services, cameras: dict[str, dict], mobile: dict 
         services.on_incident_opened = cloud_sampler.maybe_sample
     cameras = {**cameras, mobile["id"]: mobile}
     map_kwargs = dict(map_kwargs or {})
+    map_kwargs.setdefault("page_extras", OFFICER_EXTRAS)
     web_kwargs = dict(web_kwargs or {})
     map_app = create_map_app(cameras=cameras, services=services, **map_kwargs)
 
