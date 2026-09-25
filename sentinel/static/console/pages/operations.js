@@ -43,8 +43,7 @@ export function mount(el, ctx, openId) {
       map.addControl(new gl.NavigationControl({showCompass: false}), "bottom-right");
       map.on("load", () => {
         for (const id of ["fov", "wedges", "cone"]) map.addSource(id, {type: "geojson", data: fc([])});
-        map.addLayer({id: "fov", type: "fill", source: "fov", paint: {"fill-color": "#3b82f6", "fill-opacity": .05}});
-        map.addLayer({id: "fov-l", type: "line", source: "fov", paint: {"line-color": "#3b82f6", "line-opacity": .25, "line-width": 1}});
+        map.addLayer({id: "fov", type: "fill", source: "fov", paint: {"fill-color": "#3b82f6", "fill-opacity": .035}});
         map.addLayer({id: "cone", type: "fill", source: "cone", paint: {"fill-color": "#ff5a3c", "fill-opacity": .18}});
         map.addLayer({id: "cone-l", type: "line", source: "cone", paint: {"line-color": "#ff5a3c", "line-width": 1.2, "line-dasharray": [2, 2]}});
         map.addLayer({id: "wedges", type: "fill", source: "wedges", paint: {"fill-color": "#f5a524", "fill-opacity": .16}});

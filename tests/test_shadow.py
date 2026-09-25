@@ -75,7 +75,7 @@ def test_offline_frames_are_cloud_blind_but_the_edge_still_decides():
     frame(sh)
     s = sh.summary(PRICES)
     assert s["cloud_blind_frames"] == 2 and s["edge_offline_decisions"] == 2
-    assert s["cloud"]["frames"] == 1 and s["edge"]["frames"] == 3
+    assert s["cloud"]["frames"] == 3 and s["edge"]["frames"] == 3      # cloud-only still uploads every frame
 
 
 def test_zero_prices_are_not_shown_as_zero_dollars():

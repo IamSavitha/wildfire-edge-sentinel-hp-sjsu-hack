@@ -40,7 +40,7 @@ export function mount(el, ctx) {
     const blind = s.cloud_blind_frames;
     const cloudTime = s.link_down ? "No decision" : ms(c.decide_ms_p50);
     $("#kpis", el).innerHTML = [
-      kpi(sv.bytes_x ? times(sv.bytes_x) : e.frames ? bytes(Math.max(0, sv.bytes)) : "–", sv.bytes_x ? "less data sent upstream" : "kept on the device",
+      kpi(sv.bytes_x ? times(sv.bytes_x) : c.bytes_up ? bytes(sv.bytes) : "–", sv.bytes_x ? "less data sent upstream" : "not uploaded (edge sent nothing)",
         {cls: "edge", tip: m.cloud_bytes + " " + m.edge_bytes, sub: `Edge ${bytes(e.bytes_up)} · cloud-only ${bytes(c.bytes_up)}`}),
       s.prices_set ? kpi(usd(sv.usd), "API + data cost avoided", {cls: "good", tip: m.cloud_usd + " " + m.edge_usd, sub: `Cloud-only ${usd(c.usd)} for these frames`})
         : kpi("Set prices", "to see cost avoided", {tip: "Enter the provider's published token and data prices under Assumptions below.", sub: `Tokens avoided: ${pct(sv.tokens_pct)}`}),

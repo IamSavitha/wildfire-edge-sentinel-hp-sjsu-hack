@@ -6,8 +6,9 @@ and sent to a hosted Qwen2.5-VL-7B, the same model the edge runs. The edge side 
 really uplinked, tokens it really spent, how long it really took); the cloud side is MODELED from the
 real frame size (image tokens: `cloud_frame_tokens`; transfer: `netprofile`), with the edge's own
 measured VLM time as the cloud model's compute time (same model; datacenter GPUs would be faster,
-the network slower). Prices are user inputs. While the uplink is down a cloud-only system cannot
-decide at all: those frames are counted as cloud-blind, and the edge's decisions as offline ones.
+the network slower). Prices are user inputs. Every frame costs cloud-only the same upload and call
+(it has to send them all); frames seen while the uplink is down are also counted as cloud-blind (no
+decision possible in time), and the edge's decisions on them as offline ones.
 No I/O here."""
 import math
 import threading
@@ -41,7 +42,8 @@ METHOD = {
     "edge_tokens": "Tokens the edge VLM really spent, only on frames that passed the detector and the gate.",
     "edge_usd": "No per-call API cost on the edge; it pays uplink for ALERT reports only.",
     "edge_time": "Measured on the Nano: detector + VLM, for frames where the VLM classified a plume.",
-    "blind": "Frames seen while the uplink was down: a cloud-only system could not decide on them.",
+    "blind": "Frames seen while the uplink was down: a cloud-only system could not decide on them in time (it still "
+             "has to upload them all, so they count on its cost side too).",
 }
 
 
@@ -100,7 +102,6 @@ class CloudShadow:
             if not online:
                 self.cloud_blind_frames += 1
                 self.edge_offline_decisions += 1
-                return
             c["frames"] += 1
             c["bytes_up"] += c_bytes
             c["vlm_calls"] += 1

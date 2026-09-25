@@ -53,7 +53,7 @@ function paintHeader(o) {
   const n = o.incidents.active, a = o.incidents.alert;
   $("#chip-incidents").innerHTML = `<span class="dot ${a ? "ALERT live" : n ? "MONITOR" : "ok"}"></span><span>${n ? `${n} active` : "All clear"}</span>`;
   const s = o.savings;
-  $("#chip-savings").innerHTML = s.frames
+  $("#chip-savings").innerHTML = s.frames && s.bytes > 0
     ? `<span>vs cloud-only: ${s.bytes_x ? times(s.bytes_x) + " less data" : bytes(s.bytes) + " kept local"}${s.prices_set && s.usd ? ` · ${usd(s.usd)} saved` : ""}</span>`
     : `<span>Edge vs cloud</span>`;
 }
