@@ -118,6 +118,8 @@ class Delivery:
         with self.lock:
             if eid not in self.events:
                 self.events[eid] = {"event_id": eid, "tower_name": report.get("tower_name"),
+                                    "tower_id": report.get("tower_id"), "detected_at": report.get("detected_at"),
+                                    "bytes": len(json.dumps(report).encode()),
                                     "severity": report.get("severity"), "phone": "pending",
                                     "dispatch": "pending", "delivered": False, "attempts": 0,
                                     "error": None, "sent_at": None}
