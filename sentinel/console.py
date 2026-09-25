@@ -76,7 +76,7 @@ def _pick(d: dict | None, keys) -> dict | None:
 
 def mobile_camera(lat: float, lon: float, name: str = "Mobile unit 1") -> dict:
     """The mobile camera (laptop webcam / phone) as a camera the map knows: incidents open at its site."""
-    return {"id": MOBILE_ID, "name": name, "site": f"{name} (patrol)", "lat": lat, "lon": lon, "elev_m": None,
+    return {"id": MOBILE_ID, "name": name, "site": name, "lat": lat, "lon": lon, "elev_m": None,
             "azimuth_deg": 0, "hfov_deg": 60, "wx_station": None, "recordings": [], "mobile": True}
 
 
