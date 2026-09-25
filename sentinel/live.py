@@ -3,6 +3,7 @@ call per event, trend re-check, per-tower latch), and real delivery of ALERTs (p
 optional dispatch POST) behind the durable `Outbox`, retried by `Escalator.flush`.
 
 No I/O of its own: detector, VLM, notifier, dispatch and forecast are injected (fakes in tests)."""
+import json
 import logging
 import threading
 import time
@@ -60,6 +61,7 @@ class Delivery:
         self.events: OrderedDict[str, dict] = OrderedDict()
         self.lock = threading.Lock()          # guards `events`
         self.flush_lock = threading.Lock()    # one flush at a time (request threads + the retry thread)
+        self.on_sent: Callable[[dict, int], None] | None = None   # (payload, bytes) after each real send
 
     @property
     def configured(self) -> bool:
@@ -136,6 +138,7 @@ class Delivery:
                 st = self.events.get(payload.get("event_id"))
             if self.dispatch_fn is not None and not (st and st["phone"] == "expired"):
                 self.dispatch_fn(payload)
+                self._sent(payload)
             return
         st = self._track(payload)                    # also covers alerts queued by an earlier run
         st["attempts"] += 1
@@ -170,6 +173,16 @@ class Delivery:
             log.warning("alert %s not delivered (attempt %d): %s", st["event_id"], st["attempts"], st["error"])
             raise
         st.update(delivered=True, error=None, sent_at=self.clock())
+        if st["phone"] == "sent" or st["dispatch"] == "sent":
+            self._sent(payload)
+
+    def _sent(self, payload: dict) -> None:
+        if self.on_sent is None:
+            return
+        try:
+            self.on_sent(payload, len(json.dumps(payload).encode()))
+        except Exception:  # noqa: BLE001 - accounting must never fail a delivery
+            log.exception("on_sent hook failed")
 
 
 def _det_dict(d, min_conf: float) -> dict:

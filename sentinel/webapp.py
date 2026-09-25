@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 from urllib.parse import parse_qs
 
 import cv2
@@ -72,6 +72,9 @@ PIPELINES = {
 }
 DEMO_TOWER = Tower("demo", "Demo Lookout", 37.1606, -121.8983, "", temp_c=25.0)
 GROUPS = (("dfire", "dfire_test"), ("demo", "tower_fire_sequence"), ("benign", "benign_tower"))
+
+if TYPE_CHECKING:
+    from sentinel.services import Services
 
 log = logging.getLogger(__name__)
 
@@ -222,10 +225,17 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                    notifier=None, dispatch_fn: Callable[[dict], None] | None = None,
                    outbox_path: str = ":memory:", live_recheck_s: float = 10.0,
                    live_lat: float | None = None, live_lon: float | None = None,
-                   flush_every_s: float = FLUSH_EVERY_S, deliver_image_alerts: bool = False) -> FastAPI:
+                   flush_every_s: float = FLUSH_EVERY_S, deliver_image_alerts: bool = False,
+                   services: "Services | None" = None,
+                   on_live_event: Callable[[dict, np.ndarray], None] | None = None) -> FastAPI:
     """notifier: phone pushes (NtfyNotifier or None); dispatch_fn: POST an ALERT to dispatch (or None).
     ALERTs from the live camera are delivered for real through a durable outbox at `outbox_path`;
-    ALERTs from /api/analyze (sample photos, uploads) only with deliver_image_alerts=True."""
+    ALERTs from /api/analyze (sample photos, uploads) only with deliver_image_alerts=True.
+
+    services (sentinel.services, the console): its GPU lock, detector and VLM caches, uplink and outbox
+    replace this app's own (notifier/dispatch_fn/outbox_path are then ignored), and every frame is also
+    counted in its cloud-only shadow. on_live_event(event, frame) runs for each new MONITOR/ALERT of the
+    live camera, after the pipeline, so the console can open an incident for it."""
     detectors = detectors or DETECTORS
     pipelines = pipelines or PIPELINES
     tower = tower or DEMO_TOWER
@@ -241,21 +251,27 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
 
     prices = _load_prices(prices_path)
     session = Session()
-    link = Link(online=True)
+    link = services.link if services is not None else Link(online=True)
     samples = {s["id"]: s for s in scan_samples(sample_dirs)}
     thumbs: dict[str, bytes] = {}
-    gpu_lock = threading.Lock()        # one model call at a time on the shared GPU
+    gpu_lock = services.gpu_lock if services is not None else threading.Lock()   # one model call at a time
     cache_lock = threading.Lock()
     det_cache: dict[str, Callable] = {}
     vlm_cache: dict[str, object] = {}
     models_cache: dict = {"ts": None, "names": [], "error": None}
-    delivery = Delivery(Outbox(outbox_path), link, forecast_fn, notifier=notifier, dispatch_fn=dispatch_fn,
-                        clock=clock)
+    if services is not None:
+        delivery = services.delivery
+        notifier, dispatch_fn = delivery.notifier, delivery.dispatch_fn
+    else:
+        delivery = Delivery(Outbox(outbox_path), link, forecast_fn, notifier=notifier, dispatch_fn=dispatch_fn,
+                            clock=clock)
     live_tower = Tower(LIVE_TOWER_ID, "Live camera", tower.lat if live_lat is None else live_lat,
                        tower.lon if live_lon is None else live_lon, "", temp_c=tower.temp_c)
     live_settings = Settings(min_conf=min_conf, min_frames=3, recheck_s=live_recheck_s)
 
     def served_models() -> tuple[list[str], str | None]:
+        if services is not None:
+            return services.served_models()
         with cache_lock:
             ts = models_cache["ts"]
             if ts is not None and clock() - ts < MODELS_TTL_S:
@@ -282,11 +298,16 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
 
     def get_detector(key: str):
         # called under gpu_lock: loading weights touches the GPU too
+        spec = detectors[key]
+        if services is not None and not spec.get("classes"):     # open-vocabulary YOLO-World stays our own
+            return services.detector(spec["weights"], spec.get("imgsz"))
         if key not in det_cache:
             det_cache[key] = detector_factory(detectors[key])
         return det_cache[key]
 
     def get_vlm(model: str):
+        if services is not None:
+            return services.vlm(model)
         with cache_lock:
             if model not in vlm_cache:
                 vlm_cache[model] = vlm_factory(model)
@@ -295,8 +316,13 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
     live_pipe = pipelines["after"]
     live_spec = detectors[live_pipe["detector"]]
 
+    def deployed_vlm() -> str:
+        """The AFTER / live model: the console's model switch when set, else the AFTER pipeline's."""
+        return (services.active_vlm if services is not None and services.active_vlm else live_pipe["vlm"])
+
     def live_vlm():
-        return get_vlm(live_pipe["vlm"]) if live_pipe["vlm"] in served_models()[0] else None
+        model = deployed_vlm()
+        return get_vlm(model) if model in served_models()[0] else None
 
     live_cam = LiveCamera(live_tower, lambda: get_detector(live_pipe["detector"]), live_vlm, delivery,
                       live_settings, gpu_lock)
@@ -306,6 +332,8 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                 "prices": effective_prices(prices), "online": link.online, "delivery": delivery.summary()}
 
     def flush_outbox() -> int:
+        if services is not None:
+            return services.flush()
         try:
             return delivery.flush(clock())
         except Exception:  # noqa: BLE001 - a broken flush must not break the request that triggered it
@@ -341,7 +369,8 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
             app.state.warmup_thread = t
             t.start()
         stop = threading.Event()
-        threading.Thread(target=retry_loop, args=(stop,), name="outbox-retry", daemon=True).start()
+        if services is None:          # the console runs one retry loop for the shared outbox
+            threading.Thread(target=retry_loop, args=(stop,), name="outbox-retry", daemon=True).start()
         yield
         stop.set()
         if monitor is not None:
@@ -403,6 +432,8 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
 
     def run_pipeline(name: str, image: np.ndarray, force_vlm: bool, served: list[str]) -> dict:
         p = pipelines[name]
+        if name == "after" and services is not None:
+            p = {**p, "vlm": deployed_vlm()}
         spec = detectors[p["detector"]]
         base = {"pipeline": name, "label": p["label"], "detector": p["detector"],
                 "detector_label": spec["label"], "vlm": p["vlm"], "vlm_label": p["vlm_label"],
@@ -445,6 +476,12 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                 r["escalation"] = esc
                 r["correct"] = session.record(name, r, esc, truth=truth, image_bytes=image_bytes,
                                               online=online)
+                if services is not None and name == "after":     # a compare run is one frame, not two
+                    services.shadow.record(
+                        "field", int(image.shape[1]), int(image.shape[0]), image_bytes,
+                        edge_vlm_called=bool(r.get("vlm_called")), edge_tokens=int(r.get("tokens") or 0),
+                        edge_bytes_up=0, edge_decide_ms=float(r.get("detect_ms") or 0) + float(r.get("vlm_ms") or 0),
+                        online=online, vlm_ms=r.get("vlm_ms"), detect_ms=r.get("detect_ms"))
                 if esc["decision"] in ("sent", "queued"):
                     alerts[name] = (r, r.get("report"))
                 r.pop("report", None)       # the text and thumbnail are returned separately
@@ -522,6 +559,9 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
 
     @app.post("/api/network")
     def set_network(s: NetworkState):
+        if services is not None:
+            flushed = services.set_online(s.online)
+            return {"online": True, "flushed": flushed} if s.online else {"online": False}
         link.online = s.online
         if not link.online:
             return {"online": False}
@@ -533,7 +573,23 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
         if not detector_available(live_spec):
             raise HTTPException(503, f"live detector weights not found: {live_spec['weights']}")
         image = decode_image(body)
-        return {**live_cam.process(image, clock(), stream), "online": link.online}
+        online = link.online
+        out = live_cam.process(image, clock(), stream)
+        if services is not None:
+            t, v = out["timings"], out["vlm"]
+            services.shadow.record(
+                "mobile", out["frame"]["width"], out["frame"]["height"], len(body),
+                edge_vlm_called=v["status"] in ("ok", "failed"), edge_tokens=int(v["tokens"] or 0), edge_bytes_up=0,
+                edge_decide_ms=float(t["detect_ms"] or 0) + float(t["vlm_ms"] or 0), online=online,
+                vlm_ms=t["vlm_ms"], detect_ms=t["detect_ms"])
+        if on_live_event is not None:
+            for ev in out["new_events"]:
+                if ev.get("severity") in ("MONITOR", "ALERT"):
+                    try:
+                        on_live_event(ev, image)
+                    except Exception:  # noqa: BLE001 - the camera keeps running if the map can't take it
+                        log.exception("live event hook failed")
+        return {**out, "online": link.online}
 
     @app.post("/api/live/frame")
     async def live_frame(request: Request, stream: str | None = None):

@@ -364,8 +364,6 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
                                      "note": "Expired in the outbox: too old to send." if expired else
                                      "Sent when the link returned."}
                 bump(alerts_queued=-1, **({} if expired else {"alerts_sent": 1, "bytes_up": esc.get("payload_bytes", 0)}))
-                if services.shadow is not None and not expired:
-                    services.shadow.add_uplink("tower" if inc.get("camera_id") else "field", esc.get("payload_bytes", 0))
                 store.save(inc)
                 n += 1
         return n
@@ -592,8 +590,6 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
                           (r["best"] or {}).get("conf"), info, r["vlm_status"], name)
         with inc_lock:
             inc, created = commit(obs, now)
-            if services is not None and (obs.get("escalation") or {}).get("decision") == "sent":
-                services.shadow.add_uplink("field", int((obs.get("escalation") or {}).get("bytes_up") or 0))
             boxes = [SimpleNamespace(box=d["box"], conf=d["conf"], cls=d.get("cls", "smoke")) for d in r["detections"]]
             analysis = {k: r.get(k) for k in ("vlm_status", "vlm_ms", "tokens", "tokens_in", "tokens_out", "sent_size",
                                               "crop_image_tokens", "context", "vlm_input")}
@@ -919,15 +915,12 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
     def watch_step(s: WatchSession) -> None:
         """One tower frame; with the console's services, also what cloud-only would have done with it."""
         acc: dict = {}
-        with stats_lock:
-            up0 = stats["bytes_up"]
         _watch_step(s, acc)
         if services is None or "w" not in acc:
             return
-        with stats_lock:
-            sent = stats["bytes_up"] - up0
+        # edge uplink bytes are counted by the shared outbox when an ALERT really goes out (Services)
         services.shadow.record("tower", acc["w"], acc["h"], acc["nbytes"], edge_vlm_called=bool(acc.get("vlm")),
-                               edge_tokens=acc.get("tokens", 0), edge_bytes_up=max(0, sent),
+                               edge_tokens=acc.get("tokens", 0), edge_bytes_up=0,
                                edge_decide_ms=acc["detect_ms"] + float(acc.get("vlm_ms") or 0),
                                online=is_online(), vlm_ms=acc.get("vlm_ms"), detect_ms=acc["detect_ms"])
 

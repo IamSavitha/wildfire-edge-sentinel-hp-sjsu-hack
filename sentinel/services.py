@@ -14,7 +14,7 @@ from typing import Callable
 
 from sentinel.detector import imgsz_for
 from sentinel.escalation import Link
-from sentinel.live import Delivery
+from sentinel.live import LIVE_TOWER_ID, Delivery
 from sentinel.outbox import Outbox
 from sentinel.shadow import CloudShadow
 
@@ -58,6 +58,14 @@ class Services:
         self._listeners: list[Callable[[bool], None]] = []
         self._link_lock = threading.Lock()
         self.active_vlm: str | None = None       # the console's model switch; None = each app's default
+        if self.delivery.on_sent is None:        # every byte the edge uplinks leaves through this outbox
+            self.delivery.on_sent = self._count_uplink
+
+    def _count_uplink(self, payload: dict, nbytes: int) -> None:
+        tower = payload.get("tower_id")
+        source = "mobile" if tower == LIVE_TOWER_ID or str(tower).startswith("mobile") else \
+            "field" if tower == "field" else "tower"
+        self.shadow.add_uplink(source, nbytes)
 
     # ------------------------------------------------------------ models
 
