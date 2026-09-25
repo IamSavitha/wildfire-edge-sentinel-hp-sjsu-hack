@@ -74,11 +74,15 @@ class CloudShadow:
             self.vlm_ms = deque(maxlen=SAMPLES)
             self.detect_ms = deque(maxlen=SAMPLES)
             self.cloud_frame_bytes = deque(maxlen=SAMPLES)
+            self.fires = 0
+            self.last_fire: dict | None = None     # the latest frame that reached the VLM (the pipeline animation)
 
     def record(self, source: str, width: int, height: int, frame_bytes: int, *, edge_vlm_called: bool,
                edge_tokens: int, edge_bytes_up: int, edge_decide_ms: float | None, online: bool,
-               vlm_ms: float | None = None, detect_ms: float | None = None) -> None:
-        """One frame the edge processed. `edge_decide_ms` is how long the edge took for this frame."""
+               vlm_ms: float | None = None, detect_ms: float | None = None, severity: str | None = None,
+               clock: float | None = None) -> None:
+        """One frame the edge processed. `edge_decide_ms` is how long the edge took for this frame; `severity`
+        is the edge's decision when the VLM ran on it."""
         if source not in SOURCES:
             raise ValueError(f"unknown source {source!r}; known: {SOURCES}")
         scale = min(1.0, FULL_FRAME_MAX_SIDE / max(width, height, 1))
@@ -102,6 +106,11 @@ class CloudShadow:
             if not online:
                 self.cloud_blind_frames += 1
                 self.edge_offline_decisions += 1
+            if edge_vlm_called:
+                self.fires += 1
+                self.last_fire = {"id": self.fires, "t": clock, "source": source, "online": bool(online),
+                                  "detect_ms": detect_ms, "vlm_ms": vlm_ms, "edge_decide_ms": edge_decide_ms,
+                                  "cloud_bytes": c_bytes, "severity": severity}
             c["frames"] += 1
             c["bytes_up"] += c_bytes
             c["vlm_calls"] += 1
@@ -133,6 +142,7 @@ class CloudShadow:
             by_source = {k: dict(v) for k, v in self.by_source.items()}
             edge_ms, vlm_ms = _p50(self.edge_decide_ms), _p50(self.vlm_ms)
             frame_bytes = _p50(self.cloud_frame_bytes)
+            fire = dict(self.last_fire) if self.last_fire else None
         prices_set = p["usd_per_mtok_in"] > 0 or p["usd_per_mtok_out"] > 0 or p["usd_per_gb"] > 0
         edge_usd = e["bytes_up"] / 1e9 * p["usd_per_gb"]
         cloud_usd = (c["tokens_in"] / 1e6 * p["usd_per_mtok_in"] + c["tokens_out"] / 1e6 * p["usd_per_mtok_out"]
@@ -158,6 +168,8 @@ class CloudShadow:
             },
             "by_source": by_source,
             "method": METHOD,
+            "last_fire": fire and {**fire, "cloud_upload_ms": None if link.is_down else
+                                   transfer_s(fire["cloud_bytes"], link, CLOUD_REQUEST_RTTS) * 1000},
         }
 
     def fleet(self, towers: int, fps: float, days: int, prices: dict | None = None) -> dict:

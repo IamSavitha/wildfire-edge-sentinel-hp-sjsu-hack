@@ -580,7 +580,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
             services.shadow.record("field", int(r["width"]), int(r["height"]), len(data),
                                    edge_vlm_called=bool(r["vlm_calls"]), edge_tokens=int(r["tokens"] or 0),
                                    edge_bytes_up=0, edge_decide_ms=float(r["detect_ms"] or 0) + float(r["vlm_ms"] or 0),
-                                   online=is_online(), vlm_ms=r["vlm_ms"], detect_ms=r["detect_ms"])
+                                   online=is_online(), vlm_ms=r["vlm_ms"], detect_ms=r["detect_ms"],
+                                   severity=r["severity"], clock=clock())
         if r["severity"] == "IGNORE":
             bump(ignored=1)
             return {"image": info, "result": result, "incident": None,
@@ -813,6 +814,7 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
             s.vlm_tokens += tokens
             ctx_obj = ContextResult(**ctx) if ctx else None
             sev = assess(ctx_obj, None) if ctx_obj else fallback_severity(None)
+            acc["severity"] = sev.name
             meta["analysis"] = {**rec, "severity": sev.name, "why": f"smoke held for {gate_frames} frames in a row: "
                                                                       "the VLM was called once to classify it"}
             tower = Tower(cam["id"], cam["name"], cam["lat"], cam["lon"], "")
@@ -884,6 +886,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         ctx_obj = ContextResult(**ctx) if ctx else (ContextResult(**inc["context"]) if inc.get("context") else None)
         trend = summ["trend"] if summ["trend"] != "not_seen" else None
         sev = (assess(ctx_obj, trend) if ctx_obj else fallback_severity(trend)).name
+        if ctx:
+            acc["severity"] = sev
         upgraded = SEVERITY_RANK[sev] > SEVERITY_RANK.get(inc["severity"], 0)
         update = {**summ, "t": t, "offset_s": fr.offset_s, "kind": "batch", "severity": sev, "camera_id": cam["id"],
                   "source_type": (ctx or {}).get("source_type"), "vlm_called": bool(ctx), "tokens": tokens}
@@ -926,7 +930,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         services.shadow.record("tower", acc["w"], acc["h"], acc["nbytes"], edge_vlm_called=bool(acc.get("vlm")),
                                edge_tokens=acc.get("tokens", 0), edge_bytes_up=0,
                                edge_decide_ms=acc["detect_ms"] + float(acc.get("vlm_ms") or 0),
-                               online=is_online(), vlm_ms=acc.get("vlm_ms"), detect_ms=acc["detect_ms"])
+                               online=is_online(), vlm_ms=acc.get("vlm_ms"), detect_ms=acc["detect_ms"],
+                               severity=acc.get("severity"), clock=clock())
 
     def watch_run(s: WatchSession) -> None:
         starts = set(time_steps(s.frames))

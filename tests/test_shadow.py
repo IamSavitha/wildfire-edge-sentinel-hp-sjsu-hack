@@ -135,3 +135,17 @@ def test_reset_clears_everything():
     sh.reset()
     s = sh.summary()
     assert s["edge"]["frames"] == 0 and s["cloud_blind_frames"] == 0 and s["by_source"] == {}
+
+
+def test_last_fire_frame_is_kept_for_the_pipeline_animation():
+    sh = CloudShadow()
+    frame(sh)                                                   # no VLM: not a fire frame
+    assert sh.summary()["last_fire"] is None
+    sh.record("mobile", 1920, 1080, 400_000, edge_vlm_called=True, edge_tokens=300, edge_bytes_up=0,
+              edge_decide_ms=5_440.0, online=False, vlm_ms=5_400.0, detect_ms=40.0, severity="ALERT", clock=99.0)
+    f = sh.summary(PRICES, "satellite_geo")["last_fire"]
+    assert f["id"] == 1 and f["source"] == "mobile" and f["online"] is False and f["severity"] == "ALERT"
+    assert f["vlm_ms"] == 5_400.0 and f["detect_ms"] == 40.0 and f["t"] == 99.0
+    assert f["cloud_upload_ms"] == pytest.approx(transfer_s(f["cloud_bytes"], get_profile("satellite_geo"),
+                                                            CLOUD_REQUEST_RTTS) * 1000)
+    assert sh.summary(PRICES, "outage")["last_fire"]["cloud_upload_ms"] is None
