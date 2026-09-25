@@ -310,7 +310,7 @@
     if (!alive() || !ef) return;
     const edgeMs = (ef.detect_ms || 0) + (ef.vlm_ms || 0);
     q("#x-race-msg").innerHTML = online
-      ? `<b class="g">Both decided.</b> Edge: ${fmt.ms(edgeMs)} with <b>0 B</b> uplinked. Cloud-only: ${cf ? fmt.ms((cf.vlm_ms || 0) + (uploadMs || 0)) : "–"} after uploading the whole frame${EC && EC.summary.last_fire ? ` (${fmt.b(EC.summary.last_fire.cloud_bytes)})` : ""}.`
+      ? `<b class="g">Both decided.</b> Edge: ${fmt.ms(edgeMs)}, and the frame never left the device${ef.severity === "ALERT" ? " (only the small ALERT report did)" : ""}. Cloud-only: ${cf ? fmt.ms((cf.vlm_ms || 0) + (uploadMs || 0)) : "–"} after uploading the whole frame${EC && EC.summary.last_fire ? ` (${fmt.b(EC.summary.last_fire.cloud_bytes)})` : ""}.`
       : `<b class="g">Edge decided in ${fmt.ms(edgeMs)} with no network</b>${ef.decision === "queued" ? " and queued the ALERT locally" : ""}. <b class="r">Cloud-only stopped at the network boundary: blind during the outage.</b>`;
   }
   function showRestore(stage) {
