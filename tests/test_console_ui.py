@@ -23,7 +23,8 @@ def test_the_ui_exists():
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 @pytest.mark.parametrize("path", JS, ids=lambda p: p.name)
 def test_js_parses(path):
-    r = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True)
+    # parsed as an ES module whatever the node version (node 18 treats a bare .js file as CommonJS)
+    r = subprocess.run(["node", "--input-type=module", "--check"], input=path.read_text(), capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
 
 
