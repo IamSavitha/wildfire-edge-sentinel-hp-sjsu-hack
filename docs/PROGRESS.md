@@ -171,9 +171,9 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 Design: [console design](plans/2026-09-24-sentinel-console-design.md) · Plan: [console plan](plans/2026-09-24-sentinel-console.md). This replaces the four separate screens (8090 / 8095 / 8100 / app) with one professional console on port 8080. A fire from any camera becomes one incident, one alert and one push, with edge vs cloud-only built in.
 
 - [x] Design + plan approved (one server, demo controls folded into real features, Edge vs Cloud page, minimalist UI)
-- [ ] T1 Shared services (one detector load, one VLM client, one uplink, one outbox)
-- [ ] T2 Cloud-only shadow ledger (bytes, tokens, $, time to decision per link profile, offline-blind frames)
-- [ ] T3 Incident map on shared services (real delivery for tower ALERTs)
+- [x] T1 Shared services (one detector load, one VLM client, one uplink, one outbox)
+- [x] T2 Cloud-only shadow ledger (bytes, tokens, $, time to decision per link profile, offline-blind frames)
+- [x] T3 Incident map on shared services (real delivery for tower ALERTs)
 - [ ] T4 Web app on shared services (mobile camera events)
 - [ ] T5 Console server on port 8080 (mobile camera → incident, console API)
 - [ ] T6 Measured cloud samples (optional, needs `~/.cloud_vlm.env`)
