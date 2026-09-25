@@ -569,6 +569,8 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
 
     # ---------------------------------------------------------------- live camera
 
+    live_reported: dict[str, str] = {}      # event id -> severity already passed to on_live_event
+
     def live_sync(body: bytes, stream: str | None) -> dict:
         if not detector_available(live_spec):
             raise HTTPException(503, f"live detector weights not found: {live_spec['weights']}")
@@ -583,12 +585,22 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                 edge_decide_ms=float(t["detect_ms"] or 0) + float(t["vlm_ms"] or 0), online=online,
                 vlm_ms=t["vlm_ms"], detect_ms=t["detect_ms"])
         if on_live_event is not None:
-            for ev in out["new_events"]:
-                if ev.get("severity") in ("MONITOR", "ALERT"):
-                    try:
-                        on_live_event(ev, image)
-                    except Exception:  # noqa: BLE001 - the camera keeps running if the map can't take it
-                        log.exception("live event hook failed")
+            # the open (provisional) event too: a MONITOR plume is on the map while its growth is re-checked
+            views = list(out["new_events"])
+            p = live_cam.pipeline
+            with p.lock:
+                active = p.active.get(live_cam.tower.id)
+                if active is not None and active.severity is not None:
+                    views.append(live_cam._event_view(active))
+            for ev in views:
+                sev = ev.get("severity")
+                if sev not in ("MONITOR", "ALERT") or live_reported.get(ev["id"]) == sev:
+                    continue
+                live_reported[ev["id"]] = sev
+                try:
+                    on_live_event(ev, image)
+                except Exception:  # noqa: BLE001 - the camera keeps running if the map can't take it
+                    log.exception("live event hook failed")
         return {**out, "online": link.online}
 
     @app.post("/api/live/frame")

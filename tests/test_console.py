@@ -193,3 +193,20 @@ def test_bad_bodies_are_422(tmp_path, path):
     app, _, _, _ = console(tmp_path)
     with TestClient(app) as c:
         assert c.post(path, json={"nope": 1}).status_code == 422
+
+
+def test_mobile_monitor_plume_is_on_the_map_while_it_is_rechecked(tmp_path):
+    from sentinel.schema import ContextResult
+    app, svc, n, clock = console(tmp_path)
+    FakeVLM.ctx = ContextResult(source_type="wildland", smoke_color="grey", attended="no", near_structures=False,
+                                near_road=False, size_estimate="small", description="Grey smoke on a slope.")
+    try:
+        with TestClient(app) as c:
+            r = live_frames(c, clock, 3)[-1]
+            assert r["event"]["severity"] == "MONITOR" and r["new_alert"] is None
+            incs = c.get("/ops/api/state").json()["incidents"]
+            assert len(incs) == 1 and incs[0]["camera_id"] == MOBILE_ID and incs[0]["severity"] == "MONITOR"
+            live_frames(c, clock, 3)                     # still MONITOR: no second incident, no push
+            assert len(c.get("/ops/api/state").json()["incidents"]) == 1 and n.alerts == []
+    finally:
+        FakeVLM.ctx = WILD
