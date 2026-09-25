@@ -266,7 +266,10 @@
       st("e", 3, "ok", `local · ${fmt.ms(f.vlm_ms)}`, "good");
       st("e", 4, "run"); await sleep(300); if (!alive()) return;
       st("e", 4, "ok", f.severity || "decided", "good");
-      if (f.decision === "queued") { st("e", 5, "queued", "queued locally", "amber"); pendingRestore = {t: Date.now()}; showRestore("queued"); }
+      if (f.decision === "queued") {
+        st("e", 5, "queued", "queued locally", "amber"); pendingRestore = {t: Date.now()}; showRestore("queued");
+        if (OV && OV.uplink.online) setTimeout(restore, 1200);         // the link is already back: play the delivery
+      }
       else if (f.severity === "ALERT") { st("e", 5, "run"); await sleep(300); if (!alive()) return; st("e", 5, "ok", "sent", "good"); }
       else st("e", 5, "ok", "none needed", "good");
       q("#x-lane-e").classList.add("done");
@@ -320,16 +323,18 @@
     box.innerHTML = [c("amber", "‖ Queued locally"), "→", c(stage === "restoring" ? "run" : stage === "sent" ? "ok" : "", stage === "queued" ? "Network restored" : "✓ Network restored"),
       "→", c(stage === "sent" ? "ok" : "", stage === "sent" ? "✓ Alert sent" : "Alert sent")].join(" ");
   }
+  async function restore() {                                        // the link is back: the queued ALERT goes out
+    if (!pendingRestore) return;
+    pendingRestore = null;
+    const token = raceToken;
+    showRestore("restoring"); await sleep(900); if (token !== raceToken) return;
+    showRestore("sent");
+    st("e", 5, "ok", "sent on restore", "good");
+    q("#x-race-msg").innerHTML = `<b class="g">Link restored: the queued ALERT went out.</b> <span class="note">Cloud-only never saw this fire: nothing was decided during the outage.</span>`;
+  }
   async function onPipelinePoll() {
     const online = OV && OV.uplink.online;
-    if (pendingRestore && online && lastOnline === false) {        // the link came back: the queued ALERT goes out
-      const token = raceToken;
-      showRestore("restoring"); await sleep(900); if (token !== raceToken) return;
-      showRestore("sent");
-      st("e", 5, "ok", "sent on restore", "good");
-      q("#x-race-msg").innerHTML = `<b class="g">Link restored: the queued ALERT went out.</b> <span class="note">Cloud-only never saw this fire: its frames from the outage were never decided.</span>`;
-      pendingRestore = null;
-    }
+    if (pendingRestore && online) restore();
     lastOnline = online;
     const lf = EC && EC.summary.last_fire;
     if (!lf || lf.id === seenFire) return;
