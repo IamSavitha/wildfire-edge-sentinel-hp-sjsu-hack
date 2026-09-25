@@ -39,7 +39,7 @@ def routes(app, prefix=""):
     out = []
     for r in app.routes:
         if isinstance(r, Mount):
-            if getattr(r.app, "routes", None) is not None and r.path in ("/ops", "/lab"):
+            if getattr(r.app, "routes", None) is not None and r.path in ("/ops", "/lab", ""):
                 out += routes(r.app, prefix + r.path)
         elif getattr(r, "path", None):
             out.append(prefix + r.path)
@@ -65,13 +65,17 @@ def test_every_api_path_the_ui_calls_exists(tmp_path):
     assert not missing, f"UI calls paths the server does not have: {missing}"
 
 
-def test_index_is_served_with_its_assets(tmp_path):
+def test_home_is_the_officer_console_with_the_extra_tabs(tmp_path):
     app, _, _, _ = console(tmp_path)
     with TestClient(app) as c:
         r = c.get("/")
-        assert r.status_code == 200 and "Sentinel Console" in r.text
-        for asset in ("/console/app.js", "/console/console.css", "/console/pages/operations.js"):
+        assert r.status_code == 200 and "Forest officer console" in r.text
+        assert r.text.count("/console/officer_ext.js") == 1 and "/console/officer_ext.css" in r.text
+        for asset in ("/console/officer_ext.js", "/console/officer_ext.css", "/console/app.js"):
             assert c.get(asset).status_code == 200, asset
+        assert "Sentinel Console" in c.get("/console/").text             # the compact console stays available
+        assert c.get("/api/config").json()["cameras"]                     # the officer page's own API, at the root
+        assert c.get("/api/overview").json()["node"] == "Test node"       # console routes win over the root mount
 
 
 def test_no_demo_wording_in_the_ui():

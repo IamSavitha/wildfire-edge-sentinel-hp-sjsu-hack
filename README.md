@@ -170,7 +170,7 @@ cropping). To run the live demo with the BEFORE detector, set `"detector_weights
 
 ## Sentinel Console (one system, port 8080)
 
-Everything in one place: incidents on a map, tower and mobile cameras, alert delivery, **Edge vs Cloud**, models and system health. It is one server with one detector load, one uplink and one alert outbox, and it needs **no internet**: the models, map and UI run on the Nano, and ALERTs queue until the link returns.
+The home page is the **forest-officer console** (incident map, Live watch, Ask Sentinel, Report sighting, Simulate outage) with tabs for **Edge vs Cloud**, **Mobile camera**, **Models** and **System** ([v2.1.0](docs/versions/v2.1.0-officer-console.md)); a compact console is at `/console/`. Everything in one place: incidents on a map, tower and mobile cameras, alert delivery, **Edge vs Cloud**, models and system health. It is one server with one detector load, one uplink and one alert outbox, and it needs **no internet**: the models, map and UI run on the Nano, and ALERTs queue until the link returns.
 
 ```bash
 cd ~/sentinel && ./scripts/start_console.sh        # --lan also serves the local network

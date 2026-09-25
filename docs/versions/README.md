@@ -11,7 +11,8 @@ Each version of Wildfire Edge Sentinel is a **git tag** plus a **frozen set of m
 | Demo build | `v1.3.1-demo` | as v1.3.0 | same LoRA | start_demo.sh, runbook, measured results | (patch; see v1.3.0) |
 | Incident map | `v1.4.0-incident-map` | as v1.3.0 (+ D-Fire model for photos) | same LoRA | Kruthika's offline incident map + Ask Sentinel; 11/11 demo scenarios; Junction triangulated, Beaver ALERT | [v1.4.0-incident-map.md](v1.4.0-incident-map.md) |
 | Live camera | `v1.5.0-live-camera` | as v1.3.0 | same LoRA | Webcam / iPhone stream through the full pipeline; ALERT pushed to a team phone (ntfy); verified gate → VLM → ALERT on the Nano | [v1.5.0-live-camera.md](v1.5.0-live-camera.md) |
-| **Sentinel Console (current release)** | `v2.0.0-console` | as v1.3.0 | LoRA v1 (v2 selectable) | One server on 8080 with shared services: every camera → one incident, one outbox, one push; Edge vs Cloud page; works with no internet | [v2.0.0-console.md](v2.0.0-console.md) |
+| Sentinel Console | `v2.0.0-console` | as v1.3.0 | LoRA v1 (v2 selectable) | One server on 8080 with shared services: every camera → one incident, one outbox, one push; Edge vs Cloud page; works with no internet | [v2.0.0-console.md](v2.0.0-console.md) |
+| **Officer console (current release)** | `v2.1.0-officer-console` | as v1.3.0 | LoRA v1 (v2 selectable) | Kruthika's officer console is the home page, with Edge vs Cloud, Mobile camera, Models and System tabs; Junction Fire: 11 vs 266 VLM calls, 0 B vs 23 MB | [v2.1.0-officer-console.md](v2.1.0-officer-console.md) |
 
 ## How versions are kept safe
 
