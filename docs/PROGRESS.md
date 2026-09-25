@@ -177,12 +177,12 @@ Design: [console design](plans/2026-09-24-sentinel-console-design.md) · Plan: [
 - [x] T4 Web app on shared services (mobile camera events)
 - [x] T5 Console server on port 8080 (mobile camera → incident, console API)
 - [x] T6 Measured cloud samples (optional, needs `~/.cloud_vlm.env`)
-- [ ] T7 UI shell (sidebar, header, drawers, Ask Sentinel panel)
-- [ ] T8 Operations page (map + incidents + field report)
-- [ ] T9 Cameras page (towers, mobile camera, Run drill)
-- [ ] T10 Alerts + System pages (Test outage)
-- [ ] T11 Edge vs Cloud page
-- [ ] T12 Models page (deployed models, LoRA v2 selectable, compare on an image)
+- [x] T7 UI shell (sidebar, header, drawers, Ask Sentinel panel)
+- [x] T8 Operations page (map + incidents + field report)
+- [x] T9 Cameras page (towers, mobile camera, Run drill)
+- [x] T10 Alerts + System pages (Test outage)
+- [x] T11 Edge vs Cloud page
+- [x] T12 Models page (deployed models, LoRA v2 selectable, compare on an image)
 - [ ] T13 `start_console.sh`, README, `docs/versions/v2.0.0-console.md`
 - [ ] T14 Verified on the Nano, tag `v2.0.0-console`, merged to `main`
 
