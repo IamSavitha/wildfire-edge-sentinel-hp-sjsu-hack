@@ -74,6 +74,7 @@
       OV = {...o, ec: ec.summary};
       EC = ec;
       if (STATE) drawStats();
+      onPipelinePoll();
     } catch (e) { /* the page's own banner reports a lost service */ }
   }
   setInterval(() => { if (!document.hidden) pollOverview(); }, 3000);
@@ -90,6 +91,7 @@
         <div class="x-sec"><div class="note"><b>Same frames, two designs.</b> Every frame this device analysed is compared with a cloud-only
           system that uploads each frame to a hosted VLM (same Qwen2.5-VL-7B). Edge numbers are measured; cloud-only is modelled from the real frames.</div>
           <div class="actions" id="x-prof">${PROFILES.map(([v, l]) => `<button class="chip" data-p="${v}">${l}</button>`).join("")}</div></div>
+        <div class="x-sec x-race" id="x-race"></div>
         <div class="x-sec"><div class="x-kpis" id="x-ekpi"></div></div>
         <div class="x-sec"><h4>Edge vs cloud-only<span class="sp"></span><span id="x-tag"></span></h4><div class="x-vs" id="x-bars"></div></div>
         <div class="x-sec" id="x-outage"></div>
@@ -114,6 +116,9 @@
       };
       q("#x-reset").onclick = async () => { await post("/api/edge-cloud/reset", {}); drawEdge(); pollOverview(); };
       loadFleet();
+      buildRace();
+      const lf = EC.summary.last_fire;
+      if (lf) { seenFire = lf.id; race(Promise.resolve(fireFrom(lf)), lf.online, lf.cloud_upload_ms, RACE_REPLAY); }
     }
     qa("#x-prof .chip").forEach(b => b.classList.toggle("on", b.dataset.p === PROFILE));
     const s = EC.summary, e = s.edge, c = s.cloud, sv = s.savings, m = s.method;
@@ -185,6 +190,177 @@
       ${FLEET.rows.map((r, i) => `<tr><td>${names[i]}</td><td>${fmt.k(r.vlm_calls_total)}</td><td>${fmt.b(r.upstream_gb_total * 1e9)}</td>
         <td${i === 2 ? ' class="win"' : ""}>${EC.summary.prices_set ? fmt.usd(r.usd_per_day_total) : "–"}</td><td>${r.feasible ? "yes" : "no"}</td></tr>`).join("")}</table>
       <div class="note">Measured on this device: ${FLEET.measured.length ? esc(FLEET.measured.join(", ").replace(/_/g, " ")) : "nothing yet (stated defaults)"}.</div>`;
+  }
+
+  // ---------------------------------------------------------------- live pipeline race
+  // One fire frame through both designs, phase by phase, with the real timings of that frame: the edge ran
+  // detector + VLM here; cloud-only would upload the whole frame over the selected link and run the same model.
+  const STEPS = ["Captured", "Detector", "Upload", "VLM", "Decision", "Alert"];
+  const RACE_LIVE = 1, RACE_REPLAY = 0.45;      // live: real time; replays: sped up, same proportions
+  let seenFire, raceToken = 0, pendingRestore = null, lastOnline = null;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const fireFrom = f => ({detect_ms: f.detect_ms, vlm_ms: f.vlm_ms, severity: f.severity,
+                          decision: f.severity === "ALERT" ? (f.online ? "sent" : "queued") : "logged"});
+
+  function buildRace() {
+    const box = q("#x-race");
+    const cell = (lane, i) => `<div class="st${i ? "" : " first"}" id="x-${lane}${i}" style="grid-row:${lane === "e" ? 2 : 3};grid-column:${i + 2}">
+      <span class="o">·</span><small></small></div>`;
+    box.innerHTML = `<h4>Live pipeline: one fire frame, two designs <span class="sp"></span>
+        <button class="btn ember" id="x-fire">Send a fire frame</button><button class="btn" id="x-replay">Replay</button></h4>
+      <div class="x-rg" id="x-rg">
+        <div style="grid-row:1;grid-column:1"></div>${STEPS.map((n, i) => `<div class="hd" style="grid-row:1;grid-column:${i + 2}">${n}</div>`).join("")}
+        <div class="lane-bg" id="x-lane-e" style="grid-row:2;grid-column:1/-1"></div>
+        <div class="lane-bg" id="x-lane-c" style="grid-row:3;grid-column:1/-1"></div>
+        <div class="ln" style="grid-row:2;grid-column:1"><b>Edge</b><small id="x-t-e">on this device</small></div>
+        <div class="ln" style="grid-row:3;grid-column:1"><b>Cloud-only</b><small id="x-t-c">hosted VLM</small></div>
+        ${STEPS.map((_, i) => cell("e", i)).join("")}${STEPS.map((_, i) => cell("c", i)).join("")}
+        <div class="nb" id="x-nb" style="left:calc(74px + (100% - 74px) / 3)"><span>network</span></div>
+      </div>
+      <div class="x-restore" id="x-restore" hidden></div>
+      <div class="x-race-msg" id="x-race-msg"><span class="note">Waiting for a fire frame. Press <b>Send a fire frame</b>, start <b>Live watch</b>, or use the <b>Mobile camera</b>. Try it again after <b>Simulate outage</b>.</span></div>`;
+    q("#x-fire").onclick = sendFire;
+    q("#x-replay").onclick = () => { const lf = EC && EC.summary.last_fire; if (lf) race(Promise.resolve(fireFrom(lf)), lf.online, lf.cloud_upload_ms, RACE_REPLAY); };
+  }
+  function st(lane, i, state, text, tone = "") {
+    const el = q(`#x-${lane}${i}`); if (!el) return;
+    const o = q(".o", el);
+    o.className = "o " + state;
+    o.textContent = {ok: "✓", run: "", blocked: "✕", queued: "‖", skip: "–", na: "–", dash: "–", idle: "·"}[state] ?? "·";
+    q("small", el).textContent = text || "";
+    el.className = el.className.replace(/ (good|bad|amber|lit)/g, "") + (tone ? " " + tone : "") + (state === "ok" || state === "skip" || state === "queued" ? " lit" : "");
+  }
+  function resetRace() {
+    for (const lane of ["e", "c"]) STEPS.forEach((_, i) => st(lane, i, "idle", ""));
+    qa("#x-lane-e, #x-lane-c").forEach(l => l.classList.remove("done", "stopped"));
+    const b = q("#x-blind"); if (b) b.remove();
+    q("#x-restore").hidden = true;
+    q("#x-t-e").textContent = "on this device"; q("#x-t-c").textContent = "hosted VLM";
+  }
+  // fireP resolves to {detect_ms, vlm_ms, severity, decision}; online and uploadMs are known at the start
+  async function race(fireP, online, uploadMs, scale) {
+    if (!q("#x-rg")) return;
+    const token = ++raceToken, alive = () => token === raceToken;
+    resetRace();
+    pendingRestore = null;
+    q("#x-nb").classList.toggle("down", !online);
+    q("#x-nb span").textContent = online ? "network" : "no network";
+    q("#x-race-msg").innerHTML = `<span class="note">A fire frame enters both pipelines${online ? "" : " — <b>the network is down</b>"}…</span>`;
+    let fire = null;
+    fireP.then(f => { fire = f; }, () => {});
+    const d = ms => Math.max(350, (ms || 0) * scale);
+    const t0 = performance.now();
+
+    const edge = (async () => {
+      st("e", 0, "run"); await sleep(300); if (!alive()) return; st("e", 0, "ok", "frame");
+      st("e", 1, "run"); await sleep(d(fire ? fire.detect_ms : 60)); if (!alive()) return;
+      st("e", 1, "ok", fire && fire.detect_ms ? fmt.ms(fire.detect_ms) : "smoke found", "good");
+      st("e", 2, "skip", "0 B · stays here");
+      st("e", 3, "run", "on device");
+      const vStart = performance.now();
+      const f = await fireP.catch(() => null); if (!alive()) return;
+      if (!f) { st("e", 3, "blocked", "failed", "bad"); return; }
+      const left = d(f.vlm_ms) - (performance.now() - vStart);
+      if (scale < 1 && left > 0) await sleep(left);
+      if (!alive()) return;
+      st("e", 3, "ok", `local · ${fmt.ms(f.vlm_ms)}`, "good");
+      st("e", 4, "run"); await sleep(300); if (!alive()) return;
+      st("e", 4, "ok", f.severity || "decided", "good");
+      if (f.decision === "queued") {
+        st("e", 5, "queued", "queued locally", "amber"); pendingRestore = {t: Date.now()}; showRestore("queued");
+        if (OV && OV.uplink.online) setTimeout(restore, 1200);         // the link is already back: play the delivery
+      }
+      else if (f.severity === "ALERT") { st("e", 5, "run"); await sleep(300); if (!alive()) return; st("e", 5, "ok", "sent", "good"); }
+      else st("e", 5, "ok", "none needed", "good");
+      q("#x-lane-e").classList.add("done");
+      q("#x-t-e").textContent = `decided in ${fmt.ms((f.detect_ms || 0) + (f.vlm_ms || 0))}`;
+      return f;
+    })();
+
+    const cloud = (async () => {
+      st("c", 0, "run"); await sleep(300); if (!alive()) return; st("c", 0, "ok", "frame");
+      st("c", 1, "na", "no model on site");
+      st("c", 2, "run", online ? "uploading" : "");
+      if (!online) {
+        await sleep(700); if (!alive()) return;
+        st("c", 2, "blocked", "no network", "bad");
+        for (const i of [3, 4, 5]) st("c", i, "dash", "—");
+        q("#x-lane-c").classList.add("stopped");
+        q("#x-rg").insertAdjacentHTML("beforeend", `<div class="x-blind" id="x-blind" style="grid-row:3;grid-column:5/8">BLIND DURING OUTAGE</div>`);
+        q("#x-t-c").textContent = "no decision";
+        return null;
+      }
+      const up = uploadMs == null ? 1500 : uploadMs;
+      await sleep(d(up)); if (!alive()) return;
+      const bytes = EC && EC.summary.last_fire ? EC.summary.last_fire.cloud_bytes : null;
+      st("c", 2, "ok", `${bytes ? fmt.b(bytes) + " · " : ""}${fmt.ms(up)}`);
+      st("c", 3, "run", "in the cloud");
+      const vStart = performance.now();
+      const f = await fireP.catch(() => null); if (!alive() || !f) return;
+      const left = d(f.vlm_ms) - (performance.now() - vStart);    // same model: same compute time, after the upload
+      if (left > 0) await sleep(left);
+      if (!alive()) return;
+      st("c", 3, "ok", `cloud · ${fmt.ms(f.vlm_ms)}`);
+      st("c", 4, "run"); await sleep(300); if (!alive()) return;
+      st("c", 4, "ok", f.severity || "decided");
+      if (f.severity === "ALERT") { st("c", 5, "run"); await sleep(300); if (!alive()) return; st("c", 5, "ok", "sent after reply"); }
+      else st("c", 5, "ok", "none needed");
+      q("#x-t-c").textContent = `decided in ${fmt.ms((f.vlm_ms || 0) + up)}`;
+      return f;
+    })();
+
+    const [ef, cf] = await Promise.all([edge, cloud]);
+    if (!alive() || !ef) return;
+    const edgeMs = (ef.detect_ms || 0) + (ef.vlm_ms || 0);
+    q("#x-race-msg").innerHTML = online
+      ? `<b class="g">Both decided.</b> Edge: ${fmt.ms(edgeMs)}, and the frame never left the device${ef.severity === "ALERT" ? " (only the small ALERT report did)" : ""}. Cloud-only: ${cf ? fmt.ms((cf.vlm_ms || 0) + (uploadMs || 0)) : "–"} after uploading the whole frame${EC && EC.summary.last_fire ? ` (${fmt.b(EC.summary.last_fire.cloud_bytes)})` : ""}.`
+      : `<b class="g">Edge decided in ${fmt.ms(edgeMs)} with no network</b>${ef.decision === "queued" ? " and queued the ALERT locally" : ""}. <b class="r">Cloud-only stopped at the network boundary: blind during the outage.</b>`;
+  }
+  function showRestore(stage) {
+    const box = q("#x-restore"); if (!box) return;
+    box.hidden = false;
+    const c = (cls, t) => `<span class="c ${cls}">${t}</span>`;
+    box.innerHTML = [c("amber", "‖ Queued locally"), "→", c(stage === "restoring" ? "run" : stage === "sent" ? "ok" : "", stage === "queued" ? "Network restored" : "✓ Network restored"),
+      "→", c(stage === "sent" ? "ok" : "", stage === "sent" ? "✓ Alert sent" : "Alert sent")].join(" ");
+  }
+  async function restore() {                                        // the link is back: the queued ALERT goes out
+    if (!pendingRestore) return;
+    pendingRestore = null;
+    const token = raceToken;
+    showRestore("restoring"); await sleep(900); if (token !== raceToken) return;
+    showRestore("sent");
+    st("e", 5, "ok", "sent on restore", "good");
+    q("#x-race-msg").innerHTML = `<b class="g">Link restored: the queued ALERT went out.</b> <span class="note">Cloud-only never saw this fire: nothing was decided during the outage.</span>`;
+  }
+  async function onPipelinePoll() {
+    const online = OV && OV.uplink.online;
+    if (pendingRestore && online) restore();
+    lastOnline = online;
+    const lf = EC && EC.summary.last_fire;
+    if (!lf || lf.id === seenFire) return;
+    if (skipNext) { skipNext = false; seenFire = lf.id; return; }
+    const first = seenFire === undefined;
+    seenFire = lf.id;
+    if (!first && active === "edge" && q("#x-rg") && !sending) race(Promise.resolve(fireFrom(lf)), lf.online, lf.cloud_upload_ms, RACE_REPLAY);
+  }
+  let sending = false, skipNext = false;
+  async function sendFire() {
+    if (sending) return;
+    let photos = [];
+    try { photos = (await api("/api/samples")).samples.filter(s => s.kind === "photo"); } catch (e) { /* none */ }
+    if (!photos.length) { toast("No sample fire photos on this device"); return; }
+    const pick = photos[Math.floor(Math.random() * photos.length)];
+    const online = !!(OV && OV.uplink.online);
+    const lf = EC && EC.summary.last_fire;
+    const fd = new FormData();
+    fd.append("sample_id", pick.id); fd.append("lat", "32.84"); fd.append("lon", "-116.53"); fd.append("name", "Pipeline check");
+    sending = true;
+    const fireP = api("/api/report", {method: "POST", body: fd}).then(r => ({
+      detect_ms: r.result.detect_ms, vlm_ms: r.result.vlm_ms, severity: r.result.severity,
+      decision: r.incident ? ((r.incident.escalation || {}).decision || "logged") : "logged"}));
+    fireP.then(f => { if (f.vlm_ms != null) skipNext = true; }, e => toast(e.message))     // already animated live
+      .finally(() => { sending = false; pollOverview(); refresh(); });
+    race(fireP, online, lf ? lf.cloud_upload_ms : null, RACE_LIVE);
   }
 
   // ---------------------------------------------------------------- Mobile camera

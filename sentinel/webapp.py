@@ -583,7 +583,8 @@ def create_web_app(*, detector_factory: Callable[[dict], Callable] | None = None
                 "mobile", out["frame"]["width"], out["frame"]["height"], len(body),
                 edge_vlm_called=v["status"] in ("ok", "failed"), edge_tokens=int(v["tokens"] or 0), edge_bytes_up=0,
                 edge_decide_ms=float(t["detect_ms"] or 0) + float(t["vlm_ms"] or 0), online=online,
-                vlm_ms=t["vlm_ms"], detect_ms=t["detect_ms"])
+                vlm_ms=t["vlm_ms"], detect_ms=t["detect_ms"], clock=clock(),
+                severity=(out["new_alert"] or out["event"] or next(iter(out["new_events"]), None) or {}).get("severity"))
         if on_live_event is not None:
             # the open (provisional) event too: a MONITOR plume is on the map while its growth is re-checked
             views = list(out["new_events"])
