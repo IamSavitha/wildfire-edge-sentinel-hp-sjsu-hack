@@ -122,7 +122,7 @@ Add `services: Services | None = None` to `create_web_app`. When it is given:
 One live event maps to one incident: key it by the event id, and later events for the same fire update that incident (`find_match` already merges by place and time).
 
 **Console API** (all JSON; small payloads; details behind `?full=1`):
-- `GET /api/overview` returns the header data: node name, uplink state, active incidents, the last alert (time, incident, state) and a savings chip (`shadow.summary`).
+- `GET /api/overview` returns the header data: node name, uplink state with the queued count, active incidents, the last alert (id, time, incident, severity, delivery state) and a savings chip (`shadow.summary`). No call in this route may touch the network.
 - `GET|POST /api/uplink` `{online}` calls `services.set_online`.
 - `GET /api/alerts` returns the delivery log: merge `delivery.summary()["events"]` with incident names. `POST /api/alerts/test` calls `notifier.send_test()`, with its existing 30 s rate limit. The topic is always redacted (`notify.redact_topic_url`).
 - `GET /api/edge-cloud?profile=lte` returns `shadow.summary`, `profiles`, and `benchmarks` (`webapp_logic.load_benchmarks(results_dir)`), plus `measured` (Task 6). `POST /api/edge-cloud/prices` saves prices the same way `webapp` does. `GET /api/edge-cloud/fleet?towers=&fps=&days=` returns the fleet projection.
@@ -132,7 +132,7 @@ One live event maps to one incident: key it by the event id, and later events fo
   - the active VLM model, switchable with `POST /api/models/vlm {model}` to any served model; this changes both the map's and the web app's model by setting a shared `services.active_vlm`
 - `GET /api/system` returns health for detector, vlm, outbox, uplink, notifier and dispatch (each `ok`/`warn`/`down` plus one short line), `live_metrics.system_stats()` (GPU/memory), uptime, and served models.
 
-`main()`: `--port 8080`, `--host 127.0.0.1`, and the same model, asset and state flags that `start_demo.sh` passes to the two apps today.
+`main()`: `--port 8080`, `--host 127.0.0.1` (`0.0.0.0` to serve the local network with no internet), and the same model, asset and state flags that `start_demo.sh` passes to the two apps today.
 
 **Tests** (`tests/test_console.py`, with fakes):
 - `/`, `/ops/api/state`, `/lab/api/config` and `/api/overview` all answer.
@@ -167,7 +167,8 @@ One live event maps to one incident: key it by the event id, and later events fo
 - **Severity:** `--alert #ff5a3c`, `--monitor #f5a524`, `--log #6b7684`.
 - **Sides:** `--edge #3b82f6`, `--cloud #9aa4b2`, `--ok #22c55e`.
 - **Shape:** radius 10px, 8-pt spacing grid.
-- **Font:** Inter from Google Fonts, falling back to the system font. Numbers use `font-variant-numeric: tabular-nums`.
+- **Font:** the system font stack (`-apple-system, "Segoe UI", Roboto, Inter, sans-serif`); no web fonts. Numbers use `font-variant-numeric: tabular-nums`.
+- **Offline-first:** no file under `static/console/` may reference `http://` or `https://`. Everything is served by the Nano.
 
 **Components** (`ui.js`): `card`, `kpi` (big number, small label, optional delta), `pill`/`dot` (status), `drawer` (right slide-in for details), `info` ("i" tooltip), `segmented` control, `sparkline` (inline SVG), `table` (collapsed by default, "Show all"), `toast`, and `countUp`.
 
@@ -184,7 +185,9 @@ One live event maps to one incident: key it by the event id, and later events fo
 - **`app.js`:** a hash router (`#/operations` etc., Operations by default) that loads page modules (`pages/*.js`, each exporting `mount(el, api)` / `unmount()`).
 - **`api.js`:** a small fetch wrapper with polling helpers that pause when the tab is hidden, and one shared `/api/overview` poll every 2 s.
 - **Ask Sentinel:** the panel posts to `/ops/api/ask` and shows answers with a minimal chat look.
-- **Tests:** a Python test that runs `node --check` on every JS file (skipped if node is missing), and a contract test that extracts every `'/api/...'`, `'/ops/api/...'` and `'/lab/api/...'` literal from the JS and asserts the console app has a matching route.
+- **Local alarm:** when `/api/overview` reports a new ALERT (by id), show a red banner, play a short tone generated with WebAudio (no audio file), and fire a browser `Notification` if permitted. This happens whatever the uplink state.
+- **Uplink pill:** shows "Online", or "Offline · N queued".
+- **Tests:** a Python test that runs `node --check` on every JS file (skipped if node is missing), a test that no console static file contains `http://` or `https://`, and a contract test that extracts every `'/api/...'`, `'/ops/api/...'` and `'/lab/api/...'` literal from the JS and asserts the console app has a matching route.
 
 ### Task 8: Operations page
 - **Map:** full-height MapLibre map with the PMTiles base, reusing the setup code in `static/incident_map.html` (`/assets/lib/*`, `/tiles/sierra-pacific.pmtiles`). It shows cameras as small markers and incidents as severity-colored pulsing dots, with the spread cone and bearings drawn only for the selected incident.
@@ -209,7 +212,7 @@ One live event maps to one incident: key it by the event id, and later events fo
 ### Task 11: Edge vs Cloud page
 - **Top:** a segmented link-profile control (Fiber · LTE · Rural cell · Satellite · Down).
 - **4 KPIs:** cost saved (or "set prices"), data not uplinked (MB and ×), time to decision edge vs cloud, and frames decided while offline. Each has an "i" that shows its method line from `shadow.summary().method`.
-- **Chart:** one hero chart, horizontal bars for Edge vs Cloud-only across bytes, tokens, $ and time, with log scale where needed. Chart.js from cdnjs is acceptable, or inline SVG.
+- **Chart:** one hero chart, horizontal bars for Edge vs Cloud-only across bytes, tokens, $ and time, with log scale where needed, drawn as inline SVG (no chart library).
 - **Below, collapsed:**
   - "Outage timeline", the latest incident's detect → queued → delivered markers vs cloud-only blind
   - "Benchmark", from results

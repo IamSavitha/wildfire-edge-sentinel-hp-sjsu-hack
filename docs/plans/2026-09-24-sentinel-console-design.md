@@ -41,6 +41,22 @@ One product: the **Sentinel Console**. It is one process on one port (8080), wit
 - **One delivery path.** When the map escalates an ALERT, it goes through the shared `Delivery` (durable outbox, then ntfy push and optional dispatch POST) instead of the simulated `escalate`. The same happens for tower, mobile-camera and field-report ALERTs. One fire gives one incident, one outbox entry and one phone push (the per-fire latch and the incident match stop duplicates).
 - **Mobile camera → incident.** When a `LiveCamera` event reaches MONITOR or ALERT, the map records an observation for a registered camera `mobile-1`. Its location comes from settings, or from browser geolocation when allowed. The event then shows up on the map, in the incident list and in the alert log.
 
+## Offline-first
+
+The system has to work with **no network and no internet at all**. Only the upstream alert waits for the link.
+
+| Needs | Without internet |
+|---|---|
+| Detection, VLM context, severity, incidents, Ask Sentinel | Run on the Nano; unaffected |
+| Console UI | Served by the Nano. No CDN, web fonts or remote scripts: system font stack, inline SVG icons and charts, MapLibre/PMTiles from local `/assets`. A test fails if any console file references an external URL |
+| Map | Local PMTiles basemap |
+| Wind / forecast | On-site sensor, or the last cached forecast, labelled "cached"; never blocks a decision |
+| Alert to dispatch / phone (ntfy.sh) | Held in the durable outbox and sent when the link returns (the existing Delivery backoff) |
+| Alert to the on-site operator | **Immediate and local:** the console raises a banner, a sound and a browser notification on every new ALERT, whatever the uplink state |
+| Access | `--host 0.0.0.0` makes the console reachable on the local network (tower LAN / Wi-Fi) with no tunnel. The mobile camera needs a secure context, so it runs on `localhost` (on the Nano, or through an SSH tunnel over the LAN) |
+
+The header's uplink pill shows **Online** or **Offline, N alerts queued**. No page shows an error state just because the internet is gone.
+
 ## Edge vs Cloud
 
 `sentinel/shadow.py`, `CloudShadow`: for every frame the edge node really processes, it records what a cloud-only design would have done with the same frame.
@@ -75,11 +91,11 @@ A single page with the sidebar **Operations · Cameras · Alerts · Edge vs Clou
 
 **Visual rules (minimalist, professional):**
 - **Tokens and colors:** a dark neutral base with a light theme too. Colors are design tokens on `:root`, with ember for fire and severity, blue for edge, and grey for cloud. There's one accent per meaning.
-- **Typography:** Inter, with a clear hierarchy that puts big numbers before labels and labels before text.
+- **Typography:** the system font stack (no web fonts, so it works offline), with a clear hierarchy that puts big numbers before labels and labels before text.
 - **Text:** a page shows at most one line of helper text. Everything else goes behind an "i" tooltip or a Details drawer. There are no emoji.
 - **Content:** status is shown with dots and pills rather than sentences. Tables are collapsed by default. The same card component is used everywhere.
 - **Motion:** subtle count-up on numbers and a pulse on new ALERTs.
-- **Libraries:** vanilla JS modules, no build step. MapLibre and PMTiles come from the existing `/assets/lib`.
+- **Libraries:** vanilla JS modules, no build step, nothing loaded from the internet. MapLibre and PMTiles come from the existing `/assets/lib`, and charts are inline SVG.
 
 ## Demo features folded into real ones
 
