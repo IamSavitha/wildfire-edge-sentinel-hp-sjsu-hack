@@ -48,6 +48,8 @@
     if (name === "camera") drawCamera();
   };
   setInterval(() => { if (!document.hidden && DRAW[active] && active !== "models") DRAW[active](); }, 3000);
+  const linked = (location.hash.match(/^#tab=([a-z]+)$/) || [])[1];      // e.g. /#tab=edge opens that tab
+  if (linked && q(`.tab[data-tab="${linked}"]`)) setTimeout(() => showTab(linked), 0);
 
   // ---------------------------------------------------------------- stats strip: edge vs cloud-only
   let OV = null;
