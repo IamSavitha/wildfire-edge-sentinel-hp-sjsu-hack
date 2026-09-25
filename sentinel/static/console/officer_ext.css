@@ -14,8 +14,8 @@ main.wide { grid-template-columns: 540px 1fr; }
 .x-kpi.good .v { color: var(--ok); } .x-kpi.edge .v { color: var(--forest); } .x-kpi.hot .v { color: var(--queued); }
 .x-vs { display: grid; gap: 10px; }
 .x-row .l { font-size: 12px; color: var(--muted); margin-bottom: 3px; display: flex; gap: 6px; }
-.x-bar { display: grid; grid-template-columns: 58px 1fr 84px; align-items: center; gap: 8px; font-size: 12px; }
-.x-bar .who { color: var(--muted); }
+.x-bar { display: grid; grid-template-columns: 76px 1fr 84px; align-items: center; gap: 8px; font-size: 12px; }
+.x-bar .who { color: var(--muted); white-space: nowrap; }
 .x-bar .tr { height: 10px; border-radius: 5px; background: var(--soft); overflow: hidden; }
 .x-bar .fl { height: 100%; border-radius: 5px; min-width: 3px; transition: width .5s ease; }
 .x-bar.edge .fl { background: var(--forest-2); } .x-bar.cloud .fl { background: #a79f8b; }

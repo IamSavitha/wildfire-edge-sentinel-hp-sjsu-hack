@@ -175,8 +175,7 @@ class Delivery:
             log.warning("alert %s not delivered (attempt %d): %s", st["event_id"], st["attempts"], st["error"])
             raise
         st.update(delivered=True, error=None, sent_at=self.clock())
-        if st["phone"] == "sent" or st["dispatch"] == "sent":
-            self._sent(payload)
+        self._sent(payload)       # the report's size is what the edge uplinks per ALERT (also when channels are off)
 
     def _sent(self, payload: dict) -> None:
         if self.on_sent is None:
