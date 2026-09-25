@@ -58,6 +58,8 @@ class Services:
         self._listeners: list[Callable[[bool], None]] = []
         self._link_lock = threading.Lock()
         self.active_vlm: str | None = None       # the console's model switch; None = each app's default
+        # (incident_id, frame, context) when an incident opens; the console samples the cloud with it
+        self.on_incident_opened: Callable[[str, object, dict | None], None] | None = None
         if self.delivery.on_sent is None:        # every byte the edge uplinks leaves through this outbox
             self.delivery.on_sent = self._count_uplink
 
@@ -66,6 +68,14 @@ class Services:
         source = "mobile" if tower == LIVE_TOWER_ID or str(tower).startswith("mobile") else \
             "field" if tower == "field" else "tower"
         self.shadow.add_uplink(source, nbytes)
+
+    def incident_opened(self, incident_id: str, frame, context: dict | None) -> None:
+        if self.on_incident_opened is None:
+            return
+        try:
+            self.on_incident_opened(incident_id, frame, context)
+        except Exception:  # noqa: BLE001 - an optional side job never breaks detection
+            log.exception("incident-opened hook failed")
 
     # ------------------------------------------------------------ models
 

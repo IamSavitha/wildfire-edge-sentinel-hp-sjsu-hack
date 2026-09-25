@@ -590,6 +590,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
                           (r["best"] or {}).get("conf"), info, r["vlm_status"], name)
         with inc_lock:
             inc, created = commit(obs, now)
+            if created and services is not None:
+                services.incident_opened(inc["id"], image, r["context"])
             boxes = [SimpleNamespace(box=d["box"], conf=d["conf"], cls=d.get("cls", "smoke")) for d in r["detections"]]
             analysis = {k: r.get(k) for k in ("vlm_status", "vlm_ms", "tokens", "tokens_in", "tokens_out", "sent_size",
                                               "crop_image_tokens", "context", "vlm_input")}
@@ -821,6 +823,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
             obs["watch_session"] = s.id
             obs["sighting"] = sighting(cam, best, w, t)
             inc, created = commit(obs, t)
+            if created and services is not None:
+                services.incident_opened(inc["id"], img, ctx)
             joined = not created and inc.get("camera_id") != cam["id"]
             inc.setdefault("updates", []).append({
                 "t": t, "offset_s": fr.offset_s, "kind": "opened" if created else "joined", "severity": sev.name,
