@@ -166,7 +166,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] Owner: install ntfy on the teammate's phone, create a private topic, write `export NTFY_TOPIC_URL=…` to `~/.sentinel_alerts.env` on the Nano, restart the demo app — configured; test push sent, and a real ALERT pushed from the live pipeline (report + snapshot)
 - [ ] Rehearse: Send test alert → phone buzzes; live segment with a wildfire video on a tablet; Offline → queued → Online → buzz
 
-## Sentinel Console (v2.0.0): one system, one port 🧭 — ▶ IN PROGRESS (branch `feat/console`)
+## Sentinel Console (v2.0.0): one system, one port 🧭 — ✅ DONE (tag `v2.0.0-console`, merged to `main`)
 
 Design: [console design](plans/2026-09-24-sentinel-console-design.md) · Plan: [console plan](plans/2026-09-24-sentinel-console.md). This replaces the four separate screens (8090 / 8095 / 8100 / app) with one professional console on port 8080. A fire from any camera becomes one incident, one alert and one push, with edge vs cloud-only built in.
 
@@ -183,8 +183,10 @@ Design: [console design](plans/2026-09-24-sentinel-console-design.md) · Plan: [
 - [x] T10 Alerts + System pages (Test outage)
 - [x] T11 Edge vs Cloud page
 - [x] T12 Models page (deployed models, LoRA v2 selectable, compare on an image)
-- [ ] T13 `start_console.sh`, README, `docs/versions/v2.0.0-console.md`
-- [ ] T14 Verified on the Nano, tag `v2.0.0-console`, merged to `main`
+- [x] T13 `start_console.sh`, README, `docs/versions/v2.0.0-console.md`
+- [x] T14 Verified on the Nano, tag `v2.0.0-console`, merged to `main`
+- Nano check (real models): field ALERT in 5.6 s; outage → queued → restored → sent once; mobile MONITOR on the map while offline; drill of 91 tower frames: 8 vs 90 VLM calls, 2.2K vs 151K tokens, 0 B vs 6.7 MB, 5.5 s vs 5.7 s on LTE. 600 tests on laptop and Nano.
+- [ ] Owner: restart with phone alerts on (`tmux kill-session -t console` in `~/sentinel-console`, then `RESULTS=~/sentinel/results ./scripts/start_console.sh`) and rehearse
 
 ## Still needs the owner 🙋
 
