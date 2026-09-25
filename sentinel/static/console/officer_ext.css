@@ -1,7 +1,7 @@
 /* Extra tabs for the officer console (edge vs cloud, camera, models, system), in the console's own palette.
    Served by the edge node: no web fonts and no remote files. */
-.tabs { flex-wrap: wrap; }
-.tabs .tab { flex: 1 0 25%; padding: 9px 2px; }
+.tabs { display: grid; grid-template-columns: repeat(4, 1fr); }
+.tabs .tab { padding: 9px 4px; font-size: 12px; white-space: normal; line-height: 1.25; }
 main.wide { grid-template-columns: 540px 1fr; }
 .x-sec { padding: 12px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
 .x-sec h4 { margin: 0; font-size: 12px; letter-spacing: .6px; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 8px; }

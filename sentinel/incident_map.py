@@ -1308,9 +1308,9 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
     @app.post("/api/demo/load")
     def load_demo():
         if demo["state"] == "running":
-            raise HTTPException(409, "demo scenarios are already loading")
+            raise HTTPException(409, "the guided scenarios are already loading")
         if not scenarios:
-            raise HTTPException(404, "no demo scenarios configured")
+            raise HTTPException(404, "no guided scenarios configured")
         reset()
         set_online(False)
         demo.update(state="running", results={}, error=None)
