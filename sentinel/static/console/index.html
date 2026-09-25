@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel Console</title>
+<meta name="description" content="Wildfire detection on the edge: incidents, cameras, alerts and edge vs cloud, served by the edge node.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23ff4a32'/%3E%3Cpath d='M12 4c1 2.5 4.5 4 4.5 8.5a4.5 4.5 0 0 1-9 0c0-1.8.9-3 1.8-3.9 0 1.8.9 2.6 1.8 2.6-.9-2.6 0-5.2.9-7.2z' fill='white'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/console/console.css">
+<link rel="stylesheet" href="/assets/lib/maplibre-gl.css">
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="brand"><div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2c1 3 5 5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3-1-3 0-6 1-8.5z"/></svg></div>
+      <span>Sentinel<small id="node-name">Edge node</small></span></div>
+    <nav class="nav" id="nav" aria-label="Sections"></nav>
+    <div class="foot" id="side-foot">Runs on this device</div>
+  </aside>
+  <header class="head">
+    <h1 id="page-title">Operations</h1>
+    <div class="spacer"></div>
+    <div class="chips">
+      <button class="chip" id="chip-uplink" type="button" title="Uplink (open System)"><span class="dot"></span><span>…</span></button>
+      <span class="chip hide-sm" id="chip-incidents"><span class="dot"></span><span>…</span></span>
+      <button class="chip edge hide-md" id="chip-savings" type="button" title="Edge vs cloud-only"><span>…</span></button>
+      <button class="btn sm ghost" id="ask-open" type="button" aria-label="Ask Sentinel"><svg class="i" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span class="hide-sm">Ask</span></button>
+    </div>
+  </header>
+  <main id="main">
+    <div id="alarm"></div>
+    <div id="outlet"></div>
+  </main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true" aria-labelledby="drawer-title">
+  <div class="dh"><h2 id="drawer-title"></h2><button class="icon-btn" id="drawer-close" type="button" aria-label="Close"><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+  <div class="db" id="drawer-body"></div>
+</aside>
+<aside class="ask" id="ask" aria-label="Ask Sentinel">
+  <div class="dh" style="display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)">
+    <h2 style="margin:0;font-size:15px;flex:1">Ask Sentinel</h2>
+    <span class="pill tag">On-device</span>
+    <button class="icon-btn" id="ask-close" type="button" aria-label="Close"><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+  </div>
+  <div class="msgs" id="ask-msgs">
+    <div class="suggest" id="ask-suggest">
+      <button type="button">Which fires need attention now?</button>
+      <button type="button">What is the wind doing at the active fires?</button>
+      <button type="button">Summarise the last hour</button>
+    </div>
+  </div>
+  <form id="ask-form"><input class="input" id="ask-q" autocomplete="off" placeholder="Ask about incidents, wind, cameras…" maxlength="500"><button class="btn primary" type="submit">Ask</button></form>
+</aside>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="/assets/lib/maplibre-gl.js"></script>
+<script src="/assets/lib/pmtiles.js"></script>
+<script src="/assets/lib/basemaps.js"></script>
+<script type="module" src="/console/app.js"></script>
+</body>
+</html>
