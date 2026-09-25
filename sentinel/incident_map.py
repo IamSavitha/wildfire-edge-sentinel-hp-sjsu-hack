@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 from urllib.parse import parse_qs
 
 import cv2
@@ -40,13 +40,16 @@ from sentinel.geo import (box_bearings, compass, county_at, destination, downwin
 from sentinel.imaging import crop_box, to_jpeg
 from sentinel.incidents import CROSS_AGREE_KM, CROSS_MAX_KM, CROSS_WINDOW_S, SEVERITY_RANK, IncidentStore, haversine_km
 from sentinel.report import build_report, render_text
-from sentinel.schema import ContextResult
+from sentinel.schema import ContextResult, Severity
 from sentinel.severity import assess, fallback_severity
 from sentinel.watch import (TIMELINE_CAP, WatchSession, list_frames, merge_streams, summarize_batch, time_steps,
                             update_text)
 from sentinel.webapp import _read_body, decode_image, list_served_models, parse_multipart
 from sentinel.webapp_logic import _thumbnail, cloud_frame_tokens, escalate, qwen_image_tokens, run_pass
 from sentinel.wind import SensorEmulator, WindService
+
+if TYPE_CHECKING:
+    from sentinel.services import Services
 
 PAGE = Path(__file__).parent / "static" / "incident_map.html"
 HOME = Path.home()
@@ -196,7 +199,11 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
                    gate_frames: int = 2, assistant_model: str = "base7b",
                    llm_factory: Callable[[], object] | None = None,
                    demo_scenarios: str | Path | None = "config/demo_scenarios.json",
-                   start_online: bool = False, clock: Callable[[], float] = time.time) -> FastAPI:
+                   start_online: bool = False, clock: Callable[[], float] = time.time,
+                   services: "Services | None" = None) -> FastAPI:
+    """services: the console's shared detector/VLM caches, GPU lock, uplink, outbox and cloud-only shadow
+    (sentinel.services). Given, tower and report ALERTs are delivered for real through its outbox and
+    the uplink is the console's; without it this app runs on its own exactly as before."""
     assets_dir = Path(assets_dir)
     state_dir = Path(state_dir) if state_dir else assets_dir / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -206,7 +213,17 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
                                      (detector_weights, detector_imgsz)) if w}
 
         def detector_factory(weights: str):
+            if services is not None:
+                return services.detector(weights, sizes.get(weights))
             return default_detector_factory(weights, sizes.get(weights))
+    if vlm_factory is None and services is not None:
+        vlm_factory = services.vlm
+    if model_lister is None and services is not None:
+        def model_lister():
+            names, err = services.served_models()
+            if err and not names:
+                raise RuntimeError(err)
+            return names
     if vlm_factory is None:
         def vlm_factory(model: str):
             from sentinel.vlm_client import ContextVLM
@@ -238,7 +255,7 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
     stats = {"frames": 0, "ignored": 0, "vlm_calls": 0, "vlm_tokens": 0, "image_bytes_seen": 0,
              "bytes_up": 0, "alerts_sent": 0, "alerts_queued": 0, "forecast_fetches": 0}
     stats_lock = threading.Lock()
-    gpu_lock = threading.Lock()
+    gpu_lock = services.gpu_lock if services is not None else threading.Lock()
     # Every read-modify-save of an incident (watch step, report, PATCH, link flush, reset) holds inc_lock, so a
     # watch step that is waiting on the VLM can't save a stale copy over a change made meanwhile. Order:
     # inc_lock may be held while taking gpu_lock (watch step), never the reverse.
@@ -271,11 +288,20 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
                 cache.setdefault("loaded", {})[weights] = mtime
             return cache[key], Path(weights).stem
 
+    def model_name() -> str:
+        """The VLM in use: the console's model switch when it is set, else vlm_model."""
+        return (services.active_vlm or vlm_model) if services is not None else vlm_model
+
     def vlm():
+        if services is not None:
+            return services.vlm(model_name())
         with cache_lock:
             if "vlm" not in cache:
                 cache["vlm"] = vlm_factory(vlm_model)
             return cache["vlm"]
+
+    def is_online() -> bool:
+        return services.link.online if services is not None else state["online"]
 
     def forecast_key(cam: dict | None, lat: float, lon: float) -> str:
         return cam["id"] if cam else f"{lat:.2f},{lon:.2f}"
@@ -288,14 +314,74 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
             return fc
         return fetch
 
+    def deliver(inc_like: dict) -> dict:
+        """The console path: the ALERT goes into the shared outbox (phone push + dispatch), sent now if
+        the uplink is up, else when it returns. Same result shape as `escalate`."""
+        now = clock()
+        report = dict(inc_like["report"])
+        report.setdefault("event_id", uuid.uuid4().hex[:12])
+        report.setdefault("detected_at", datetime.fromtimestamp(now, tz=timezone.utc).isoformat())
+        report["severity"] = "ALERT"
+        payload_bytes = len(json.dumps(report).encode())
+        services.delivery.handle(report, Severity.ALERT, now)
+        if services.link.online:
+            services.flush()
+        ev = services.delivery.event(report["event_id"]) or {}
+        sent = bool(ev.get("delivered"))
+        note = ("Sent: phone push and dispatch report." if sent else
+                "Link down: alert held in the outbox, sent when the link returns." if not services.link.online else
+                "Sending: the outbox retries until it is delivered.")
+        return {"decision": "sent" if sent else "queued", "event_id": report["event_id"],
+                "bytes_up": payload_bytes if sent else 0, "payload_bytes": payload_bytes,
+                "report_text": render_text(report), "note": note}
+
     def do_escalate(inc_like: dict, key: str) -> dict:
-        esc = escalate(inc_like, state["online"], forecast_fn=cached_forecast(key))
+        if services is not None:
+            esc = deliver(inc_like)
+        else:
+            esc = escalate(inc_like, state["online"], forecast_fn=cached_forecast(key))
         if esc["decision"] == "sent":
             bump(bytes_up=esc["bytes_up"], alerts_sent=1)
         elif esc["decision"] == "queued":
             bump(alerts_queued=1)
         esc["at"] = clock()
         return esc
+
+    def sync_escalations(_online: bool = True) -> int:
+        """Console path: after the shared outbox sent (or expired) queued ALERTs, show it on their incidents."""
+        n = 0
+        with inc_lock:
+            for inc in store.all():
+                esc = inc.get("escalation") or {}
+                if esc.get("decision") != "queued" or not esc.get("event_id"):
+                    continue
+                ev = services.delivery.event(esc["event_id"])
+                if not ev or not ev.get("delivered"):
+                    continue
+                expired = ev.get("phone") == "expired"
+                inc["escalation"] = {**esc, "decision": "expired" if expired else "sent", "queued_at": esc.get("at"),
+                                     "at": ev.get("sent_at") or clock(), "bytes_up": 0 if expired else esc.get("payload_bytes", 0),
+                                     "note": "Expired in the outbox: too old to send." if expired else
+                                     "Sent when the link returned."}
+                bump(alerts_queued=-1, **({} if expired else {"alerts_sent": 1, "bytes_up": esc.get("payload_bytes", 0)}))
+                if services.shadow is not None and not expired:
+                    services.shadow.add_uplink("tower" if inc.get("camera_id") else "field", esc.get("payload_bytes", 0))
+                store.save(inc)
+                n += 1
+        return n
+
+    if services is not None:
+        services.on_link_change(sync_escalations)
+
+    def set_online(online: bool) -> int:
+        if services is not None:
+            sent = services.set_online(online)
+            sync_escalations()
+            return sent
+        with inc_lock:
+            was = state["online"]
+            state["online"] = online
+            return flush_outbox() if online and not was else 0
 
     def flush_outbox() -> int:
         """Link is back: send every queued ALERT, oldest first."""
@@ -439,6 +525,41 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
                                  "note": "Kept on the device; only ALERTs leave the tower."}
         return store.record(obs, now)
 
+    def ingest_external(camera_id: str, *, severity: str, context: dict | None, report: dict, conf: float | None,
+                        thumbnail_b64: str = "", image: np.ndarray | None = None, detections=(),
+                        escalation: dict | None = None, name: str | None = None,
+                        now: float | None = None) -> tuple[dict, bool]:
+        """A sighting decided elsewhere (the console's mobile camera runs its own pipeline and has already
+        delivered any ALERT): store it as an incident at the camera's site, without escalating again."""
+        cam = cameras.get(camera_id)
+        if cam is None:
+            raise KeyError(f"unknown camera {camera_id!r}")
+        now = clock() if now is None else now
+        loc = locate(cam, None, None, None, 0)
+        info = {"name": name or cam["name"], "offset_s": None}
+        obs = observation(cam, loc, severity, context, report, thumbnail_b64, conf, info,
+                          "ok" if context else "unavailable", None)
+        obs["escalation"] = escalation or {"decision": "logged", "bytes_up": 0, "at": now,
+                                           "note": "Kept on the device; only ALERTs leave the tower."}
+        with inc_lock:
+            inc, created = store.record(obs, now)
+            if image is not None:
+                boxes = [SimpleNamespace(box=d["box"], conf=d["conf"], cls=d.get("cls", "smoke")) for d in detections]
+                save_frame(inc, image, boxes, {"t": now, "offset_s": None, "conf": conf or 0.0, "smoke": bool(boxes),
+                                               "camera_id": cam["id"], "camera_name": cam["name"],
+                                               "source": info["name"], "detector": "live",
+                                               "analysis": {"severity": severity, "context": context,
+                                                            "escalation": obs["escalation"],
+                                                            "why": "live camera: gate held, then the VLM"}})
+            src = (context or {}).get("source_type") or "unknown"
+            inc.setdefault("updates", []).append({
+                "t": now, "kind": "opened" if created else "live", "severity": severity, "source_type": src,
+                "trend": report.get("trend"), "camera_id": cam["id"], "vlm_called": bool(context),
+                "text": f"{cam['name']}: {'incident opened' if created else 'update'} · "
+                        f"{src.replace('_', ' ')} · {severity}"})
+            store.save(inc)
+        return incident_view(inc, 1.0), created
+
     def process(image: np.ndarray, data: bytes, info: dict, cam: dict | None, form_ll,
                 name: str | None, force_vlm: bool, demo: dict | None = None) -> dict:
         gps = exif_gps(data)
@@ -450,13 +571,18 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         served = served_models()
         det, det_name = detector("tower" if cam and info.get("kind") != "photo" else "photo")
         with gpu_lock:
-            r = run_pass(image, det, vlm() if vlm_model in served else None, tower,
+            r = run_pass(image, det, vlm() if model_name() in served else None, tower,
                          min_conf=min_conf, force_vlm=force_vlm, now=now)
         bump(frames=1, image_bytes_seen=len(data), vlm_calls=int(r["vlm_calls"] or 0), vlm_tokens=int(r["tokens"] or 0))
         result = {k: r[k] for k in ("severity", "best", "detections", "vlm_status", "vlm_ms", "detect_ms",
                                      "tokens", "context", "width", "height")}
-        result["vlm_served"] = vlm_model in served
+        result["vlm_served"] = model_name() in served
         result["thumbnail_b64"] = r["thumbnail_b64"]
+        if services is not None and services.shadow is not None:
+            services.shadow.record("field", int(r["width"]), int(r["height"]), len(data),
+                                   edge_vlm_called=bool(r["vlm_calls"]), edge_tokens=int(r["tokens"] or 0),
+                                   edge_bytes_up=0, edge_decide_ms=float(r["detect_ms"] or 0) + float(r["vlm_ms"] or 0),
+                                   online=is_online(), vlm_ms=r["vlm_ms"], detect_ms=r["detect_ms"])
         if r["severity"] == "IGNORE":
             bump(ignored=1)
             return {"image": info, "result": result, "incident": None,
@@ -466,6 +592,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
                           (r["best"] or {}).get("conf"), info, r["vlm_status"], name)
         with inc_lock:
             inc, created = commit(obs, now)
+            if services is not None and (obs.get("escalation") or {}).get("decision") == "sent":
+                services.shadow.add_uplink("field", int((obs.get("escalation") or {}).get("bytes_up") or 0))
             boxes = [SimpleNamespace(box=d["box"], conf=d["conf"], cls=d.get("cls", "smoke")) for d in r["detections"]]
             analysis = {k: r.get(k) for k in ("vlm_status", "vlm_ms", "tokens", "tokens_in", "tokens_out", "sent_size",
                                               "crop_image_tokens", "context", "vlm_input")}
@@ -497,7 +625,7 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
 
     def classify_crop(image: np.ndarray, box) -> tuple[dict | None, int, dict]:
         """VLM on the detection crop. Returns (context, tokens, analysis record for the frame viewer)."""
-        if vlm_model not in served_models():
+        if model_name() not in served_models():
             return None, 0, {"vlm_status": "unavailable"}
         crop = crop_box(image, box, 0.5, 448)
         t0 = time.perf_counter()
@@ -641,7 +769,7 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         return {"camera_id": cam["id"], "camera_name": cam["name"], "lat": cam["lat"], "lon": cam["lon"],
                 "bearing_deg": mid, "bearing_lo": lo, "bearing_hi": hi, "t": t}
 
-    def watch_step(s: WatchSession) -> None:
+    def _watch_step(s: WatchSession, acc: dict) -> None:
         fr = s.frames[s.idx]
         s.idx += 1
         img = cv2.imread(str(fr.path), cv2.IMREAD_COLOR)
@@ -666,6 +794,7 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         s.frames_done += 1
         c.latest_offset = fr.offset_s
         c.latest_thumb = _thumbnail(img, dets, min_conf)
+        acc.update(w=w, h=h, nbytes=fr.path.stat().st_size, detect_ms=detect_ms)
         bump(frames=1, image_bytes_seen=fr.path.stat().st_size, ignored=0 if best else 1)
         if best is not None:
             c.last_hit = (img, best)
@@ -680,6 +809,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
             if c.streak < gate_frames:
                 return
             ctx, tokens, rec = classify_crop(img, best.box)
+            acc.update(vlm=acc.get("vlm") or bool(tokens), tokens=acc.get("tokens", 0) + int(tokens or 0),
+                       vlm_ms=rec.get("vlm_ms"))
             s.vlm_calls += 1 if tokens else 0
             s.vlm_tokens += tokens
             ctx_obj = ContextResult(**ctx) if ctx else None
@@ -738,6 +869,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         ctx, tokens, rec = None, 0, None
         if summ["detected_in"] and c.last_hit is not None:
             ctx, tokens, rec = classify_crop(c.last_hit[0], c.last_hit[1].box)
+            acc.update(vlm=acc.get("vlm") or bool(tokens), tokens=acc.get("tokens", 0) + int(tokens or 0),
+                       vlm_ms=rec.get("vlm_ms"))
             s.vlm_calls += 1 if tokens else 0
             s.vlm_tokens += tokens
             # keep this tower's bearing current as the plume moves in the frame
@@ -782,6 +915,21 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         inc["updates"] = ((inc.get("updates") or []) + [update])[-UPDATES_CAP:]
         store.save(inc)
         c.prev_batch, c.batch = c.batch, []
+
+    def watch_step(s: WatchSession) -> None:
+        """One tower frame; with the console's services, also what cloud-only would have done with it."""
+        acc: dict = {}
+        with stats_lock:
+            up0 = stats["bytes_up"]
+        _watch_step(s, acc)
+        if services is None or "w" not in acc:
+            return
+        with stats_lock:
+            sent = stats["bytes_up"] - up0
+        services.shadow.record("tower", acc["w"], acc["h"], acc["nbytes"], edge_vlm_called=bool(acc.get("vlm")),
+                               edge_tokens=acc.get("tokens", 0), edge_bytes_up=max(0, sent),
+                               edge_decide_ms=acc["detect_ms"] + float(acc.get("vlm_ms") or 0),
+                               online=is_online(), vlm_ms=acc.get("vlm_ms"), detect_ms=acc["detect_ms"])
 
     def watch_run(s: WatchSession) -> None:
         starts = set(time_steps(s.frames))
@@ -949,6 +1097,10 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
     app.state.store = store
     app.state.watches = watches
     app.state.winds = winds
+    app.state.cameras = cameras
+    app.state.ingest_external = ingest_external
+    app.state.summary = lambda: summary(store.all())
+    app.state.model_name = model_name
     for mount, sub in (("/assets", assets_dir / "web"), ("/tiles", assets_dir / "maps")):
         if sub.is_dir():
             app.mount(mount, StaticFiles(directory=sub), name=mount.strip("/"))
@@ -964,8 +1116,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         except Exception as exc:  # noqa: BLE001
             served, err = [], str(exc)[:200]
         return {"map_url": f"/tiles/{MAP_FILE}", "map_available": (assets_dir / "maps" / MAP_FILE).exists(),
-                "cameras": [camera_view(c) for c in cameras.values()], "online": state["online"],
-                "vlm_model": vlm_model, "vlm_served": vlm_model in served, "models_error": err,
+                "cameras": [camera_view(c) for c in cameras.values()], "online": is_online(),
+                "vlm_model": model_name(), "vlm_served": model_name() in served, "models_error": err,
                 "detector_weights": detector_weights, "detector_available": Path(detector_weights).exists(),
                 "range_km": range_km, "min_conf": min_conf,
                 "sensor": {"emulated": sensor is not None, "source": sensor.source if sensor else None,
@@ -975,7 +1127,7 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
     def get_state(hours: float = 1.0):
         hours = min(max(hours, 0.25), 12.0) if math.isfinite(hours) else 1.0
         incs = store.all()
-        return {"online": state["online"], "hours": hours, "generated_at": clock(), "summary": summary(incs),
+        return {"online": is_online(), "hours": hours, "generated_at": clock(), "summary": summary(incs),
                 "cameras": [camera_view(c) for c in cameras.values()],
                 "incidents": [incident_view(i, hours) for i in incs]}
 
@@ -1055,11 +1207,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
 
     @app.post("/api/network")
     def set_network(s: NetworkState):
-        with inc_lock:
-            was = state["online"]
-            state["online"] = s.online
-            sent = flush_outbox() if s.online and not was else 0
-            return {"online": state["online"], "flushed": sent}
+        sent = set_online(s.online)
+        return {"online": is_online(), "flushed": sent}
 
     # ------------------------------------------------------------ watch endpoints
 
@@ -1100,6 +1249,8 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
             raise HTTPException(404, "no frames in that recording")
         threading.Thread(target=watch_many, args=(sessions,), name="watch", daemon=True).start()
         return {"sessions": [s.view() for s in sessions]}
+
+    app.state.start_watch = start_watch
 
     @app.get("/api/watch")
     def list_watches():
@@ -1162,7 +1313,7 @@ def create_map_app(*, cameras: dict[str, dict], assets_dir: str | Path = DEFAULT
         if not scenarios:
             raise HTTPException(404, "no demo scenarios configured")
         reset()
-        state["online"] = False
+        set_online(False)
         demo.update(state="running", results={}, error=None)
         threading.Thread(target=run_demo, name="demo", daemon=True).start()
         return demo_view()

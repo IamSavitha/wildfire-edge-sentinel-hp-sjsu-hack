@@ -110,6 +110,12 @@ class CloudShadow:
             s["cloud_tokens"] += c_in + CLOUD_OUTPUT_TOKENS
             self.cloud_frame_bytes.append(c_bytes)
 
+    def add_uplink(self, source: str, nbytes: int) -> None:
+        """Edge bytes sent after the frame was recorded (a queued ALERT delivered when the link returned)."""
+        with self.lock:
+            self.edge["bytes_up"] += int(nbytes or 0)
+            self.by_source[source]["edge_bytes_up"] += int(nbytes or 0)
+
     # ------------------------------------------------------------ views
 
     @staticmethod
