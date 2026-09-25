@@ -11,7 +11,9 @@ cd "$(dirname "$0")/.."
 SOCK=/opt/hp/zrt/run/vllm-base7b.sock
 DETECTOR=models/joint_yolo.pt              # v1.3.0-joint (tower 0.718 / D-Fire 0.748); runs at 960 px
 PHOTO_DETECTOR=models/smoke_yolo.pt        # D-Fire model for close-up field photos
-ALERTS_ENV="$HOME/.sentinel_alerts.env"    # NTFY_TOPIC_URL=https://ntfy.sh/<topic> (chmod 600, never printed)
+ALERTS_ENV="${ALERTS_ENV:-$HOME/.sentinel_alerts.env}"   # NTFY_TOPIC_URL=... (chmod 600, never printed);
+                                           # ALERTS_ENV=/dev/null for a rehearsal that buzzes no phone
+STATE="${STATE:-$HOME/sentinel-state/console}"   # incidents, frames, alert outbox (our own folder)
 CLOUD_ENV="$HOME/.cloud_vlm.env"           # optional CLOUD_VLM_* for measured cloud samples
 RESULTS="${RESULTS:-results}"              # evaluation results shown on the Models and Edge vs Cloud pages
 HOST=127.0.0.1
@@ -41,7 +43,7 @@ else
   tmux new-session -d -s console "cd $PWD && . .venv/bin/activate && \
     { [ ! -f $ALERTS_ENV ] || { set -a; . $ALERTS_ENV; set +a; }; } && \
     python -m sentinel.console --host $HOST --port 8080 --vlm-base-url unix://$SOCK \
-      --detector-weights $PWD/$DETECTOR --photo-detector-weights $PWD/$PHOTO_DETECTOR --results $RESULTS > console.log 2>&1"
+      --detector-weights $PWD/$DETECTOR --photo-detector-weights $PWD/$PHOTO_DETECTOR --results $RESULTS --state-dir $STATE > console.log 2>&1"
 fi
 [ -f "$CLOUD_ENV" ] && echo "cloud samples: settings found (off unless CLOUD_VLM_* are complete)"
 

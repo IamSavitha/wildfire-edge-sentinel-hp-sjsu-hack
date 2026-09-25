@@ -387,7 +387,8 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--node-name", default="Sentinel Edge 01")
     ap.add_argument("--assets", default=str(DEFAULT_ASSETS), help="offline map, web libs and state (outside git)")
-    ap.add_argument("--state-dir", default=None, help="incidents, frames and the alert outbox (default <assets>/state-console)")
+    ap.add_argument("--state-dir", default=str(HOME / "sentinel-state" / "console"),
+                    help="incidents, frames and the alert outbox (never inside the shared assets folder)")
     ap.add_argument("--data-dir", default=str(HOME / "sentinel" / "data"))
     ap.add_argument("--figlib-dir", default=None)
     ap.add_argument("--cameras", default="config/cameras.json")
@@ -413,7 +414,7 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     assets = Path(a.assets)
-    state = Path(a.state_dir) if a.state_dir else assets / "state-console"
+    state = Path(a.state_dir)
     dispatch_fn = None
     if a.dispatch_url:
         from functools import partial
