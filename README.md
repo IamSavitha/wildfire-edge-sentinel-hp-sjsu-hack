@@ -168,6 +168,26 @@ Optional ablations: `bench.py --detector-only` (no VLM) and `--full-frame` (no c
 cropping). To run the live demo with the BEFORE detector, set `"detector_weights": "yolov8s-worldv2.pt",
 "detector_classes": ["smoke", "fire"]` in `config/settings.json`.
 
+## Sentinel Console (one system, port 8080)
+
+Everything in one place: incidents on a map, tower and mobile cameras, alert delivery, **Edge vs Cloud**, models and system health. It is one server with one detector load, one uplink and one alert outbox, and it needs **no internet**: the models, map and UI run on the Nano, and ALERTs queue until the link returns.
+
+```bash
+cd ~/sentinel && ./scripts/start_console.sh        # --lan also serves the local network
+# laptop: ssh -N -L 8080:localhost:8080 hp11@<nano-ip>   → http://localhost:8080
+```
+
+| Page | What it shows |
+|---|---|
+| Operations | Map, active incidents, incident drawer (frames, timeline, location, dispatch report), field reports |
+| Cameras | Tower feeds, **Run drill** (a recorded fire replayed through the towers), the mobile unit (webcam / iPhone) |
+| Alerts | Every ALERT that left or is waiting to leave the device; test push |
+| Edge vs Cloud | The same frames through both designs: data, VLM calls, tokens, time to decision per link profile, frames decided offline, fleet projection |
+| Models | Deployed detector and VLM with their scores; switch LoRA adapter; compare on an image |
+| System | Health, GPU and memory, uplink with **Test outage** |
+
+On a 91-frame recorded fire the edge made 8 VLM calls and sent 0 B, where cloud-only would have made 90 calls on 151K tokens and uploaded 6.7 MB, for about the same time to decision on LTE (5.5 s vs 5.7 s). Details: [docs/versions/v2.0.0-console.md](docs/versions/v2.0.0-console.md). The per-port apps below remain for the v1.x releases.
+
 ## Live metrics dashboard
 
 `sentinel.monitor` is a second, read-only page that shows tokens, latency and edge-vs-cloud economics
