@@ -188,6 +188,7 @@ Design: [console design](plans/2026-09-24-sentinel-console-design.md) · Plan: [
 - Nano check (real models): field ALERT in 5.6 s; outage → queued → restored → sent once; mobile MONITOR on the map while offline; drill of 91 tower frames: 8 vs 90 VLM calls, 2.2K vs 151K tokens, 0 B vs 6.7 MB, 5.5 s vs 5.7 s on LTE. 600 tests on laptop and Nano.
 - [x] v2.1.0: Kruthika's officer console is the home page, with Edge vs Cloud, Mobile camera, Models and System tabs (Junction Fire: 11 vs 266 VLM calls, 0 B vs 23 MB; 603 tests)
 - [x] Live pipeline race on Edge vs Cloud: one fire frame through both designs with real timings; outage → edge queues, cloud blind; restore → queued → restored → sent (verified on the Nano)
+- [x] Mobile camera: video on the right, the pipeline driven by its real frames on the left (smoke 1/3→3/3 → VLM → ALERT), team-phone ntfy panel; verified online and in an outage with a fake camera on the Nano
 - [ ] Owner: restart with phone alerts on (`tmux kill-session -t console` in `~/sentinel-console`, then `RESULTS=~/sentinel/results ./scripts/start_console.sh`) and rehearse
 
 ## Still needs the owner 🙋
