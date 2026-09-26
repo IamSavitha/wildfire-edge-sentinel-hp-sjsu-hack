@@ -425,7 +425,7 @@
   function phone(state, info = {}) {
     const scr = q("#x-ph"), note = q("#x-ph-note");
     if (!scr) return;
-    const now = new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+    const t = new Date(), now = `${t.getHours() % 12 || 12}:${String(t.getMinutes()).padStart(2, "0")}`;
     const lock = `<div class="x-ph-clock">${now}</div>`;
     if (state === "sent") {
       scr.innerHTML = lock + `<div class="x-ntfy buzz"><div class="x-ntfy-h"><span class="x-ntfy-ic">ntfy</span><span>ntfy · now</span></div>

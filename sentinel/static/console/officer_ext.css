@@ -126,3 +126,5 @@ main.wide { grid-template-columns: 540px 1fr; }
 .x-ntfy.buzz { animation: xdrop .45s ease, xbuzz .12s linear .45s 6; }
 @keyframes xdrop { from { transform: translateY(-40px); opacity: 0; } }
 @keyframes xbuzz { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
+/* the page sets display on these classes, so the hidden attribute needs to win explicitly */
+aside [hidden], #mapwrap [hidden], #mapwrap .x-stage[hidden] { display: none !important; }
