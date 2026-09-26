@@ -44,12 +44,17 @@
     baseShowTab(name);
     active = name;
     q("main").classList.toggle("wide", TABS.some(([id]) => id === name));
+    if (name === "edge" && q("#x-race-home") && !LIVE.running) raceTo(q("#x-race-home"), false);
     if (DRAW[name]) DRAW[name]();
     if (name === "camera") drawCamera();
+    const stage = q("#x-stage");
+    if (stage) stage.classList.toggle("pip", name !== "camera");   // the camera keeps running in a corner
   };
   setInterval(() => { if (!document.hidden && DRAW[active] && active !== "models") DRAW[active](); }, 3000);
-  const linked = (location.hash.match(/^#tab=([a-z]+)$/) || [])[1];      // e.g. /#tab=edge opens that tab
+  const linked = (location.hash.match(/^#tab=([a-z]+)/) || [])[1];      // e.g. /#tab=edge opens that tab
   if (linked && q(`.tab[data-tab="${linked}"]`)) setTimeout(() => showTab(linked), 0);
+  // /#tab=camera&start opens straight into the live camera (one click fewer on stage)
+  if (linked === "camera" && /[&?]start\b/.test(location.hash)) setTimeout(() => startCam(), 400);
 
   // ---------------------------------------------------------------- stats strip: edge vs cloud-only
   let OV = null;
@@ -91,7 +96,7 @@
         <div class="x-sec"><div class="note"><b>Same frames, two designs.</b> Every frame this device analysed is compared with a cloud-only
           system that uploads each frame to a hosted VLM (same Qwen2.5-VL-7B). Edge numbers are measured; cloud-only is modelled from the real frames.</div>
           <div class="actions" id="x-prof">${PROFILES.map(([v, l]) => `<button class="chip" data-p="${v}">${l}</button>`).join("")}</div></div>
-        <div class="x-sec x-race" id="x-race"></div>
+        <div id="x-race-home"></div>
         <div class="x-sec"><div class="x-kpis" id="x-ekpi"></div></div>
         <div class="x-sec"><h4>Edge vs cloud-only<span class="sp"></span><span id="x-tag"></span></h4><div class="x-vs" id="x-bars"></div></div>
         <div class="x-sec" id="x-outage"></div>
@@ -116,9 +121,9 @@
       };
       q("#x-reset").onclick = async () => { await post("/api/edge-cloud/reset", {}); drawEdge(); pollOverview(); };
       loadFleet();
-      buildRace();
+      raceTo(q("#x-race-home"), false);
       const lf = EC.summary.last_fire;
-      if (lf) { seenFire = lf.id; race(Promise.resolve(fireFrom(lf)), lf.online, lf.cloud_upload_ms, RACE_REPLAY); }
+      if (lf && !LIVE.running) { seenFire = lf.id; race(Promise.resolve(fireFrom(lf)), lf.online, lf.cloud_upload_ms, RACE_REPLAY); }
     }
     qa("#x-prof .chip").forEach(b => b.classList.toggle("on", b.dataset.p === PROFILE));
     const s = EC.summary, e = s.edge, c = s.cloud, sv = s.savings, m = s.method;
@@ -202,12 +207,16 @@
   const fireFrom = f => ({detect_ms: f.detect_ms, vlm_ms: f.vlm_ms, severity: f.severity,
                           decision: f.severity === "ALERT" ? (f.online ? "sent" : "queued") : "logged"});
 
+  const RACE = Object.assign(document.createElement("div"), {className: "x-sec x-race", id: "x-race"});
+  let raceBuilt = false;
   function buildRace() {
-    const box = q("#x-race");
+    if (raceBuilt) return;
+    raceBuilt = true;
+    const box = RACE;
     const cell = (lane, i) => `<div class="st${i ? "" : " first"}" id="x-${lane}${i}" style="grid-row:${lane === "e" ? 2 : 3};grid-column:${i + 2}">
       <span class="o">·</span><small></small></div>`;
-    box.innerHTML = `<h4>Live pipeline: one fire frame, two designs <span class="sp"></span>
-        <button class="btn ember" id="x-fire">Send a fire frame</button><button class="btn" id="x-replay">Replay</button></h4>
+    box.innerHTML = `<h4><span id="x-race-title">Live pipeline: one fire frame, two designs</span> <span class="sp"></span>
+        <span class="actions" id="x-race-btns"><button class="btn ember" id="x-fire">Send a fire frame</button><button class="btn" id="x-replay">Replay</button></span></h4>
       <div class="x-rg" id="x-rg">
         <div style="grid-row:1;grid-column:1"></div>${STEPS.map((n, i) => `<div class="hd" style="grid-row:1;grid-column:${i + 2}">${n}</div>`).join("")}
         <div class="lane-bg" id="x-lane-e" style="grid-row:2;grid-column:1/-1"></div>
@@ -219,8 +228,16 @@
       </div>
       <div class="x-restore" id="x-restore" hidden></div>
       <div class="x-race-msg" id="x-race-msg"><span class="note">Waiting for a fire frame. Press <b>Send a fire frame</b>, start <b>Live watch</b>, or use the <b>Mobile camera</b>. Try it again after <b>Simulate outage</b>.</span></div>`;
-    q("#x-fire").onclick = sendFire;
-    q("#x-replay").onclick = () => { const lf = EC && EC.summary.last_fire; if (lf) race(Promise.resolve(fireFrom(lf)), lf.online, lf.cloud_upload_ms, RACE_REPLAY); };
+    q("#x-fire", box).onclick = sendFire;
+    q("#x-replay", box).onclick = () => { const lf = EC && EC.summary.last_fire; if (lf) race(Promise.resolve(fireFrom(lf)), lf.online, lf.cloud_upload_ms, RACE_REPLAY); };
+  }
+  function raceTo(slot, live) {                      // show the one race panel in the Edge tab or beside the camera
+    buildRace();
+    if (!slot) return;
+    if (RACE.parentNode !== slot) slot.appendChild(RACE);
+    q("#x-race-title").textContent = live ? "Live: mobile camera → edge vs cloud" : "Live pipeline: one fire frame, two designs";
+    q("#x-race-btns").hidden = !!live;
+    RACE.classList.toggle("live", !!live);
   }
   function st(lane, i, state, text, tone = "") {
     const el = q(`#x-${lane}${i}`); if (!el) return;
@@ -336,12 +353,13 @@
     const online = OV && OV.uplink.online;
     if (pendingRestore && online) restore();
     lastOnline = online;
+    if (LR && LR.eventId && OV && OV.last_alert && OV.last_alert.event_id === LR.eventId) liveDelivery(OV.last_alert);
     const lf = EC && EC.summary.last_fire;
     if (!lf || lf.id === seenFire) return;
     if (skipNext) { skipNext = false; seenFire = lf.id; return; }
     const first = seenFire === undefined;
     seenFire = lf.id;
-    if (!first && active === "edge" && q("#x-rg") && !sending) race(Promise.resolve(fireFrom(lf)), lf.online, lf.cloud_upload_ms, RACE_REPLAY);
+    if (!first && active === "edge" && !LIVE.running && q("#x-rg") && !sending) race(Promise.resolve(fireFrom(lf)), lf.online, lf.cloud_upload_ms, RACE_REPLAY);
   }
   let sending = false, skipNext = false;
   async function sendFire() {
@@ -370,23 +388,176 @@
   let camBuilt = false;
   function drawCamera() {
     const box = q("#x-camera");
-    if (camBuilt) return;
+    if (camBuilt) { if (LIVE.running) raceTo(q("#x-race-cam"), true); return; }
     camBuilt = true;
     box.innerHTML = `
       <div class="x-sec"><div class="note">A patrol unit's camera (laptop webcam, or an iPhone through Continuity Camera) runs through the <b>same
-        detector, gate and VLM</b> as the towers, on this device. A fire it sees opens an incident on the map and an ALERT goes to dispatch.</div>
-        <div class="x-live"><video id="x-video" playsinline muted></video><canvas id="x-ov"></canvas>
-          <div class="idle" id="x-idle">Camera off. Point it at smoke (a wildfire video on a tablet works).</div></div>
+        detector, gate and VLM</b> as the towers, on this device. The video opens on the right; the pipeline and the team phone show here.</div>
+        <div id="x-live-home"><div class="x-live" id="x-live"><video id="x-video" playsinline muted></video><canvas id="x-ov"></canvas>
+          <div class="idle" id="x-idle">Camera off. Point it at smoke (a wildfire video on a tablet works).</div></div></div>
         <div class="actions"><select id="x-cam" class="btn" style="flex:1;min-width:0"><option value="">Default camera</option></select>
           <button class="btn ember" id="x-start">Start camera</button></div>
         <div class="x-status" id="x-stat"><span class="note">Not streaming.</span></div></div>
+      <div id="x-race-cam"></div>
+      <div class="x-sec" id="x-phone-sec"><h4>Team phone (ntfy) ${help("The real ALERT push: when the edge decides ALERT and the link is up, the report goes to the team's phone through ntfy. With no link it waits in the outbox on this device and is pushed when the link returns.")}</h4>
+        <div class="x-phone-row"><div class="x-phone"><div class="x-ph-notch"></div><div class="x-ph-screen" id="x-ph"></div></div><div class="note" id="x-ph-note"></div></div></div>
       <div class="x-sec" id="x-ev"></div>`;
     q("#x-start").onclick = () => LIVE.running ? stopCam() : startCam();
     q("#x-cam").onchange = async () => { if (LIVE.running) { try { await openCam(); } catch (e) { stopCam(camErr(e)); } } };
     listCams();
     if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener("devicechange", () => listCams());
+    phone("idle");
     paintCam(null);
   }
+  function stage() {                                   // the big camera view over the map
+    let el = q("#x-stage");
+    if (el) return el;
+    el = document.createElement("div");
+    el.className = "x-stage"; el.id = "x-stage"; el.hidden = true;
+    el.innerHTML = `<div class="x-stage-h"><span class="x-live-dot"></span><b>Mobile unit 1</b><span class="note" id="x-stage-stat">live</span>
+        <span class="sp"></span><button class="btn" id="x-pip">Minimize</button><button class="btn" id="x-stop2">Stop camera</button></div>
+      <div class="x-stage-body" id="x-stage-body"></div><div class="x-stage-alert" id="x-stage-alert" hidden></div>`;
+    q("#mapwrap").appendChild(el);
+    q("#x-pip").onclick = () => { const pip = el.classList.toggle("pip"); q("#x-pip").textContent = pip ? "Expand" : "Minimize"; };
+    q("#x-stop2").onclick = () => stopCam();
+    return el;
+  }
+  function phone(state, info = {}) {
+    const scr = q("#x-ph"), note = q("#x-ph-note");
+    if (!scr) return;
+    const now = new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+    const lock = `<div class="x-ph-clock">${now}</div>`;
+    if (state === "sent") {
+      scr.innerHTML = lock + `<div class="x-ntfy buzz"><div class="x-ntfy-h"><span class="x-ntfy-ic">ntfy</span><span>ntfy · now</span></div>
+        <b>🔥 WILDFIRE ALERT — ${esc(info.where || "Mobile unit 1")}</b><div>${esc(fmt.words(info.source || "wildland"))} smoke/fire${info.lat != null ? ` at ${info.lat.toFixed(3)}, ${info.lon.toFixed(3)}` : ""}. ${esc(info.desc || "")}</div></div>`;
+      note.innerHTML = `<b style="color:var(--ok)">Delivered to the team's phone</b> by ntfy${info.host ? ` (${esc(info.host)})` : ""}.`;
+    } else if (state === "queued") {
+      scr.innerHTML = lock + `<div class="x-ph-empty">No signal from the tower yet</div>`;
+      note.innerHTML = `<b style="color:#c05600">Link down:</b> the ALERT waits in the outbox on this device and is pushed the moment the link returns.`;
+    } else if (state === "sending") {
+      scr.innerHTML = lock + `<div class="x-ph-empty">…</div>`;
+      note.textContent = "Sending the ALERT to the team's phone…";
+    } else if (state === "off") {
+      scr.innerHTML = lock + `<div class="x-ph-empty">Phone push is off on this node</div>`;
+      note.innerHTML = `The ALERT was delivered to dispatch only: phone push needs <code>NTFY_TOPIC_URL</code> on the device (it is off in rehearsal mode).`;
+    } else {
+      scr.innerHTML = lock + `<div class="x-ph-empty">No alerts</div>`;
+      note.textContent = "Waiting for an ALERT from the mobile unit.";
+    }
+  }
+
+  // ---- the pipeline, driven by the live camera's real frames
+  let LR = null;          // {token, online, stage: gate|vlm|decided|alert, eventId, vlmT, sev}
+  function liveWaiting() {
+    raceToken++; resetRace(); LR = null; pendingRestore = null;
+    q("#x-race-msg").innerHTML = `<span class="note">Watching. Point the camera at smoke: the pipeline starts on the first frame with smoke.</span>`;
+    stage().querySelector("#x-stage-alert").hidden = true;
+  }
+  function liveBegin(d) {
+    const online = d.online !== false;
+    raceToken++; resetRace(); pendingRestore = null;
+    LR = {token: raceToken, online, stage: "gate", eventId: null, sev: null};
+    RACE.classList.remove("pop"); void RACE.offsetWidth; RACE.classList.add("pop");
+    q("#x-nb").classList.toggle("down", !online);
+    q("#x-nb span").textContent = online ? "network" : "no network";
+    st("e", 0, "ok", "frame"); st("e", 1, "run", "smoke 1/3"); st("e", 2, "skip", "0 B · stays here");
+    st("c", 0, "ok", "frame"); st("c", 1, "na", "no model on site");
+    q("#x-race-msg").innerHTML = `<span class="note">Smoke in view${online ? "" : " — <b>no network</b>"}. The edge confirms it over 3 frames before calling the VLM.</span>`;
+    const token = raceToken, alive = () => LR && LR.token === token;
+    (async () => {                                   // cloud-only: every frame goes up and through a hosted VLM
+      st("c", 2, "run", online ? "uploading" : "");
+      if (!online) {
+        await sleep(700); if (!alive()) return;
+        st("c", 2, "blocked", "no network", "bad");
+        for (const i of [3, 4, 5]) st("c", i, "dash", "—");
+        q("#x-lane-c").classList.add("stopped");
+        q("#x-rg").insertAdjacentHTML("beforeend", `<div class="x-blind" id="x-blind" style="grid-row:3;grid-column:5/8">BLIND DURING OUTAGE</div>`);
+        q("#x-t-c").textContent = "no decision";
+        return;
+      }
+      const lf = EC && EC.summary.last_fire, up = lf && lf.cloud_upload_ms != null ? lf.cloud_upload_ms : 1500;
+      await sleep(Math.max(400, up)); if (!alive()) return;
+      st("c", 2, "ok", `${lf ? fmt.b(lf.cloud_bytes) + " · " : ""}${fmt.ms(up)}`);
+      st("c", 3, "run", "in the cloud");
+      const vlm = lf && lf.vlm_ms ? lf.vlm_ms : 5400;
+      await sleep(vlm); if (!alive()) return;
+      st("c", 3, "ok", `cloud · ${fmt.ms(vlm)}`);
+      while (alive() && !LR.sev) await sleep(250);     // same model, same verdict as the edge
+      if (!alive()) return;
+      st("c", 4, "ok", LR.sev);
+      st("c", 5, LR.sev === "ALERT" ? "ok" : "run", LR.sev === "ALERT" ? "sent after reply" : "re-checking");
+      q("#x-t-c").textContent = `decided in ${fmt.ms(up + vlm)}`;
+      LR.cloudMs = up + vlm;
+    })();
+  }
+  function liveVlmStart() {                           // the frame now in flight completes the gate: the VLM runs
+    if (!LR || LR.stage !== "gate") return;
+    LR.stage = "vlm"; LR.vlmT = performance.now();
+    st("e", 1, "ok", "smoke 3/3", "good");
+    st("e", 3, "run", "on device");
+    q("#x-race-msg").innerHTML = `<span class="note">Smoke held for 3 frames: the VLM on this device is classifying it…</span>`;
+  }
+  function liveDecided(sev, source, vlmMs) {
+    if (!LR || LR.sev) return;
+    LR.sev = sev; LR.stage = "decided"; LR.source = source;
+    st("e", 1, "ok", "smoke 3/3", "good");
+    st("e", 3, "ok", `local · ${fmt.ms(vlmMs)}`, "good");
+    st("e", 4, "ok", `${sev}${source ? " · " + fmt.words(source) : ""}`, "good");
+    if (sev !== "ALERT") {
+      st("e", 5, "run", "re-checking growth");
+      q("#x-race-msg").innerHTML = `<span class="note"><b>${esc(sev)}</b> (${esc(fmt.words(source))}): the edge keeps watching and re-checks whether it grows.</span>`;
+      stageAlert(sev, source, "watching for growth");
+    }
+  }
+  function liveAlert(ev) {
+    if (!LR) return;
+    if (!LR.sev || LR.sev !== "ALERT") { LR.sev = null; liveDecided("ALERT", ev.source_type, LIVE.last && LIVE.last.timings ? LIVE.last.timings.vlm_ms : null); }
+    LR.stage = "alert"; LR.eventId = ev.id; LR.desc = ev.description;
+    liveDelivery(ev.delivery ? {...ev.delivery, event_id: ev.id} : {state: "sending"});
+    q("#x-lane-e").classList.add("done");
+    q("#x-t-e").textContent = "ALERT raised";
+  }
+  function liveDelivery(dv) {                          // from the frame response, then from the overview poll
+    if (!LR || !dv) return;
+    const where = (dv.incident && dv.incident.name) || "Mobile unit 1";
+    const cfg = OV && OV.last_alert;
+    const info = {where, source: LR.source, desc: LR.desc || "", host: null};
+    if (dv.phone === "expired") { st("e", 5, "blocked", "expired", "bad"); return; }
+    if (dv.state === "queued") {
+      if (LR.delivered !== "queued") { LR.delivered = "queued"; st("e", 5, "queued", "queued locally", "amber"); pendingRestore = {t: Date.now()}; showRestore("queued"); phone("queued"); }
+      stageAlert("ALERT", LR.source, "queued on the edge: no link");
+    } else if (dv.state === "sent" || dv.delivered) {
+      if (LR.delivered === "sent") return;
+      LR.delivered = "sent";
+      st("e", 5, "ok", dv.phone === "sent" ? "sent to phone" : "sent to dispatch", "good");
+      if (q("#x-restore") && !q("#x-restore").hidden) showRestore("sent");
+      if (dv.phone === "sent") phone("sent", info); else if (dv.phone === "off") phone("off");
+      stageAlert("ALERT", LR.source, dv.phone === "sent" ? "sent to the team's phone" : "reported to dispatch");
+      q("#x-race-msg").innerHTML = `<b class="g">ALERT decided on the edge and ${dv.phone === "sent" ? "pushed to the team's phone" : "reported to dispatch"}.</b>` +
+        (LR.online ? ` <span class="note">The frame itself never left the device.</span>` : ` <span class="note">Cloud-only was blind during the outage.</span>`);
+    } else { st("e", 5, "run", "sending"); phone("sending"); }
+  }
+  function stageAlert(sev, source, what) {
+    const a = q("#x-stage-alert"); if (!a) return;
+    a.hidden = false;
+    a.className = "x-stage-alert " + sev;
+    a.innerHTML = `<b>${esc(sev)}</b> ${esc(fmt.words(source))} · ${esc(what)}`;
+  }
+  function liveFrame(d) {                              // advance the pipeline from one live-frame response
+    const g = d.gate || {streak: 0, needed: 3}, e = d.event, lat = d.latched || {};
+    // a new plume after the last one was decided and its latch cleared: a fresh run through both pipelines
+    if (LR && (LR.stage === "decided" || LR.stage === "alert") && !e && !lat.active && !d.new_alert && g.streak > 0) LR = null;
+    if (!LR && (g.streak > 0 || (e && e.severity))) liveBegin(d);
+    if (!LR) return;
+    if (LR.stage === "gate") {
+      if (g.streak > 0) st("e", 1, "run", `smoke ${g.streak}/${g.needed}`);
+      else if (!e && !lat.active && !d.new_alert) { liveWaiting(); return; }     // the smoke went away before the gate
+    }
+    const done = d.new_alert || (d.new_events || []).find(x => x.severity) || (e && e.severity ? e : null);
+    if (done && !LR.sev) liveDecided(done.severity, done.source_type, d.timings && d.timings.vlm_ms);
+    if (d.new_alert) liveAlert(d.new_alert);
+  }
+
   async function listCams(keep) {
     if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
     let devs = [];
@@ -424,6 +595,11 @@
       await openCam();
       LIVE.running = true;
       q("#x-start").textContent = "Stop camera"; q("#x-start").className = "btn";
+      const stg = stage();
+      q("#x-stage-body").appendChild(q("#x-live"));
+      stg.hidden = false; stg.classList.remove("pip"); q("#x-pip").textContent = "Minimize";
+      raceTo(q("#x-race-cam"), true);
+      liveWaiting(); phone("idle");
       await post("/lab/api/live/reset", {}).catch(() => {});
       tick();
     } catch (e) { stopCam(camErr(e)); }
@@ -435,6 +611,11 @@
     const v = q("#x-video"); if (v) v.srcObject = null;
     const idle = q("#x-idle"); if (idle) idle.hidden = false;
     const b = q("#x-start"); if (b) { b.textContent = "Start camera"; b.className = "btn ember"; }
+    const home = q("#x-live-home"), lv = q("#x-live");
+    if (home && lv && lv.parentNode !== home) home.appendChild(lv);
+    const stg = q("#x-stage"); if (stg) stg.hidden = true;
+    LR = null; raceToken++;
+    if (q("#x-race-home")) raceTo(q("#x-race-home"), false);
     paintCam(null);
     const st = q("#x-stat"); if (st) st.innerHTML = `<span class="note">${esc(msg)}</span>`;
   }
@@ -448,11 +629,15 @@
       capture.width = Math.round(v.videoWidth * s); capture.height = Math.round(v.videoHeight * s);
       capture.getContext("2d").drawImage(v, 0, 0, capture.width, capture.height);
       const blob = await new Promise(r => capture.toBlob(r, "image/jpeg", 0.85));
+      const prev = LIVE.last, pg = prev && prev.gate;
+      if (LR && pg && !prev.event && !(prev.latched || {}).active && pg.streak === pg.needed - 1) liveVlmStart();
       const r = await fetch(`/lab/api/live/frame?stream=${LIVE.stream}`, {method: "POST", headers: {"Content-Type": "image/jpeg"}, body: blob, cache: "no-store"});
       if (r.status === 202) return;
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { q("#x-stat").innerHTML = `<span class="note">${esc(typeof d.detail === "string" ? d.detail : "Frame rejected")}</span>`; return; }
       LIVE.sent++; LIVE.last = d;
+      try { liveFrame(d); } catch (err) { console.error(err); }
+      const ss = q("#x-stage-stat"); if (ss) ss.textContent = `live · ${fmt.ms(d.timings.total_ms)} per frame · ${d.online === false ? "no link: deciding on the device" : "online"}`;
       if (d.new_alert) { toast("ALERT from the mobile unit: see Incidents"); refresh(); }
       else if ((d.new_events || []).length || (d.event && d.event.severity)) refresh();
       paintCam(d);
