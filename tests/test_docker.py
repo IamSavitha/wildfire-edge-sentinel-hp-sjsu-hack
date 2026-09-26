@@ -8,8 +8,8 @@ import pytest
 from sentinel.console import parser
 
 ROOT = Path(__file__).parents[1]
-if not (ROOT / "Dockerfile").exists():          # inside the image itself: the build files are not copied in
-    pytest.skip("no Dockerfile here", allow_module_level=True)
+if not all((ROOT / f).exists() for f in ("Dockerfile", "docker-compose.yml", ".dockerignore")):
+    pytest.skip("build files not here (inside the image)", allow_module_level=True)
 DOCKERFILE = (ROOT / "Dockerfile").read_text()
 
 

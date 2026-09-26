@@ -73,6 +73,9 @@ Phone alerts: put `NTFY_TOPIC_URL=https://ntfy.sh/<your-topic>` in `~/.sentinel_
 
 - **Savitha Vijayarangan**: detection pipeline, model fine-tuning and distillation, edge vs cloud evaluation, console
 - **Kruthika Virupakshappa**: forest-officer console, offline incident map, Ask Sentinel
+- **Sai Chaitanya Munagala**
+- **Bavishna Ashok Kumar**
+- **Elsa Rose**
 
 ---
 

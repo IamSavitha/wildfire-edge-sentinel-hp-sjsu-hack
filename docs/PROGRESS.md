@@ -190,7 +190,8 @@ Design: [console design](plans/2026-09-24-sentinel-console-design.md) · Plan: [
 - [x] Live pipeline race on Edge vs Cloud: one fire frame through both designs with real timings; outage → edge queues, cloud blind; restore → queued → restored → sent (verified on the Nano)
 - [x] Mobile camera: video on the right, the pipeline driven by its real frames on the left (smoke 1/3→3/3 → VLM → ALERT), team-phone ntfy panel; verified online and in an outage with a fake camera on the Nano
 - [x] Dockerfile + docker-compose.yml (arm64, CUDA 13 torch, VLM via the zrt socket, mounts for weights/map/data/state; `docker compose config` validated on the Nano)
-- [ ] Owner: build and run the container once on the Nano (`sudo docker compose up -d --build`; needs sudo or the docker group)
+- [x] Docker image contents verified on the Nano without the daemon: the Dockerfile's install steps in a clean Python 3.12 env (torch cu130 sees the GB10; CLIP from git), the console with the image's launch options and offline settings on :8081 — before/after compare, field ALERT, live-camera ALERT, all pages 200
+- [ ] Owner: `sudo docker compose up -d --build` once (the container build needs Docker permissions: sudo or the docker group)
 - [ ] Owner: restart with phone alerts on (`tmux kill-session -t console` in `~/sentinel-console`, then `RESULTS=~/sentinel/results ./scripts/start_console.sh`) and rehearse
 
 ## Still needs the owner 🙋
