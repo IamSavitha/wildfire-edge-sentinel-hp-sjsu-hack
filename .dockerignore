@@ -1,0 +1,20 @@
+# The image holds code and dependencies only; weights, data, map tiles and state are mounted at run time.
+.git
+.venv
+**/__pycache__
+**/*.pyc
+*.egg-info
+.pytest_cache
+.env
+*.env
+data/
+models/
+adapters/
+reference_images/
+results/console/
+results/live/
+results/logs/
+*.log
+*.pt
+*.webp
+*.mjpeg

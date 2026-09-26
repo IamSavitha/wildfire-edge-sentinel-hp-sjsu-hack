@@ -373,12 +373,9 @@ def build_console(*, services: Services, cameras: dict[str, dict], mobile: dict 
                               assets_dir=map_kwargs.get("assets_dir"), **console_kwargs)
 
 
-def main(argv=None):
-    from sentinel.detector import imgsz_for
-    from sentinel.incident_map import DEFAULT_ASSETS, load_cameras
-    from sentinel.services import build_services
-    from sentinel.webapp import DETECTORS, PIPELINES, detector_specs
-    from sentinel.wind import SensorEmulator
+def parser() -> argparse.ArgumentParser:
+    from sentinel.incident_map import DEFAULT_ASSETS
+    from sentinel.webapp import DETECTORS
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 serves the local network (no internet needed)")
@@ -408,7 +405,17 @@ def main(argv=None):
     ap.add_argument("--start-offline", action="store_true", help="start with the uplink down")
     ap.add_argument("--no-monitor", action="store_true")
     ap.add_argument("--no-sensor", action="store_true")
-    a = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None):
+    from sentinel.detector import imgsz_for
+    from sentinel.incident_map import load_cameras
+    from sentinel.services import build_services
+    from sentinel.webapp import PIPELINES, detector_specs
+    from sentinel.wind import SensorEmulator
+
+    a = parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     assets = Path(a.assets)

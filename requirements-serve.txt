@@ -1,0 +1,16 @@
+# Runtime dependencies of the Sentinel Console (the Docker image), pinned to the versions running on the
+# HP ZGX Nano. torch/torchvision are installed separately from the PyTorch index (see Dockerfile).
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn==0.53.0
+httpx==0.28.1
+anyio==4.15.1
+openai==3.19.0
+pydantic==2.13.5
+numpy==2.5.2
+opencv-python-headless==5.0.0.93
+pillow==12.3.0
+ultralytics==8.4.160
+# YOLO-World's text encoder, for the "before fine-tuning" detector on the Models page
+clip @ git+https://github.com/ultralytics/CLIP.git@a13192f8cb767260d7dfd98c843b0716593169e7
+pytest
