@@ -189,6 +189,8 @@ Design: [console design](plans/2026-09-24-sentinel-console-design.md) · Plan: [
 - [x] v2.1.0: Kruthika's officer console is the home page, with Edge vs Cloud, Mobile camera, Models and System tabs (Junction Fire: 11 vs 266 VLM calls, 0 B vs 23 MB; 603 tests)
 - [x] Live pipeline race on Edge vs Cloud: one fire frame through both designs with real timings; outage → edge queues, cloud blind; restore → queued → restored → sent (verified on the Nano)
 - [x] Mobile camera: video on the right, the pipeline driven by its real frames on the left (smoke 1/3→3/3 → VLM → ALERT), team-phone ntfy panel; verified online and in an outage with a fake camera on the Nano
+- [x] Dockerfile + docker-compose.yml (arm64, CUDA 13 torch, VLM via the zrt socket, mounts for weights/map/data/state; `docker compose config` validated on the Nano)
+- [ ] Owner: build and run the container once on the Nano (`sudo docker compose up -d --build`; needs sudo or the docker group)
 - [ ] Owner: restart with phone alerts on (`tmux kill-session -t console` in `~/sentinel-console`, then `RESULTS=~/sentinel/results ./scripts/start_console.sh`) and rehearse
 
 ## Still needs the owner 🙋
