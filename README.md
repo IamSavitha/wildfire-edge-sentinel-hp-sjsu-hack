@@ -188,6 +188,27 @@ cd ~/sentinel && ./scripts/start_console.sh        # --lan also serves the local
 
 On a 91-frame recorded fire the edge made 8 VLM calls and sent 0 B, where cloud-only would have made 90 calls on 151K tokens and uploaded 6.7 MB, for about the same time to decision on LTE (5.5 s vs 5.7 s). Details: [docs/versions/v2.0.0-console.md](docs/versions/v2.0.0-console.md). The per-port apps below remain for the v1.x releases.
 
+### Run with Docker
+
+The console also ships as a container (`Dockerfile`, `docker-compose.yml`). On the HP ZGX Nano (arm64, NVIDIA GB10), the image uses the same CUDA 13 PyTorch as the native install. The VLM stays in HP zrt on the host, and the container reaches it through the zrt socket. Weights, map tiles, recordings and state are mounted; the image holds only code and dependencies, and nothing needs the internet at run time.
+
+```bash
+cd ~/sentinel                                    # VLM already served by zrt (start_console.sh step 1)
+sudo docker compose up -d --build                # or add your user to the docker group once
+sudo docker compose logs -f console              # health: curl localhost:8080/api/overview
+```
+
+| Mounted | From (Nano default) | Why |
+|---|---|---|
+| `/app/models` | `~/sentinel/models` | detector weights (joint + D-Fire) |
+| `/app/weights`, `/opt/sentinel/yolov8s-worldv2.pt` | `~/sentinel/weights`, `~/sentinel/yolov8s-worldv2.pt` | the before-fine-tuning detector and its CLIP encoder, offline |
+| `/app/data`, `/assets` | `~/sentinel/data`, `~/sentinel-assets` | sample photos, recordings, offline map |
+| `/app/results` | `~/sentinel/results` | evaluation results for the Models page |
+| `/state` | `~/sentinel-state/console` | incidents, frames, alert outbox |
+| `/opt/hp/zrt/run` | same | VLM socket and live model metrics |
+
+Phone alerts come from `~/.sentinel_alerts.env` (`NTFY_TOPIC_URL`), passed to the container as an env file and never baked into the image. Override any path in a `.env` file next to `docker-compose.yml`. The port is published on `127.0.0.1` only (use the SSH tunnel); change it to `8080:8080` to serve a tower LAN. Stop the native console first (`tmux kill-session -t console`), because both use port 8080. For a laptop without an NVIDIA GPU, build with `--build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu`.
+
 ## Live metrics dashboard
 
 `sentinel.monitor` is a second, read-only page that shows tokens, latency and edge-vs-cloud economics
