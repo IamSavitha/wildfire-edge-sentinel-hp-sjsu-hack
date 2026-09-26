@@ -159,15 +159,15 @@ To make the flow tangible on stage, the demo app has a **Live camera** tab: the 
 
 ```mermaid
 flowchart LR
-  L[Your laptop<br/>100.116.204.52] -- WireGuard via Tailscale --> N[spark-d07 Nano<br/>100.109.162.35]
+  L[Your laptop<br/>100.116.204.52] -- WireGuard via Tailscale --> N[spark-d07 Nano<br/><nano-ip>]
   L -. "ssh -L 8095 / 8090" .-> N
 ```
 
 - **Tailscale** builds an encrypted WireGuard mesh ("tailnet") across the SJSU network; every device gets a stable `100.x.y.z` address. It connects **directly** (peer-to-peer, ~20 ms) when possible and falls back to a **DERP relay** (e.g. "sfo") when not. Relays add latency and can drop, which is what caused two outages (≈20:20–21:39 and a short one later).
 - **SSH** with key authentication (`ssh-copy-id` once, then passwordless). User `hp11` on host `spark-d07`.
 - **SSH local port forwarding** makes the Nano's web apps appear on your laptop:
-  `ssh -N -L 8095:localhost:8095 -L 8090:localhost:8090 hp11@100.109.162.35` → open `http://localhost:8095`. The servers bind to `127.0.0.1` on the Nano, so they are not exposed to the network; only your tunnel reaches them.
-- **Checks when something fails:** `tailscale ping 100.109.162.35` (link), then `ssh … uptime` (host), then `tmux ls` on the Nano (jobs).
+  `ssh -N -L 8095:localhost:8095 -L 8090:localhost:8090 hp11@<nano-ip>` → open `http://localhost:8095`. The servers bind to `127.0.0.1` on the Nano, so they are not exposed to the network; only your tunnel reaches them.
+- **Checks when something fails:** `tailscale ping <nano-ip>` (link), then `ssh … uptime` (host), then `tmux ls` on the Nano (jobs).
 
 ### 4.3 Keeping work alive: tmux
 
@@ -385,8 +385,8 @@ The cloud-only baseline runs **the same model** (Qwen2.5-VL-7B-Instruct, hosted 
 
 ```bash
 # from the laptop
-ssh -N -L 8095:localhost:8095 -L 8090:localhost:8090 hp11@100.109.162.35
-tailscale ping 100.109.162.35
+ssh -N -L 8095:localhost:8095 -L 8090:localhost:8090 hp11@<nano-ip>
+tailscale ping <nano-ip>
 
 # on the Nano
 tmux ls                         # running jobs

@@ -1,6 +1,6 @@
 # Wildfire Edge Sentinel — Progress Tracker
 
-**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 Nano time (ICT) · **Release for the demo: `v1.5.0-live-camera`** · ⏸ **All services paused on the Nano** (demo app, incident map, metrics, model server) — resume with `ssh hp11@100.109.162.35 'cd ~/sentinel && ./scripts/start_demo.sh'` · runbook: [DEMO_RUNBOOK.md](DEMO_RUNBOOK.md) (Nano `spark-d07`, user `hp11`)
+**Deadline:** Fri Sept 25, 8pm (internal target 6pm) · **Branch:** `feat/core-pipeline` · **Last updated:** 2026-09-24 Nano time (ICT) · **Release for the demo: `v1.5.0-live-camera`** · ⏸ **All services paused on the Nano** (demo app, incident map, metrics, model server) — resume with `ssh hp11@<nano-ip> 'cd ~/sentinel && ./scripts/start_demo.sh'` · runbook: [DEMO_RUNBOOK.md](DEMO_RUNBOOK.md) (Nano `spark-d07`, user `hp11`)
 
 Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Commands and details are in the [README](../README.md) and the [implementation plan](plans/2026-09-22-wildfire-edge-sentinel.md) (task numbers in brackets).
 
@@ -134,7 +134,7 @@ Tick a box (`- [x]`) when a step is done. Steps are in the order to run them. Co
 - [x] Design the demo page: what judges see in 5 minutes (live tower feeds, event timeline, escalation/outbox, online/offline toggle, metrics)
 - [ ] Before vs after view: same frame through base vs fine-tuned models, side by side (detector boxes + VLM verdict)
 - [ ] Results panel that reads `results/*.json` (detector mAP, VLM accuracy, end-to-end precision/recall, cost model)
-- [x] **Live comparative metrics dashboard** — live on the Nano (tmux `monitor`, port 8090): `ssh -N -L 8090:localhost:8090 hp11@100.109.162.35` → http://localhost:8090. Reviewed (202 tests). First reading: teacher32b 839k input / 299k output tokens — while any model runs (detector, base VLM, LoRA VLM, teacher), show live per-model: requests, tokens in/out, tokens/s, latency p50/p95, GPU memory, calls avoided by the cascade, bytes sent upstream, and a running cost comparison (edge vs cloud-per-frame at configurable $/token and $/GB) to summarise the economics
+- [x] **Live comparative metrics dashboard** — live on the Nano (tmux `monitor`, port 8090): `ssh -N -L 8090:localhost:8090 hp11@<nano-ip>` → http://localhost:8090. Reviewed (202 tests). First reading: teacher32b 839k input / 299k output tokens — while any model runs (detector, base VLM, LoRA VLM, teacher), show live per-model: requests, tokens in/out, tokens/s, latency p50/p95, GPU memory, calls avoided by the cascade, bytes sent upstream, and a running cost comparison (edge vs cloud-per-frame at configurable $/token and $/GB) to summarise the economics
 - [ ] Architecture + "why edge" panel (escalation rule, bytes sent vs video, tokens per event)
 - [x] **Two-pane demo app** (`python -m sentinel.webapp`, port 8095) — built and reviewed (278 tests; token math verified exact; fair ≤1280 px cloud baseline; honest $0-marginal label): LEFT = pick/upload an image (+ ground truth) and run BEFORE (YOLO-World + base7b) vs AFTER (YOLO11s + LoRA) side by side with boxes, verdict, severity, report, tokens, timings; RIGHT = live usage & economics (tokens actual vs full-frame, calls avoided, bytes, $ edge vs cloud, online vs offline alerts sent/queued, served-model telemetry, benchmark table)
 - [x] Deploy the demo app on the Nano after LoRA is served (base7b with `--enable-lora`) — live on :8095 via the backend socket; BEFORE and AFTER both served; first session: AFTER used 191 VLM tokens vs ~4,149 cloud-every-frame estimate (−95%), 0 bytes vs 377 KB uploads
@@ -203,14 +203,14 @@ Design: [console design](plans/2026-09-24-sentinel-console-design.md) · Plan: [
 
 ## Phase 8 — Deliverables (due Fri 9/25, 8pm) [T28]
 
-- [ ] README "Results" section updated from `results/before_after.md`
+- [x] README "Results" section updated (at-a-glance results on top, measured on the Nano)
 - [ ] Comparative study: replace targets with measured numbers; open and verify each source
-- [ ] Public GitHub: final push, README renders, no secrets
+- [x] Public GitHub: final push, README renders, no secrets (history scanned: no ntfy topics, API keys or tokens; Nano IP replaced by `<nano-ip>` in the docs); tag `v2.2.0-submission`
 - [ ] 2-minute video uploaded to YouTube (public), plus the video file
 - [ ] Interactive presentation with the 3 required visuals: architecture, benchmarks, impact
 - [ ] SJSU Google Drive: project brief, video, links, deck, diagrams, photos
 - [ ] Social posts with the required tags
-- [ ] Pitch rehearsal: 3-minute pitch + Q&A (escalation rule, before/after numbers, cost model)
+- [ ] Pitch rehearsal: 10-minute team script drafted (run of show, speakers, demo steps, Q&A prep); rehearse once end to end
 
 ---
 

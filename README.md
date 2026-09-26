@@ -1,11 +1,82 @@
 # Wildfire Edge Sentinel
 
-> **Demo:** [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md) · **Deep dive:** [docs/PROJECT_DEEP_DIVE.md](docs/PROJECT_DEEP_DIVE.md) · **Progress:** [docs/PROGRESS.md](docs/PROGRESS.md) · **Versions:** [docs/versions/](docs/versions/README.md) · current release `v1.3.0-joint`
+**Wildfire detection that keeps working when the network doesn't.** One HP ZGX Nano at a lookout tower
+watches the cameras, decides what the smoke is, and alerts the team's phone, with no internet needed to
+decide. Built for the HP Edge AI SJSU Hackathon.
 
-Edge-first wildfire smoke detection for remote lookout towers, running on one HP ZGX Nano (NVIDIA GB10).
-It detects smoke, works out what kind of fire it is (wildland, campfire, stack, fog...) and whether it is
-growing, assigns a severity, and writes a dispatch-ready report locally. It contacts the cloud only for
-confirmed alerts. Built for the HP Edge AI SJSU Hack.
+> **Run it:** [Quick start](#quick-start) · **Demo script:** [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md) ·
+> **Deep dive:** [docs/PROJECT_DEEP_DIVE.md](docs/PROJECT_DEEP_DIVE.md) · **Versions:** [docs/versions/](docs/versions/README.md) ·
+> current release `v2.2.0-submission`
+
+![Edge vs cloud during an outage: the edge pipeline completes and queues the ALERT, cloud-only stops at the network boundary](results/console/race-outage.png)
+
+*A fire frame during a network outage: the edge pipeline decides on the device and queues the ALERT; a
+cloud-only design stops at the network boundary. When the link returns, the ALERT reaches the team's phone.*
+
+## At a glance
+
+- **Cascade on the edge.** A fine-tuned YOLO11 detector checks every frame (~40 ms). Only smoke that persists
+  for 3 frames goes to Qwen2.5-VL-7B with a LoRA adapter distilled from a 32B teacher, which says *what* it
+  is (wildfire, campfire, controlled burn, industrial stack, fog/cloud). Deterministic rules set the severity.
+- **Only ALERTs leave the tower,** as an ~8 KB report, never video. With no link they wait in a durable outbox
+  and go out the moment it returns (phone push via ntfy, optional dispatch endpoint).
+- **One console, offline:** the forest-officer console (incident map with bearings from several towers,
+  wind cones, Ask Sentinel) plus Edge vs Cloud, Mobile camera, Models and System tabs, all served by the Nano.
+
+## Results (measured on the Nano)
+
+| | Edge (this system) | Cloud-only |
+|---|---|---|
+| Junction Fire recording, 6 towers, 266 frames: VLM calls | **11** | 266 |
+| Tokens | **3K** | 447K |
+| Video uploaded | **0 B** | 23 MB |
+| Time to decision (rural cell link) | **5.4 s** | 6.3 s |
+| During a network outage | **decides, queues the ALERT** | blind |
+
+| Fine-tuning | Before | After |
+|---|---|---|
+| Detector mAP50, D-Fire test | 0.002 (YOLO-World zero-shot) | **0.748** (joint model, deployed; 0.787 D-Fire-only) |
+| Detector mAP50, lookout-tower smoke | 0.198 | **0.718** |
+| VLM source-type agreement with the 32B teacher (500 crops) | 45.0% | **73.6%** (LoRA v1) · 74.4% (v2, selectable) |
+| End-to-end, 25 tower clips | recall 0/15 | **recall 11/15**, precision 0.65 |
+
+Cloud-only is modelled from the real frames (same model, upload over the chosen link); speed is similar on a
+good link, and the edge wins on data, calls, cost and outages. Method and caveats: [Edge vs cloud-only](#edge-vs-cloud-only-measured),
+[Limitations](#limitations).
+
+## Quick start
+
+On the HP ZGX Nano (the VLM is served by HP zrt; models and map assets on the device):
+
+```bash
+cd ~/sentinel && ./scripts/start_console.sh            # VLM + LoRA adapters, then the console on :8080
+# or, in Docker:  sudo docker compose up -d --build     (see "Run with Docker")
+```
+
+From a laptop: `ssh -N -L 8080:localhost:8080 hp11@<nano-ip>`, then open **http://localhost:8080**.
+Phone alerts: put `NTFY_TOPIC_URL=https://ntfy.sh/<your-topic>` in `~/.sentinel_alerts.env` on the Nano
+(chmod 600, never committed).
+
+## Repository map
+
+| Path | What is there |
+|---|---|
+| `sentinel/` | The system: detector, VLM client, gate, severity rules, outbox, console server (`console.py`), incident map, live camera, cloud-only shadow ledger |
+| `sentinel/static/` | The officer console and its tabs (no internet assets) |
+| `scripts/` | Data preparation, teacher labelling, detector and LoRA training, evaluations, benchmarks, `start_console.sh` |
+| `results/` | Every measured result (JSON), training curves, logs, console screenshots |
+| `docs/` | Demo runbook, deep dive, version history, progress tracker, design and plans |
+| `tests/` | 608 tests (`python -m pytest -q`) |
+| `Dockerfile`, `docker-compose.yml` | The console as a container for the Nano |
+
+## Team
+
+- **Savitha Vijayarangan**: detection pipeline, model fine-tuning and distillation, edge vs cloud evaluation, console
+- **Kruthika Virupakshappa**: forest-officer console, offline incident map, Ask Sentinel
+
+---
+
+# Details
 
 ## Problem and user
 
@@ -24,7 +95,7 @@ reports (about 1 KB plus one thumbnail) go upstream, and they wait in an outbox 
 
 ```mermaid
 flowchart TD
-    R["Replayer: clips per tower, 2 fps, fixed GPS"] --> D
+    R["Tower cameras (recorded HPWREN footage),<br/>mobile camera, field photos"] --> D
     D["Stage 1: YOLO smoke/fire detector<br/>every frame, milliseconds"] --> G{"Persistence gate<br/>conf ≥ 0.4 for ≥ 3 frames"}
     G -- no --> X[discard]
     G -- candidate event --> V["Stage 2: Qwen2.5-VL-7B + LoRA via vLLM<br/>cropped region, once per event<br/>schema-constrained JSON context"]
@@ -32,8 +103,8 @@ flowchart TD
     T --> S["Severity rules (deterministic)<br/>IGNORE / LOG / MONITOR / ALERT"]
     S --> P["Report: facts templated by code,<br/>VLM writes one sentence"]
     P -- ALERT only --> O[("SQLite outbox")]
-    O -- link up --> C["Cloud: Open-Meteo forecast,<br/>dispatch webhook (simulated)"]
-    S --> UI["Dashboard: feeds, events, outbox,<br/>online/offline toggle, live metrics"]
+    O -- link up --> C["Team phone (ntfy push),<br/>dispatch endpoint, forecast update"]
+    S --> UI["Officer console: incident map, cameras,<br/>alerts, edge vs cloud, uplink switch"]
 ```
 
 One Python service (`sentinel/`) plus one local vLLM server (`zrt serve`). If the VLM times out or returns
