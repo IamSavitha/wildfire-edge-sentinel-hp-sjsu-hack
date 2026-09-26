@@ -1,0 +1,18 @@
+{
+  "name": "joint_m",
+  "model": "yolo11m.pt (COCO)",
+  "data": "joint D-Fire + tower",
+  "epochs": 10,
+  "final": {
+    "metrics/precision(B)": 0.64542,
+    "metrics/recall(B)": 0.62942,
+    "metrics/mAP50(B)": 0.6584,
+    "metrics/mAP50-95(B)": 0.37047
+  },
+  "best_mAP50": 0.6584,
+  "best_epoch": 10,
+  "compare": {
+    "joint_yolo11s_mAP50_combined_val": 0.7295
+  },
+  "adopted": false
+}
