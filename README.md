@@ -6,6 +6,8 @@ decide. Built for the HP Edge AI SJSU Hackathon.
 
 > **Run it:** [Quick start](#quick-start) · **Demo script:** [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md) ·
 > **Deep dive:** [docs/PROJECT_DEEP_DIVE.md](docs/PROJECT_DEEP_DIVE.md) · **Versions:** [docs/versions/](docs/versions/README.md) ·
+> **Models:** [detector](https://huggingface.co/SavithaVijayarangan/wildfire-edge-sentinel-detector) ·
+> [context LoRA](https://huggingface.co/SavithaVijayarangan/wildfire-edge-sentinel-context-lora) on Hugging Face ·
 > current release `v2.2.0-submission`
 
 ![Edge vs cloud during an outage: the edge pipeline completes and queues the ALERT, cloud-only stops at the network boundary](results/console/race-outage.png)
@@ -52,6 +54,8 @@ On the HP ZGX Nano (the VLM is served by HP zrt; models and map assets on the de
 cd ~/sentinel && ./scripts/start_console.sh            # VLM + LoRA adapters, then the console on :8080
 # or, in Docker:  sudo docker compose up -d --build     (see "Run with Docker")
 ```
+
+Weights: download [`joint_yolo.pt` and `smoke_yolo.pt`](https://huggingface.co/SavithaVijayarangan/wildfire-edge-sentinel-detector) into `models/` and the [LoRA adapters](https://huggingface.co/SavithaVijayarangan/wildfire-edge-sentinel-context-lora) (`context/`, `context_v2/`) into `adapters/`; the base model is `Qwen/Qwen2.5-VL-7B-Instruct`.
 
 From a laptop: `ssh -N -L 8080:localhost:8080 hp11@<nano-ip>`, then open **http://localhost:8080**.
 Phone alerts: put `NTFY_TOPIC_URL=https://ntfy.sh/<your-topic>` in `~/.sentinel_alerts.env` on the Nano
