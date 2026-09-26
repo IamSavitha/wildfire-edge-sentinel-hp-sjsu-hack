@@ -1,0 +1,39 @@
+# Sentinel Console on the HP ZGX Nano, in Docker. Start the VLM first (HP zrt: base7b + LoRA adapters), then:
+#
+#   cd ~/sentinel && docker compose up -d --build
+#   laptop: ssh -N -L 8080:localhost:8080 hp11@<nano-ip>   → http://localhost:8080
+#
+# Paths default to the Nano layout; override any of them in a .env file next to this one (never commit it).
+# The container runs as the Nano user (1001) with the zrt group (1003), so it can use the VLM socket and write
+# its own state folder, without root.
+services:
+  console:
+    build: .
+    image: sentinel-console:latest
+    container_name: sentinel-console
+    restart: unless-stopped
+    user: "${SENTINEL_UID:-1001}:${ZRT_GID:-1003}"
+    ports:
+      # localhost only: reach it through the SSH tunnel. For a tower LAN with no internet, use "8080:8080".
+      - "127.0.0.1:8080:8080"
+    deploy:
+      resources:
+        reservations:
+          devices:                                     # NVIDIA GB10 via the NVIDIA container runtime
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, utility]
+    env_file:
+      - path: ${ALERTS_ENV:-${HOME}/.sentinel_alerts.env}   # NTFY_TOPIC_URL (phone alerts); never printed
+        required: false
+      - path: ${CLOUD_ENV:-${HOME}/.cloud_vlm.env}         # optional CLOUD_VLM_* (measured cloud samples)
+        required: false
+    volumes:
+      - ${SENTINEL_MODELS:-${HOME}/sentinel/models}:/app/models:ro
+      - ${SENTINEL_BEFORE_WEIGHTS:-${HOME}/sentinel/yolov8s-worldv2.pt}:/opt/sentinel/yolov8s-worldv2.pt:ro
+      - ${SENTINEL_WEIGHTS:-${HOME}/sentinel/weights}:/app/weights:ro   # YOLO-World's CLIP encoder (offline)
+      - ${SENTINEL_DATA:-${HOME}/sentinel/data}:/app/data:ro
+      - ${SENTINEL_ASSETS:-${HOME}/sentinel-assets}:/assets:ro          # offline map, web libs, recordings
+      - ${SENTINEL_RESULTS:-${HOME}/sentinel/results}:/app/results:ro   # evaluation results (Models page)
+      - ${SENTINEL_STATE:-${HOME}/sentinel-state/console}:/state        # incidents, frames, alert outbox
+      - /opt/hp/zrt/run:/opt/hp/zrt/run                                   # the VLM socket and live metrics
