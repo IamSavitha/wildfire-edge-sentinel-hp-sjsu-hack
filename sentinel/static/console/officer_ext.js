@@ -526,6 +526,7 @@
     if (dv.state === "queued") {
       if (LR.delivered !== "queued") { LR.delivered = "queued"; st("e", 5, "queued", "queued locally", "amber"); pendingRestore = {t: Date.now()}; showRestore("queued"); phone("queued"); }
       stageAlert("ALERT", LR.source, "queued on the edge: no link");
+      q("#x-race-msg").innerHTML = `<b class="g">ALERT decided on the edge with no network</b> and queued locally. <b class="r">Cloud-only is blind: it cannot upload the frame.</b>`;
     } else if (dv.state === "sent" || dv.delivered) {
       if (LR.delivered === "sent") return;
       LR.delivered = "sent";
@@ -668,7 +669,7 @@
       3. The VLM classifies it once (~5 s) and severity rules decide.<br>4. MONITOR: re-checked for growth. ALERT: queued in the outbox and pushed to dispatch; with no link it waits and goes out when the link returns.</div>`; return; }
     const g = d.gate || {streak: 0, needed: 3}, e = d.event, lat = d.latched || {};
     const dots = `<span class="x-gate">${Array.from({length: g.needed}, (_, i) => `<i class="${i < g.streak || e || lat.active ? "on" : ""}"></i>`).join("")}</span>`;
-    const status = e ? (e.severity ? `<span class="sev ${e.severity}">${e.severity}</span> ${esc(fmt.words(e.source_type))}` : "Classifying…") : lat.active ? '<span class="sev ALERT">ALERT</span> sent for this fire' : g.streak ? "Smoke seen" : "Watching";
+    const status = e ? (e.severity ? `<span class="sev ${e.severity}">${e.severity}</span> ${esc(fmt.words(e.source_type))}` : "Classifying…") : lat.active ? `<span class="sev ALERT">ALERT</span> ${d.online === false ? "queued for this fire" : "raised for this fire"}` : g.streak ? "Smoke seen" : "Watching";
     st.innerHTML = `${dots}<span>${status}</span><span class="note">${fmt.ms(d.timings.total_ms)} · ${LIVE.sent} frames${d.online === false ? " · no link: deciding on the device" : ""}</span>`;
     const last = (d.events || [])[0];
     ev.innerHTML = last ? `<h4>Last decision</h4><div class="x-status"><span class="sev ${esc(last.severity || "")}">${esc(last.severity || "…")}</span>
