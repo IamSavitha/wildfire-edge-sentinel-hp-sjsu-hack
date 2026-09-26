@@ -1,0 +1,40 @@
+{
+  "name": "after_lora7b_v2",
+  "model": "context_v2",
+  "split": "data/teacher/heldout.jsonl",
+  "n": 500,
+  "source_type_acc": 0.744,
+  "group_acc": 0.77,
+  "parse_fail_rate": 0.0,
+  "latency_ms_p50": 12023.273064012756,
+  "latency_ms_p95": 14741.230706406346,
+  "tokens_per_call": 293.428,
+  "per_source": {
+    "industrial_stack": {
+      "n": 66,
+      "correct": 47
+    },
+    "wildland": {
+      "n": 84,
+      "correct": 68
+    },
+    "fog_dust_cloud": {
+      "n": 158,
+      "correct": 105
+    },
+    "unknown": {
+      "n": 138,
+      "correct": 115
+    },
+    "controlled_burn": {
+      "n": 53,
+      "correct": 37
+    },
+    "campfire": {
+      "n": 1,
+      "correct": 0
+    }
+  }
+}
+wrote results/context_after_lora7b_v2.json
+EXIT 0
