@@ -1,0 +1,44 @@
+name: Deploy browser demo
+
+on:
+  push:
+    branches: [main]
+    paths: ["demo/web/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Export detectors to ONNX and fetch example photos
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 torchvision==0.20.1
+          pip install ultralytics==8.4.160 onnx==1.17.0 onnxslim onnxruntime==1.20.1 huggingface_hub opencv-python-headless
+          python demo/web/build.py
+          rm -f demo/web/build.py
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: demo/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
