@@ -13,7 +13,7 @@
 watches the cameras, decides what the smoke is, and alerts the team's phone, with no internet needed to
 decide. Built for the HP Edge AI SJSU Hackathon.
 
-> **Run it:** [Quick start](#quick-start) · **Demo script:** [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md) ·
+> **▶ [Live detector demo](https://iamsavitha.github.io/wildfire-edge-sentinel-hp-sjsu-hack/)** (runs in your browser) · **Run it:** [Quick start](#quick-start) · **Demo script:** [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md) ·
 > **Deep dive:** [docs/PROJECT_DEEP_DIVE.md](docs/PROJECT_DEEP_DIVE.md) · **Versions:** [docs/versions/](docs/versions/README.md) ·
 > **Models:** [detector](https://huggingface.co/SavithaVijayarangan/wildfire-edge-sentinel-detector) ·
 > [context LoRA](https://huggingface.co/SavithaVijayarangan/wildfire-edge-sentinel-context-lora) on Hugging Face ·
