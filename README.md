@@ -1,5 +1,14 @@
 # Wildfire Edge Sentinel
 
+![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)
+![YOLO11](https://img.shields.io/badge/YOLO11-Ultralytics-111F68)
+![Qwen2.5-VL](https://img.shields.io/badge/Qwen2.5--VL--7B-LoRA-6E40C9)
+![vLLM](https://img.shields.io/badge/vLLM-serving-30A2FF)
+![Hugging Face](https://img.shields.io/badge/Hugging%20Face-models-FFD21E?logo=huggingface&logoColor=black)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+![Edge](https://img.shields.io/badge/HP%20ZGX%20Nano-on--device-0096D6)
+
 **Wildfire detection that keeps working when the network doesn't.** One HP ZGX Nano at a lookout tower
 watches the cameras, decides what the smoke is, and alerts the team's phone, with no internet needed to
 decide. Built for the HP Edge AI SJSU Hackathon.
